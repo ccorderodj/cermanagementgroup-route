@@ -31,6 +31,15 @@ const pagesWithoutLayout: ComponentRoot[] = [
     ComponentRoot.LOGIN,
     ComponentRoot.PASSWORDRESET,
     ComponentRoot.CHANGEPASSWORD,
+
+    // El supervisor de CER Route **sí** tiene sesión, pero no este shell: su
+    // experiencia es sólo móvil (decisión D-03 de RTE01) y trae la suya propia
+    // —cabecera compacta y barra inferior de tres destinos— en
+    // `RouteMobileShell`. Montarle la barra lateral de escritorio encima sería
+    // justo lo que el producto excluye.
+    ComponentRoot.ROUTEMYROUTE,
+    ComponentRoot.ROUTEACTIVITY,
+    ComponentRoot.ROUTEME,
 ];
 
 type Resolution =

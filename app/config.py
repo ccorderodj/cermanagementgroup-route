@@ -88,9 +88,9 @@ class Settings(BaseSettings):
     # componentes para llamarse distinto: lo declara aquí.
 
     #: Identificador corto (logs, títulos de API, asunto de avisos).
-    APP_NAME: str = "CER Application"
+    APP_NAME: str = "CER Route"
     #: Título visible en la pestaña del navegador y en la pantalla de login.
-    APP_TITLE: str = "CER Application"
+    APP_TITLE: str = "CER Route"
     #: Texto de marca junto al logo en el shell.
     APP_BRAND_LABEL: str = "CER Management Group"
     #: Subtítulo de marca bajo el texto (vacío = sin subtítulo).

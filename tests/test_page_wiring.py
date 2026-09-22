@@ -193,6 +193,13 @@ PAGE_TEMPLATES = [
     "admin/security/rolepermissionrequests/list.html",
     "admin/platform/settings.html",
     "admin/platform/diagnostics.html",
+    # CER Route: configuración en el shell de administración.
+    "admin/route/vehicles.html",
+    "admin/route/standard-values.html",
+    # CER Route: espacio móvil del supervisor.
+    "route/my-route.html",
+    "route/activity.html",
+    "route/me.html",
 ]
 
 

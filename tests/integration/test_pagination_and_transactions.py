@@ -15,6 +15,8 @@ que tocaba dos tablas podía quedarse a medias: crear el usuario y fallar al
 vincularlo dejaba una identidad huérfana (AUD-BE-015).
 """
 
+import math
+
 import pytest
 from sqlalchemy import func, select
 
@@ -109,13 +111,32 @@ async def test_count_matches_the_filter(seeded, alpha_client):
 
 
 async def test_next_and_previous_reflect_the_position(seeded, alpha_client):
+    """La última página se calcula; no se da por hecho que sea la segunda.
+
+    Antes estaba escrito `page=2` como si fuera la última, lo cual era cierto
+    sólo mientras hubiera exactamente cuatro roles por defecto. Al añadir los
+    roles de CER Route el test empezó a fallar por algo que no estaba probando:
+    lo que comprueba es que `next` y `previous` reflejen la posición, no cuántos
+    roles trae el catálogo.
+    """
     await alpha_client.login(seeded.alpha.users["owner"].email)
 
-    first = (await alpha_client.get("/api/roles/pagination?page=1&page_size=2")).json()
+    page_size = 2
+    total = len(seeded.alpha.roles)
+    last_page = math.ceil(total / page_size)
+    assert last_page >= 2, "el fixture necesita al menos dos páginas de roles"
+
+    first = (
+        await alpha_client.get(f"/api/roles/pagination?page=1&page_size={page_size}")
+    ).json()
     assert first["previous"] is None
     assert first["next"] is not None
 
-    last = (await alpha_client.get("/api/roles/pagination?page=2&page_size=2")).json()
+    last = (
+        await alpha_client.get(
+            f"/api/roles/pagination?page={last_page}&page_size={page_size}"
+        )
+    ).json()
     assert last["previous"] is not None
     assert last["next"] is None
 

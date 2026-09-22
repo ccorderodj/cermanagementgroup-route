@@ -35,4 +35,13 @@ export enum ComponentRoot {
     // Plataforma: configuracion del despliegue, no del tenant.
     PLATFORMSETTINGS = 'PlatformSettingsPage',
     PLATFORMDIAGNOSTICS = 'PlatformDiagnosticsPage',
+
+    // CER Route · espacio del supervisor (solo movil, D-03).
+    ROUTEMYROUTE = 'RouteMyRoutePage',
+    ROUTEACTIVITY = 'RouteActivityPage',
+    ROUTEME = 'RouteMePage',
+
+    // CER Route · configuracion en el shell de administracion.
+    ROUTEVEHICLES = 'RouteVehiclesPage',
+    ROUTESTANDARDVALUES = 'RouteStandardValuesPage',
 }

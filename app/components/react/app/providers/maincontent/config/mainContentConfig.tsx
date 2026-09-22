@@ -25,6 +25,13 @@ import { SecurityRolePermissionRequestsPage } from '@/pages/SecurityRolePermissi
 import { PlatformSettingsPage } from '@/pages/PlatformSettingsPage';
 import { PlatformDiagnosticsPage } from '@/pages/PlatformDiagnosticsPage';
 
+// CER Route
+import { RouteMyRoutePage } from '@/pages/RouteMyRoutePage';
+import { RouteActivityPage } from '@/pages/RouteActivityPage';
+import { RouteMePage } from '@/pages/RouteMePage';
+import { RouteVehiclesPage } from '@/pages/RouteVehiclesPage';
+import { RouteStandardValuesPage } from '@/pages/RouteStandardValuesPage';
+
 /**
  * Mapa clave de página -> componente.
  *
@@ -51,4 +58,10 @@ export const RootComponents: Record<string, ReactNode> = {
 
     [ComponentRoot.PLATFORMSETTINGS]: <PlatformSettingsPage />,
     [ComponentRoot.PLATFORMDIAGNOSTICS]: <PlatformDiagnosticsPage />,
+
+    [ComponentRoot.ROUTEMYROUTE]: <RouteMyRoutePage />,
+    [ComponentRoot.ROUTEACTIVITY]: <RouteActivityPage />,
+    [ComponentRoot.ROUTEME]: <RouteMePage />,
+    [ComponentRoot.ROUTEVEHICLES]: <RouteVehiclesPage />,
+    [ComponentRoot.ROUTESTANDARDVALUES]: <RouteStandardValuesPage />,
 };
