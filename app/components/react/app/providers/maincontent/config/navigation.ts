@@ -1,0 +1,111 @@
+import {
+    Building2,
+    Server,
+    ShieldCheck,
+} from 'lucide-react';
+import type { INavMainItem } from '@/widgets/Sidebar';
+
+/**
+ * Qué se navega, en un solo sitio.
+ *
+ * Dos menús y una regla: **el menú lateral es para el trabajo de negocio; la
+ * administración del sistema vive en el menú de usuario de la barra superior**
+ *. Mezclarlas obliga a quien hace su trabajo diario a pasar por Security y
+ * Platform para llegar a él.
+ *
+ * Los dos menús usan el mismo tipo y el mismo filtro (`useVisibleNavigation`),
+ * así que un permiso se aplica igual en ambos. `tests/test_navigation_wiring.py`
+ * lee este archivo: cada destino tiene que existir, cada permiso tiene que estar
+ * en el catálogo y ninguna ruta de administración puede volver al menú lateral.
+ *
+ * `requiredPermission` es experiencia de usuario, no seguridad: el backend exige
+ * el mismo permiso para servir cada página.
+ */
+
+/**
+ * El trabajo de negocio de la aplicación. **Vacío en la base**: cada módulo de
+ * dominio añade aquí su grupo cuando entrega su primera pantalla funcional.
+ * Un encabezado sin destinos es un enlace muerto disfrazado de sección, así que
+ * no se declara nada por adelantado (ver `docs/DOMAIN_EXTENSION_GUIDE.md`).
+ *
+ * `AdminPage` construye sus tarjetas de inicio desde esta misma lista, de modo
+ * que menú e inicio no pueden divergir.
+ */
+export const businessNavigation: INavMainItem[] = [];
+
+export const administrationNavigation: INavMainItem[] = [
+    {
+        title: 'Organization',
+        url: '#',
+        icon: Building2,
+        items: [
+            {
+                title: 'Company Profile',
+                url: '/admin/companies/profile',
+                requiredPermission: 'companies.read',
+            },
+            {
+                title: 'Operating States',
+                url: '/admin/locations/states',
+                requiredPermission: 'regions.read',
+            },
+        ],
+    },
+    {
+        title: 'Access control',
+        url: '#',
+        icon: ShieldCheck,
+        items: [
+            {
+                title: 'Users',
+                url: '/admin/security/users/list',
+                requiredPermission: 'users.read',
+            },
+            {
+                title: 'Roles & Permissions',
+                url: '/admin/security/roles/list',
+                requiredPermission: 'roles.read',
+            },
+            {
+                title: 'Permissions',
+                url: '/admin/security/permissions/list',
+                requiredPermission: 'permissions.read',
+            },
+            {
+                title: 'Permission Requests',
+                url: '/admin/security/role-permission-requests/list',
+                // El endpoint que consume la pantalla exige
+                // `rolepermissionsapprovals.read`, no `rolepermissions.read`.
+                // Pedir aqui uno distinto hacia visible un enlace que despues
+                // devolvia 403 (AUD-FE-013).
+                requiredPermission: 'rolepermissionsapprovals.read',
+            },
+        ],
+    },
+    {
+        // Configuracion del despliegue, no de un tenant. No se rige por un
+        // permiso del catalogo: ese catalogo se concede *dentro* de una
+        // compania (D6), y un permiso aqui dejaria que el dueno de un tenant
+        // viera la configuracion de todos.
+        title: 'Platform',
+        url: '#',
+        icon: Server,
+        items: [
+            {
+                title: 'Integrations & Settings',
+                url: '/admin/platform/settings',
+                platformOnly: true,
+            },
+            {
+                title: 'Diagnostics',
+                url: '/admin/platform/diagnostics',
+                platformOnly: true,
+            },
+            {
+                title: 'Companies',
+                url: '/admin/companies/list',
+                platformOnly: true,
+            },
+        ],
+    },
+];

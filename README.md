@@ -1,93 +1,118 @@
-# cermanagementgroup-route
+# CER Application Foundation
 
+Base reutilizable para construir aplicaciones CER como **monolitos modulares**
+pequeños, cada uno con su dominio acotado, que se integran entre sí por REST
+versionado y webhooks firmados en las dos direcciones.
 
+No trae ningún dominio de negocio. Trae lo que toda aplicación CER necesita y ya
+se probó en producción:
 
-## Getting started
+- FastAPI + PostgreSQL + SQLAlchemy 2 async + Alembic, con configuración validada al arrancar.
+- Multi-tenancy por subdominio: compañía, usuarios, pertenencias, roles y capacidades.
+- Autenticación por cookie HttpOnly, CSRF de doble envío y autorización por capacidad en el servidor.
+- Frontera de administración de plataforma (`is_superuser`) separada de la del tenant.
+- Auditoría append-only, control de concurrencia por versión y cabeceras de seguridad.
+- Errores homogéneos, diagnósticos de salud y puertas de preparación para producción.
+- Secretos cifrados, almacenamiento y escaneo de archivos, y correo con respaldo.
+- Integración entre aplicaciones: API versionada `/api/v1`, webhooks entrantes y salientes firmados, idempotencia y metadatos de integración.
+- React 19 + TypeScript servido por Jinja con el patrón **ruta → plantilla → page-key**, Redux Toolkit, Axios, Zod, shell con barra lateral y kit de UI.
+- pytest contra PostgreSQL real, tipado, lint, build de producción y CI.
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+Documentación:
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+| Documento | Para qué |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Cómo está armada la base y por qué |
+| [`docs/DEVELOPMENT_WORKFLOW.md`](docs/DEVELOPMENT_WORKFLOW.md) | La disciplina de trabajo: fuente de verdad, migraciones, tests, evidencia |
+| [`docs/DOMAIN_EXTENSION_GUIDE.md`](docs/DOMAIN_EXTENSION_GUIDE.md) | Cómo añadir un módulo de dominio sin romper la base |
+| [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) | REST versionado, webhooks, firma, idempotencia, correlación |
+| [`AGENTS.md`](AGENTS.md) | Invariantes y reglas para quien (persona o agente) cambia el código |
+| [`EXTRACTION_REPORT.md`](EXTRACTION_REPORT.md) | De dónde sale esta base y cómo se validó |
 
-## Add your files
+---
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+## Lo que hay que saber antes de nada
 
+1. **La aplicación exige un subdominio.** `http://localhost:8000` devuelve 404.
+   La compañía se resuelve desde `<subdominio>.<BASE_DOMAIN>`: en desarrollo se
+   entra por `http://cer.localhost:8000`. Los navegadores resuelven cualquier
+   `*.localhost` sin tocar `hosts`. Sólo `/health`, `/health/ready` y
+   `/metrics` funcionan sin subdominio.
+2. **El bundle de React se genera; no está en el repositorio.** Tras clonar,
+   `npm run build:prod` (o `build:dev`) dentro de `app/`.
+3. **El `.env` se crea a mano** a partir de `.env.example`. La aplicación no
+   arranca con configuración incompleta ni con un `SECRET_KEY` débil.
+
+## Requisitos
+
+- Python 3.13 y [`uv`](https://docs.astral.sh/uv/)
+- Node 22 y npm 10
+- PostgreSQL 14 o superior
+
+## Puesta en marcha
+
+```bash
+# 1. Dependencias de Python (exactamente las del lockfile)
+uv sync --frozen
+
+# 2. Base de datos: rol de la aplicación sin superusuario, y base de tests.
+#    Como `postgres`, una sola vez (crea antes la base `cer_app`):
+psql -h localhost -U postgres -c "CREATE DATABASE cer_app"
+psql -h localhost -U postgres -d cer_app -f app/db/scripts/01-crear-rol-aplicacion.sql
+psql -h localhost -U postgres -d postgres -f app/db/scripts/03-crear-base-de-pruebas.sql
+
+# 3. Configuración
+cp .env.example .env      # rellenar DB_PASS, SECRET_KEY, PLATFORM_MASTER_KEY, APP_*
+
+# 4. Esquema y siembra (compañía, capacidades, roles y administrador inicial)
+uv run alembic -c app/alembic.ini upgrade head
+uv run python -m app.db.scripts.bootstrap
+
+# 5. Frontend
+cd app && npm ci && npm run build:prod && cd ..
+
+# 6. Arrancar
+uv run uvicorn app.main:app --reload --port 8000
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/cermanagementgroup/cermanagementgroup-route.git
-git branch -M main
-git push -uf origin main
+
+Entrar en `http://<BOOTSTRAP_COMPANY_SUBDOMAIN>.localhost:8000` con el correo
+del administrador y la contraseña que imprimió el bootstrap.
+
+## Comandos
+
+| Qué | Comando |
+|---|---|
+| Importar la aplicación (humo) | `uv run python -c "import app.main"` |
+| Migraciones | `uv run alembic -c app/alembic.ini upgrade head` |
+| Comprobar que modelos y migraciones coinciden | `uv run alembic -c app/alembic.ini check` |
+| Nueva migración | `uv run alembic -c app/alembic.ini revision --autogenerate -m "..."` |
+| Tests (unit + integration) | `uv run pytest` (necesita `MODE=TEST` y `TEST_DATABASE_URL`) |
+| Sólo unit | `uv run pytest tests/test_*.py` |
+| Errores reales de Python | `uv run flake8 --select=E9,F63,F7,F82 app tests` |
+| Tipado frontend | `cd app && npm run typecheck` |
+| Lint frontend | `cd app && npm run lint:ts` |
+| Build de producción | `cd app && npm run build:prod` |
+| Build de desarrollo (conserva `data-testid`) | `cd app && npm run build:dev` |
+| Docker (app + PostgreSQL) | `docker compose up --build` |
+| Docker (suite) | `docker compose run --rm tests` |
+
+## Estructura
+
+```text
+app/
+  main.py                    composición: raíz, /api (privada, pública, /v1), páginas
+  config.py                  Settings validados al arrancar (identidad APP_*, BD, seguridad)
+  core/                      plataforma transversal (sin dominio)
+    audit/  dao/  db/  middleware/  security/  storage/  email/  platform/
+    rbac/catalog.py          catálogo de capacidades: FUENTE ÚNICA
+    integration/             /api/v1, webhooks, firma, idempotencia, eventos de integración
+  routers_api/               módulos de la API interna: companies, users, roles, permissions…
+  routers_api_public/        lista blanca de endpoints sin sesión
+  routers_pages/             rutas de página (name= es el page-key)
+  templates/                 Jinja: base.html + un ancla por página
+  components/react/          app/ entities/ features/ pages/ shared/ widgets/
+  migrations/versions/       0001_foundation_baseline.py (única revisión de la base)
+  db/scripts/                bootstrap y SQL de roles/bases
+tests/                       unit (sin BD) e integration (PostgreSQL real)
+docs/                        arquitectura, flujo de trabajo, extensión, integración
 ```
-
-## Integrate with your tools
-
-* [Set up project integrations](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/settings/integrations)
-
-## Collaborate with your team
-
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
-
-## Test and Deploy
-
-Use the built-in continuous integration in GitLab.
-
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
-
-***
-
-# Editing this README
-
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
-
-## Suggestions for a good README
-
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
-
-## Name
-Choose a self-explaining name for your project.
-
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
-
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
-
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
-
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
-
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
-
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
-
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
-
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
-
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
-
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
-
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
-
-## License
-For open source projects, say how it is licensed.
-
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
