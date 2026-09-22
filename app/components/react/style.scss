@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/**
+ * Sistema de color de las aplicaciones CER. **Fuente unica.**
+ *
+ * No hay modo oscuro (D12): el bloque `.dark` que habia solo cambiaba estas
+ * variables, mientras que las utilidades `dark:` de Tailwind seguian a
+ * `prefers-color-scheme` porque `tailwind.config.js` no declaraba `darkMode`.
+ * Los dos mecanismos se contradecian, y el producto no contempla el modo
+ * oscuro (AUD-FE-006).
+ *
+ * La paleta es la de la marca CER, traducida a los tokens HSL que consume
+ * shadcn/ui. La marca de cada tenant (Company Profile) la sobreescribe en vivo:
+ *
+ *   #003b5c  azul CER        marca primaria
+ *   #30c3e5  cian CER        acento y foco
+ *   #f4f7f9  fondo
+ *   #ffffff  superficie de tarjeta
+ *   #1e2d3d  texto
+ *   #6e7b86  texto atenuado
+ *   #dce5ea  líneas y bordes
+ *   #eef8fb  azul suave      fondos informativos
+ *   #187a52  éxito
+ *   #9b6a00  advertencia
+ *   #b33a49  error
+ */
+
+@layer base {
+    :root {
+        /* Superficies */
+        --background: 204 29% 97%;
+        --foreground: 211 34% 18%;
+
+        --card: 0 0% 100%;
+        --card-foreground: 211 34% 18%;
+
+        --popover: 0 0% 100%;
+        --popover-foreground: 211 34% 18%;
+
+        /* Marca */
+        --primary: 201 100% 18%;
+        --primary-foreground: 0 0% 100%;
+
+        --secondary: 194 62% 96%;
+        --secondary-foreground: 201 100% 18%;
+
+        --accent: 194 62% 96%;
+        --accent-foreground: 201 100% 18%;
+
+        /* Neutros */
+        --muted: 204 29% 95%;
+        --muted-foreground: 208 10% 48%;
+
+        --border: 201 25% 89%;
+        --input: 201 25% 89%;
+        --ring: 191 78% 54%;
+
+        /* Estados */
+        --destructive: 353 51% 46%;
+        --destructive-foreground: 0 0% 100%;
+
+        --success: 157 65% 29%;
+        --success-foreground: 0 0% 100%;
+
+        --warning: 41 100% 30%;
+        --warning-foreground: 0 0% 100%;
+
+        --radius: 0.75rem;
+
+        /* Menú lateral
+         *
+         * El componente de shadcn pinta el menú con `bg-sidebar`,
+         * `hover:bg-sidebar-accent`, `border-sidebar-border` y compañía. Esa
+         * familia de tokens NO existía: ni aquí ni en `tailwind.config.js`, así
+         * que todas esas clases compilaban a nada y el panel se quedaba sin
+         * fondo propio.
+         *
+         * En escritorio no se notaba —el hueco reservado dejaba ver el fondo de
+         * la página y parecía un menú— pero en cuanto el menú se superpone al
+         * contenido, que es lo que hace en móvil, se veía el texto de la página
+         * a través de él. Tampoco funcionaba ningún estado de hover.
+         *
+         * La superficie es la de una tarjeta, para que el menú se lea como una
+         * superficie elevada sobre el fondo gris del área de trabajo. */
+        --sidebar: 0 0% 100%;
+        --sidebar-foreground: 211 34% 18%;
+        --sidebar-primary: 201 100% 18%;
+        --sidebar-primary-foreground: 0 0% 100%;
+        --sidebar-accent: 194 62% 96%;
+        --sidebar-accent-foreground: 201 100% 18%;
+        --sidebar-border: 201 25% 89%;
+        --sidebar-ring: 191 78% 54%;
+
+        /* Tokens de marca, para usos puntuales fuera del sistema shadcn */
+        --cer-blue: 201 100% 18%;
+        --cer-cyan: 191 78% 54%;
+        --cer-soft: 194 62% 96%;
+    }
+
+}
+
+@layer base {
+    * {
+        @apply border-border;
+    }
+
+    body {
+        @apply bg-background text-foreground;
+        font-feature-settings: "rlig" 1, "calt" 1;
+    }
+}

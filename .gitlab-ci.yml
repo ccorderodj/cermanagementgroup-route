@@ -1,0 +1,13 @@
+stages:
+  - hello
+
+hello_world:
+  stage: hello
+  script:
+    - echo "Hello, World!"
+  rules:
+    # - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "dev"'
+    # Run only for merge request pipelines (no pushes, no schedules)
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+      when: always
+    - when: never

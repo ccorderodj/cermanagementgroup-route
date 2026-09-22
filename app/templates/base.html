@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>
+        {% block page_title %}{% endblock page_title  %} | {{ request.state.app_data.company_name or app.app_title }}
+    </title>
+    <link rel="icon" type="image/svg+xml" href="{{ app.icon_path }}">
+    {# Unica hoja de estilos: la genera el build desde style.scss + Tailwind.
+       Antes se cargaba ademas /static/css/tailwindcss.css, un Tailwind 3.2.4
+       pregenerado y sin las variables del tema (AUD-FE-024). #}
+    <link rel="stylesheet" href="/static/javascript/css/main.css">
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <div id="rootReact"></div>
+    {% block content %}{% endblock %}
+    <!-- <script src="{{ url_for('static', path='javascript/main.js') }}"></script> -->
+    <script src="/static/javascript/main.js"></script>
+</body>
+</html>
