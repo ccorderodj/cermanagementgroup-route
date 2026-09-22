@@ -134,6 +134,48 @@ class SupervisorProfilesDAO(BaseDAO):
             )
 
     @classmethod
+    async def list_candidates(cls, *, company_id: int) -> list[dict]:
+        """Usuarios del tenant con su condición de supervisor de Route.
+
+        Es la consulta que hace visible la cadena
+        `usuario -> designación -> vehículo` en una sola pantalla. **No duplica
+        identidad**: lee `user` y `user_company` por join y sólo añade si existe
+        el perfil de Route. Un usuario sin perfil aparece con
+        `supervisor_profile_id = NULL`, que es exactamente lo que el
+        administrador necesita ver para poder designarlo.
+        """
+        from app.routers_api.companies.models import UserCompany
+        from app.routers_api.roles.models import Role
+
+        async with db_session() as session:
+            filas = await session.execute(
+                select(
+                    Users.id.label("user_id"),
+                    Users.first_name.label("first_name"),
+                    Users.last_name.label("last_name"),
+                    Users.email.label("email"),
+                    Users.username.label("username"),
+                    UserCompany.is_active.label("membership_active"),
+                    Role.name.label("role_name"),
+                    SupervisorProfile.id.label("supervisor_profile_id"),
+                    SupervisorProfile.is_active.label("supervisor_active"),
+                    SupervisorProfile.version.label("supervisor_version"),
+                )
+                .join(UserCompany, UserCompany.user_id == Users.id)
+                .outerjoin(Role, Role.id == UserCompany.role_id)
+                .outerjoin(
+                    SupervisorProfile,
+                    and_(
+                        SupervisorProfile.user_id == Users.id,
+                        SupervisorProfile.company_id == company_id,
+                    ),
+                )
+                .where(UserCompany.company_id == company_id)
+                .order_by(Users.first_name.asc(), Users.last_name.asc())
+            )
+            return [dict(fila) for fila in filas.mappings().all()]
+
+    @classmethod
     async def list_with_identity(cls, *, company_id: int) -> list[dict]:
         """Perfiles con el nombre que ya vive en `user`, resuelto por join.
 

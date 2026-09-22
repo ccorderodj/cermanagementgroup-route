@@ -37,6 +37,8 @@ export function StandardValuesPanel() {
     const [values, setValues] = useState<StandardValue[]>([]);
     const [includeInactive, setIncludeInactive] = useState(false);
     const [nuevo, setNuevo] = useState('');
+    const [editing, setEditing] = useState<StandardValue | null>(null);
+    const [editLabel, setEditLabel] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
 
@@ -81,6 +83,30 @@ export function StandardValuesPanel() {
             const detalle = (err as { response?: { data?: { detail?: string } } })
                 ?.response?.data?.detail;
             setError(detalle ?? 'The value could not be added.');
+        }
+    };
+
+    const empezarEdicion = (valor: StandardValue) => {
+        setEditing(valor);
+        setEditLabel(valor.label);
+    };
+
+    /** Guarda la etiqueta editada. `version` viaja para el control de concurrencia. */
+    const guardarEdicion = async () => {
+        if (!editing || !editLabel.trim()) return;
+        setError(null);
+        try {
+            await updateStandardValue(editing.id, {
+                label: editLabel.trim(),
+                version: editing.version,
+            });
+            setEditing(null);
+            setEditLabel('');
+            await cargarValores();
+        } catch (err) {
+            const detalle = (err as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail;
+            setError(detalle ?? 'The value could not be renamed.');
         }
     };
 
@@ -204,7 +230,33 @@ export function StandardValuesPanel() {
                                             {valor.sort_order}
                                         </TableCell>
                                         <TableCell className="font-medium">
-                                            {valor.label}
+                                            {editing?.id === valor.id ? (
+                                                <div className="flex gap-2">
+                                                    <Input
+                                                        value={editLabel}
+                                                        onChange={(e) => setEditLabel(
+                                                            e.target.value,
+                                                        )}
+                                                        aria-label={`Rename ${valor.label}`}
+                                                    />
+                                                    <Button
+                                                        size="sm"
+                                                        disabled={!editLabel.trim()}
+                                                        onClick={guardarEdicion}
+                                                    >
+                                                        Save
+                                                    </Button>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="sm"
+                                                        onClick={() => setEditing(null)}
+                                                    >
+                                                        Cancel
+                                                    </Button>
+                                                </div>
+                                            ) : (
+                                                valor.label
+                                            )}
                                         </TableCell>
                                         <TableCell>
                                             <Badge
@@ -231,6 +283,13 @@ export function StandardValuesPanel() {
                                                 aria-label={`Move ${valor.label} down`}
                                             >
                                                 ↓
+                                            </Button>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                onClick={() => empezarEdicion(valor)}
+                                            >
+                                                Edit
                                             </Button>
                                             <Button
                                                 variant="ghost"

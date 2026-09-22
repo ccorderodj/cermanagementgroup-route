@@ -1,8 +1,10 @@
 import { z } from 'zod';
 import { $api, parseApi } from '@/shared/api';
 import {
+    supervisorCandidateSchema,
     supervisorProfileSchema,
     vehicleAssignmentSchema,
+    type SupervisorCandidate,
     type SupervisorProfile,
     type VehicleAssignment,
 } from '../types';
@@ -56,4 +58,33 @@ export async function assignVehicle(
 export async function endAssignment(assignmentId: number): Promise<VehicleAssignment> {
     const response = await $api.post(`/supervisors/assignments/${assignmentId}/end`, {});
     return parseApi(vehicleAssignmentSchema, response.data, 'endAssignment');
+}
+
+/** Usuarios del tenant con su condición de supervisor y su vehículo vigente. */
+export async function fetchSupervisorCandidates(): Promise<SupervisorCandidate[]> {
+    const response = await $api.get('/supervisors/candidates');
+    return parseApi(
+        z.array(supervisorCandidateSchema),
+        response.data,
+        'fetchSupervisorCandidates',
+    );
+}
+
+/** Designa supervisor de Route a un usuario que ya pertenece a la compañía. */
+export async function designateSupervisor(userId: number): Promise<SupervisorProfile> {
+    const response = await $api.post('/supervisors', { user_id: userId });
+    return parseApi(supervisorProfileSchema, response.data, 'designateSupervisor');
+}
+
+/** Retira o restaura la designación. No la borra: la historia la referencia. */
+export async function setSupervisorDesignation(
+    supervisorProfileId: number,
+    isActive: boolean,
+    version?: number,
+): Promise<SupervisorProfile> {
+    const response = await $api.put(`/supervisors/${supervisorProfileId}`, {
+        is_active: isActive,
+        version,
+    });
+    return parseApi(supervisorProfileSchema, response.data, 'setSupervisorDesignation');
 }

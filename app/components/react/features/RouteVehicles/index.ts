@@ -1,2 +1,2 @@
 export { VehiclesPanel } from './ui/VehiclesPanel';
-export { SupervisorAssignmentsPanel } from './ui/SupervisorAssignmentsPanel';
+export { SupervisorSetupPanel } from './ui/SupervisorSetupPanel';

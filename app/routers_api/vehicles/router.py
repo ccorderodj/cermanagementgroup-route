@@ -22,8 +22,10 @@ from app.routers_api.vehicles.dao import (
     VehiclesDAO,
 )
 from app.routers_api.vehicles.schemas import (
+    SupervisorCandidateRead,
     SupervisorProfileCreate,
     SupervisorProfileRead,
+    SupervisorProfileUpdate,
     VehicleAssignmentCreate,
     VehicleAssignmentEnd,
     VehicleAssignmentRead,
@@ -210,6 +212,58 @@ async def create_supervisor_profile(
         company_id=company.id,
         actor_user_id=current_user.id,
         user_id=payload.user_id,
+    )
+    filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)
+    fila = next(f for f in filas if f["id"] == perfil.id)
+    return await _leer_perfil(fila, company.id)
+
+
+@supervisors_router.get("/candidates")
+async def list_supervisor_candidates(
+    _authz: None = Depends(
+        require_permissions(["users.read", "route.vehicles.read"])
+    ),
+    company: TenantContext = Depends(get_company_required),
+) -> list[SupervisorCandidateRead]:
+    """Usuarios del tenant, indicando quién es supervisor y qué conduce.
+
+    Exige las **dos** capacidades porque lee las dos cosas: identidad del
+    núcleo y dominio de Route. Es lo que permite que la pantalla de
+    configuración muestre `usuario -> designación -> vehículo` sin que el
+    administrador tenga que cruzar dos listados a mano.
+    """
+    filas = await SupervisorProfilesDAO.list_candidates(company_id=company.id)
+
+    resultado: list[SupervisorCandidateRead] = []
+    for fila in filas:
+        candidato = SupervisorCandidateRead.model_validate(fila)
+        if candidato.supervisor_profile_id is not None:
+            vehiculo = await VehicleAssignmentService.current_vehicle(
+                company_id=company.id,
+                supervisor_profile_id=candidato.supervisor_profile_id,
+            )
+            candidato.current_vehicle = (
+                VehicleRead.model_validate(vehiculo) if vehiculo else None
+            )
+        resultado.append(candidato)
+    return resultado
+
+
+@supervisors_router.put("/{supervisor_profile_id}")
+async def set_supervisor_designation(
+    supervisor_profile_id: int,
+    payload: SupervisorProfileUpdate,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> SupervisorProfileRead:
+    """Retira o restaura la designación. No la borra: la historia la referencia."""
+    perfil = await SupervisorProfileService.set_active(
+        company_id=company.id,
+        supervisor_profile_id=supervisor_profile_id,
+        actor_user_id=current_user.id,
+        is_active=payload.is_active,
+        expected_version=payload.version,
     )
     filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)
     fila = next(f for f in filas if f["id"] == perfil.id)

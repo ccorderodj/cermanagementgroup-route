@@ -28,6 +28,35 @@ templates = CustomTemplates(directory="app/templates")
 
 
 @router.get(
+    "/users",
+    name="RouteUsersPage",
+    # Las capacidades del **núcleo**: esta pantalla administra identidad, no
+    # una entidad de Route. No se inventa `route.users.manage` porque el
+    # contrato de autorización correcto ya existe.
+    dependencies=[Depends(require_page_permissions(["users.read"]))],
+)
+async def get_route_users_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/users.html",
+        context={},
+    )
+
+
+@router.get(
+    "/supervisors",
+    name="RouteSupervisorsPage",
+    dependencies=[Depends(require_page_permissions(["route.vehicles.read"]))],
+)
+async def get_route_supervisors_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/supervisors.html",
+        context={},
+    )
+
+
+@router.get(
     "/vehicles",
     name="RouteVehiclesPage",
     dependencies=[Depends(require_page_permissions(["route.vehicles.read"]))],

@@ -43,6 +43,19 @@ export const businessNavigation: INavMainItem[] = [
         icon: Car,
         items: [
             {
+                // Identidad del tenant, administrada con las capacidades del
+                // núcleo. No hay un permiso `route.users.*`: sería una segunda
+                // forma de autorizar lo mismo.
+                title: 'Users',
+                url: '/admin/route/users',
+                requiredPermission: 'users.read',
+            },
+            {
+                title: 'Supervisors',
+                url: '/admin/route/supervisors',
+                requiredPermission: 'route.vehicles.read',
+            },
+            {
                 title: 'Vehicles',
                 url: '/admin/route/vehicles',
                 requiredPermission: 'route.vehicles.read',

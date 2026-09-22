@@ -29,6 +29,8 @@ import { PlatformDiagnosticsPage } from '@/pages/PlatformDiagnosticsPage';
 import { RouteMyRoutePage } from '@/pages/RouteMyRoutePage';
 import { RouteActivityPage } from '@/pages/RouteActivityPage';
 import { RouteMePage } from '@/pages/RouteMePage';
+import { RouteUsersPage } from '@/pages/RouteUsersPage';
+import { RouteSupervisorsPage } from '@/pages/RouteSupervisorsPage';
 import { RouteVehiclesPage } from '@/pages/RouteVehiclesPage';
 import { RouteStandardValuesPage } from '@/pages/RouteStandardValuesPage';
 
@@ -62,6 +64,8 @@ export const RootComponents: Record<string, ReactNode> = {
     [ComponentRoot.ROUTEMYROUTE]: <RouteMyRoutePage />,
     [ComponentRoot.ROUTEACTIVITY]: <RouteActivityPage />,
     [ComponentRoot.ROUTEME]: <RouteMePage />,
+    [ComponentRoot.ROUTEUSERS]: <RouteUsersPage />,
+    [ComponentRoot.ROUTESUPERVISORS]: <RouteSupervisorsPage />,
     [ComponentRoot.ROUTEVEHICLES]: <RouteVehiclesPage />,
     [ComponentRoot.ROUTESTANDARDVALUES]: <RouteStandardValuesPage />,
 };

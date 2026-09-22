@@ -1,5 +1,13 @@
-export { supervisorProfileSchema, vehicleAssignmentSchema } from './model/types';
-export type { SupervisorProfile, VehicleAssignment } from './model/types';
+export {
+    supervisorProfileSchema,
+    vehicleAssignmentSchema,
+    supervisorCandidateSchema,
+} from './model/types';
+export type {
+    SupervisorProfile,
+    VehicleAssignment,
+    SupervisorCandidate,
+} from './model/types';
 export {
     fetchSupervisors,
     fetchMySupervisorProfile,
@@ -7,4 +15,7 @@ export {
     fetchAssignmentHistory,
     assignVehicle,
     endAssignment,
+    fetchSupervisorCandidates,
+    designateSupervisor,
+    setSupervisorDesignation,
 } from './model/services/supervisorsService';

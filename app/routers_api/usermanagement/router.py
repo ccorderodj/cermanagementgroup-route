@@ -19,6 +19,7 @@ Dos límites que este módulo no puede cruzar:
 from fastapi import APIRouter, Depends, Request
 
 from app.core import schema
+from app.core.audit.service import diff, record_event
 from app.core.utils.api_paginator import Paginator
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.companies.context import TenantContext
@@ -30,6 +31,8 @@ from app.routers_api.usermanagement.schemas import (
     UserManagementUpdate,
     UsersPaginationParams,
 )
+from app.routers_api.users.dependencies import get_current_user
+from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
 
 
@@ -62,9 +65,19 @@ async def get_users_pagination(
     return schema.PaginatedResponse[UserManagementRead](**paginator.to_response())
 
 
+#: Campos que se comparan para la traza. `password` **no** está aquí: su valor
+#: no se registra ni siquiera cifrado, y que haya cambiado se deduce del evento.
+_CAMPOS_AUDITADOS = ("username", "email", "first_name", "last_name", "gender", "role_id")
+
+
+def _instantanea(usuario: dict) -> dict:
+    return {campo: usuario.get(campo) for campo in _CAMPOS_AUDITADOS}
+
+
 @router.post("")
 async def create_user(
     payload: UserManagementCreate,
+    current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["users.create"])),
     company: TenantContext = Depends(get_company_required),
 ) -> UserManagementRead:
@@ -73,6 +86,22 @@ async def create_user(
         company_id=company.id,
         **payload.model_dump(),
     )
+
+    # Dar de alta a alguien en un tenant es de las operaciones más sensibles que
+    # hay —concede acceso— y no dejaba traza. Se registra con el mismo mecanismo
+    # que el resto del sistema, no con uno propio.
+    await record_event(
+        company_id=company.id,
+        entity_type="user",
+        entity_id=created["id"],
+        action="create",
+        actor_user_id=current_user.id,
+        summary=f"User {created.get('email') or created['username']} added to the company",
+        changes={
+            campo: {"old": None, "new": valor}
+            for campo, valor in _instantanea(created).items()
+        },
+    )
     return UserManagementRead.model_validate(created)
 
 
@@ -80,11 +109,17 @@ async def create_user(
 async def update_user(
     user_id: int,
     payload: UserManagementUpdate,
+    current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["users.update"])),
     company: TenantContext = Depends(get_company_required),
 ) -> UserManagementRead:
     """Actualiza los datos del usuario y, si viene, su rol en la compañía."""
     data = payload.model_dump(exclude_unset=True)
+    cambia_contrasena = data.get("password") is not None
+
+    antes = await UserManagementDAO.find_for_company(
+        user_id=user_id, company_id=company.id
+    )
 
     updated = await UserManagementDAO.update_user_in_company(
         user_id=user_id,
@@ -93,6 +128,22 @@ async def update_user(
         password=data.pop("password", None),
         **data,
     )
+
+    delta = diff(_instantanea(antes or {}), _instantanea(updated))
+    if cambia_contrasena:
+        # Que la contraseña cambió es auditable; su valor, no.
+        delta["password"] = {"old": None, "new": "(changed)"}
+
+    if delta:
+        await record_event(
+            company_id=company.id,
+            entity_type="user",
+            entity_id=user_id,
+            action="update",
+            actor_user_id=current_user.id,
+            summary=f"User {updated.get('email') or updated['username']} updated",
+            changes=delta,
+        )
     return UserManagementRead.model_validate(updated)
 
 
@@ -100,6 +151,7 @@ async def update_user(
 async def set_user_access(
     user_id: int,
     payload: UserAccessUpdate,
+    current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["users.update"])),
     company: TenantContext = Depends(get_company_required),
 ) -> UserManagementRead:
@@ -112,5 +164,18 @@ async def set_user_access(
         user_id=user_id,
         company_id=company.id,
         is_active=payload.is_active,
+    )
+
+    await record_event(
+        company_id=company.id,
+        entity_type="user",
+        entity_id=user_id,
+        action="activate" if payload.is_active else "deactivate",
+        actor_user_id=current_user.id,
+        summary=(
+            f"Access to this company {'restored for' if payload.is_active else 'suspended for'} "
+            f"{updated.get('email') or updated['username']}"
+        ),
+        changes={"is_active": {"old": not payload.is_active, "new": payload.is_active}},
     )
     return UserManagementRead.model_validate(updated)

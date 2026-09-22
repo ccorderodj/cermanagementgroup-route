@@ -237,6 +237,75 @@ class SupervisorProfileService:
         )
 
 
+    @staticmethod
+    async def set_active(
+        *,
+        company_id: int,
+        supervisor_profile_id: int,
+        actor_user_id: int,
+        is_active: bool,
+        expected_version: int | None,
+    ) -> SupervisorProfile:
+        """Retira o restaura la designación de supervisor. **Nunca la borra.**
+
+        Retirar a quien tiene un vehículo asignado se rechaza: primero se cierra
+        la asignación. Si no, quedaría un vehículo vigente en manos de alguien
+        que ya no es supervisor, que es un estado que nadie sabría interpretar.
+        """
+        if not is_active:
+            vigente = await VehicleAssignmentsDAO.current_for_supervisor(
+                company_id=company_id,
+                supervisor_profile_id=supervisor_profile_id,
+            )
+            if vigente is not None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "This supervisor still has a vehicle assigned. End the "
+                        "assignment before removing the designation."
+                    ),
+                )
+
+        async with transaction() as session:
+            perfil = await session.scalar(
+                select(SupervisorProfile).where(
+                    SupervisorProfile.id == supervisor_profile_id,
+                    SupervisorProfile.company_id == company_id,
+                )
+            )
+            if perfil is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Supervisor profile not found",
+                )
+
+            ensure_version(current=perfil.version, expected=expected_version)
+
+            antes = perfil.is_active
+            perfil.is_active = is_active
+            perfil.version = perfil.version + 1
+            await session.flush()
+
+        if antes != is_active:
+            await record_event(
+                company_id=company_id,
+                entity_type="supervisor_profile",
+                entity_id=supervisor_profile_id,
+                action="activate" if is_active else "deactivate",
+                actor_user_id=actor_user_id,
+                summary=(
+                    "Route supervisor designation restored"
+                    if is_active
+                    else "Route supervisor designation removed"
+                ),
+                changes={"is_active": {"old": antes, "new": is_active}},
+            )
+
+        return await SupervisorProfilesDAO.get_for_company(
+            supervisor_profile_id=supervisor_profile_id, company_id=company_id
+        )
+
+
 class VehicleAssignmentService:
     """Asignación efectiva de vehículo a supervisor, con su historia."""
 

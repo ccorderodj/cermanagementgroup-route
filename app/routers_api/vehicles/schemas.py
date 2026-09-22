@@ -118,6 +118,45 @@ class SupervisorProfileRead(BaseModel):
     current_vehicle: Optional[VehicleRead] = None
 
 
+class SupervisorProfileUpdate(BaseModel):
+    """Ciclo de vida de la designación.
+
+    Retirar a alguien de supervisor **desactiva** el perfil; no lo borra. Sus
+    asignaciones pasadas y —cuando existan— sus jornadas siguen apuntando a él,
+    y borrarlo dejaría esa historia hablando de alguien que no existe.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    is_active: bool
+    version: Optional[int] = None
+
+
+class SupervisorCandidateRead(BaseModel):
+    """Un usuario del tenant y su relación con CER Route.
+
+    Hace visible la cadena completa en una sola fila: quién es (identidad del
+    núcleo), si está designado supervisor, y qué vehículo conduce. Los tres son
+    conceptos distintos y se leen como tales; no se funden en una entidad.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    user_id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    email: Optional[str] = None
+    username: str
+    membership_active: bool
+    role_name: Optional[str] = None
+
+    #: `None` = este usuario todavía no es supervisor de Route.
+    supervisor_profile_id: Optional[int] = None
+    supervisor_active: Optional[bool] = None
+    supervisor_version: Optional[int] = None
+    current_vehicle: Optional[VehicleRead] = None
+
+
 # ── Asignación de vehículo ──────────────────────────────────────────────────
 
 

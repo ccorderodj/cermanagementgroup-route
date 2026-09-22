@@ -42,6 +42,8 @@ export enum ComponentRoot {
     ROUTEME = 'RouteMePage',
 
     // CER Route · configuracion en el shell de administracion.
+    ROUTEUSERS = 'RouteUsersPage',
+    ROUTESUPERVISORS = 'RouteSupervisorsPage',
     ROUTEVEHICLES = 'RouteVehiclesPage',
     ROUTESTANDARDVALUES = 'RouteStandardValuesPage',
 }

@@ -42,3 +42,27 @@ export const vehicleAssignmentSchema = z.object({
 });
 
 export type VehicleAssignment = z.infer<typeof vehicleAssignmentSchema>;
+
+/**
+ * Un usuario del tenant visto desde CER Route.
+ *
+ * `supervisor_profile_id: null` significa "todavía no está designado", que es
+ * el estado desde el que el administrador puede designarlo. La identidad
+ * (nombre, correo, rol) viene del núcleo por join; aquí no se guarda nada de
+ * eso.
+ */
+export const supervisorCandidateSchema = z.object({
+    user_id: z.number(),
+    first_name: z.string().nullable().optional(),
+    last_name: z.string().nullable().optional(),
+    email: z.string().nullable().optional(),
+    username: z.string(),
+    membership_active: z.boolean(),
+    role_name: z.string().nullable().optional(),
+    supervisor_profile_id: z.number().nullable().optional(),
+    supervisor_active: z.boolean().nullable().optional(),
+    supervisor_version: z.number().nullable().optional(),
+    current_vehicle: vehicleSchema.nullable().optional(),
+});
+
+export type SupervisorCandidate = z.infer<typeof supervisorCandidateSchema>;

@@ -177,7 +177,22 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
         capabilities=(
             "companies.read",
             "regions.read",
+            # Administración de usuarios del tenant. Son las capacidades del
+            # **núcleo**, no unas propias de Route: el contrato de identidad ya
+            # existe y duplicarlo crearía dos formas de autorizar lo mismo.
+            #
+            # `roles.read` entra porque el formulario de alta necesita ofrecer
+            # los roles de la compañía; NO se concede `roles.create/update/
+            # delete`, así que un Route Admin asigna roles existentes pero no
+            # puede fabricarse uno con más capacidades.
+            #
+            # El límite de privilegio lo sostiene el propio contrato del núcleo:
+            # `is_superuser` no está en ningún schema de entrada de estas APIs
+            # (D6), así que esto no abre ninguna puerta a la plataforma.
             "users.read",
+            "users.create",
+            "users.update",
+            "roles.read",
             "route.vehicles.read",
             "route.vehicles.manage",
             "route.standardvalues.manage",
