@@ -75,6 +75,19 @@ CAPABILITIES: tuple[Capability, ...] = (
     # del tenant: qué contrapartes le envían o reciben eventos de esta compañía.
     _cap("integrations", "read", "View webhook endpoints, subscriptions and delivery history"),
     _cap("integrations", "manage", "Register webhook endpoints and subscriptions, rotate their secrets"),
+    # ── CER Route ───────────────────────────────────────────────────────────
+    #
+    # Solo las capacidades que RTE02 **exige de verdad** en un endpoint. El
+    # catálogo certificado de RTE01 contempla además `route.worksession.execute`,
+    # `route.live.read`, `route.activity.read`, `route.reports.read`,
+    # `route.reports.export`, `route.fuelreference.manage` y
+    # `route.records.adjust`: entran con el checkpoint que construya su
+    # superficie protegida, porque `test_permission_catalog.py` rechaza —a
+    # propósito— una capacidad que ningún endpoint pide. Declararlas antes
+    # concedería autoridad sobre algo que todavía no existe.
+    _cap("route", "vehicles.read", "View Route vehicles and their assignments"),
+    _cap("route", "vehicles.manage", "Create and edit Route vehicles and assign them to supervisors"),
+    _cap("route", "standardvalues.manage", "Manage the Route admin-configurable value lists"),
 )
 
 CAPABILITY_NAMES: frozenset[str] = frozenset(c.name for c in CAPABILITIES)
@@ -140,6 +153,34 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             "companies.read",
             "regions.read",
             "users.read",
+        ),
+    ),
+    # ── CER Route ───────────────────────────────────────────────────────────
+    RoleTemplate(
+        name="supervisor",
+        description="CER Route field supervisor; mobile-only workday experience",
+        category="operative",
+        # Sin capacidades administrativas, y en RTE02 sin capacidades Route:
+        # las suyas —`route.worksession.execute`— llegan con el checkpoint que
+        # construya la jornada. Su espacio de trabajo móvil exige sesión, no un
+        # permiso, igual que `ProfilePage`: es su propia pantalla, y lo que
+        # pueda HACER en ella se autoriza cuando esos endpoints existan.
+        #
+        # El rol se crea igualmente porque es lo que permite a un administrador
+        # designar supervisores y asignarles vehículo, que es trabajo de RTE02.
+        capabilities=(),
+    ),
+    RoleTemplate(
+        name="route_admin",
+        description="Administers CER Route operational configuration within this company",
+        category="operative",
+        capabilities=(
+            "companies.read",
+            "regions.read",
+            "users.read",
+            "route.vehicles.read",
+            "route.vehicles.manage",
+            "route.standardvalues.manage",
         ),
     ),
 )

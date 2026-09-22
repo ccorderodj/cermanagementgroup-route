@@ -29,6 +29,11 @@ from app.routers_api.users.router import router as router_users
 # Catálogos geográficos
 from app.routers_api.regions.router import router as router_regions
 
+# CER Route: configuración operativa del dominio de campo.
+from app.routers_api.standardvalues.router import router as router_standard_values
+from app.routers_api.vehicles.router import router as router_vehicles
+from app.routers_api.vehicles.router import supervisors_router as router_supervisors
+
 
 # Integraciones del tenant: administración de webhooks (API interna).
 from app.core.integration.admin_router import router as router_integrations
@@ -61,6 +66,10 @@ api_router.include_router(router_usermanagement)
 api_router.include_router(router_companies)
 api_router.include_router(router_regions)
 api_router.include_router(router_integrations)
+
+api_router.include_router(router_vehicles)
+api_router.include_router(router_supervisors)
+api_router.include_router(router_standard_values)
 
 api_router.include_router(router_platform_settings)
 api_router.include_router(router_platform_diagnostics)

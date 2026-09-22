@@ -1,5 +1,6 @@
 import {
     Building2,
+    Car,
     Server,
     ShieldCheck,
 } from 'lucide-react';
@@ -31,7 +32,29 @@ import type { INavMainItem } from '@/widgets/Sidebar';
  * `AdminPage` construye sus tarjetas de inicio desde esta misma lista, de modo
  * que menú e inicio no pueden divergir.
  */
-export const businessNavigation: INavMainItem[] = [];
+export const businessNavigation: INavMainItem[] = [
+    {
+        // Configuración operativa de CER Route. Today/Live, Activity y Reports
+        // **no** están aquí: sus módulos llegan en checkpoints posteriores, y
+        // un encabezado con destinos que no existen es un enlace muerto
+        // disfrazado de sección.
+        title: 'CER Route',
+        url: '#',
+        icon: Car,
+        items: [
+            {
+                title: 'Vehicles',
+                url: '/admin/route/vehicles',
+                requiredPermission: 'route.vehicles.read',
+            },
+            {
+                title: 'Standardized Lists',
+                url: '/admin/route/standard-values',
+                requiredPermission: 'route.standardvalues.manage',
+            },
+        ],
+    },
+];
 
 export const administrationNavigation: INavMainItem[] = [
     {

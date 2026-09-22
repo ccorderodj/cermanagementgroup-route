@@ -172,6 +172,11 @@ async def _seed_company(session, *, name: str, subdomain: str, capabilities) -> 
         ("suspended", "viewer", True, False),
         # Identidad deshabilitada en la plataforma: no entra a ninguna parte.
         ("disabled", "viewer", False, True),
+        # CER Route: los dos roles del dominio de campo. `route_admin`
+        # administra la configuración operativa; `supervisor` no administra
+        # nada, y probar eso es justamente el punto.
+        ("route_admin", "route_admin", True, True),
+        ("supervisor", "supervisor", True, True),
     ]
 
     for key, role_name, platform_active, membership_active in accounts:
@@ -224,6 +229,12 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
 #: cada test, así que también se vacía.
 TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "audit_event",
+    # CER Route: hijos antes que padres. `vehicle_assignment` referencia a
+    # `supervisor_profile` y `vehicle`, y `supervisor_profile` a `user_company`.
+    "vehicle_assignment",
+    "supervisor_profile",
+    "vehicle",
+    "standard_value",
     "integration_event",
     "idempotency_record",
     "webhook_delivery",
