@@ -21,11 +21,14 @@ class WorkSessionStart(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: La hora local que el dispositivo dice tener en este instante. Evidencia,
-    #: no autoridad: el servidor usa su propio reloj para `started_at`.
+    #: Cuándo pulsó el botón el supervisor, según el dispositivo. Se captura al
+    #: **encolar** la acción, no al enviarla: para una acción que esperó sin
+    #: cobertura es la única fuente que conoce el instante real. El servidor la
+    #: valida contra lo que sabe con certeza antes de aceptarla y guarda
+    #: siempre, por separado, su propia hora de recepción.
     device_captured_at: Optional[datetime] = None
-    #: Minutos al este de UTC (p. ej. -240 para EDT). De aquí sale
-    #: `session_date`, no del reloj del dispositivo — ver D-10 en el informe.
+    #: Minutos al este de UTC (p. ej. -240 para EDT). Decide a qué fecha del
+    #: calendario local pertenece la ocurrencia — ver D-10 en el informe.
     utc_offset_minutes: Optional[int] = Field(default=None, ge=-720, le=840)
 
 
@@ -52,13 +55,27 @@ class WorkSessionVehicleSnapshot(BaseModel):
 
 
 class WorkSessionRead(BaseModel):
+    """La jornada tal como la lee el cliente.
+
+    `started_at`/`ended_at` son **ocurrencia** —cuándo pulsó el botón el
+    supervisor—, que es lo que la pantalla debe mostrar y lo que RTE04 usará
+    para ordenar Trips. `*_received_at` y `*_at_source` acompañan al dato para
+    que el consumidor pueda ver si esa hora es evidencia del dispositivo o una
+    aproximación por hora de recepción, en vez de tener que asumir una de las
+    dos cosas.
+    """
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
     status: str
     session_date: date
     started_at: datetime
+    started_received_at: datetime
+    started_at_source: str
     ended_at: Optional[datetime] = None
+    ended_received_at: Optional[datetime] = None
+    ended_at_source: Optional[str] = None
     vehicle_id: Optional[int] = None
     mpg_snapshot: Optional[Decimal] = None
     version: int

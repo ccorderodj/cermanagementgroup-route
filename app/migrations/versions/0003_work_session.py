@@ -17,11 +17,30 @@ el código Python:
    `(vehicle_id, company_id)`: hace imposible que la jornada apunte a un
    vehículo de otro tenant, con o sin bug en el servicio.
 
+3. `ck_work_session_end_after_start` — una jornada no puede terminar antes de
+   empezar. La hora de fin llega, en parte, de un reloj que no controlamos
+   (ver más abajo), así que la comprobación vive en la base y no solo en el
+   servicio.
+
 `session_date`, `vehicle_id` y `mpg_snapshot` son snapshot histórico: se
 escriben una vez al crear la fila y ningún camino de este módulo los vuelve a
-tocar. `started_at`/`ended_at` son el reloj del servidor, autoritativo; las
-columnas `*_device_captured_at` y `*_utc_offset_minutes` son evidencia del
-dispositivo, nunca fuente de verdad (D-10).
+tocar.
+
+Dos relojes
+-----------
+`started_at`/`ended_at` son **ocurrencia**: cuándo pulsó el botón el
+supervisor. `started_received_at`/`ended_received_at` son **recepción**: el
+reloj del servidor cuando se enteró. Para una acción online coinciden; para una
+que esperó en la cola offline no, y `session_date` sale de la ocurrencia, que
+es lo que exige D-10.
+
+`started_at_source`/`ended_at_source` (`device` | `server_receipt`) dicen de
+qué reloj salió cada ocurrencia. Existen porque cuando no hay evidencia del
+dispositivo, o la que hay es contradictoria, se usa la hora de recepción como
+aproximación — y ese caso tiene que ser distinguible de una hora conocida en
+vez de quedar indistinguible de ella. `*_device_captured_at` y
+`*_utc_offset_minutes` conservan lo que el dispositivo reportó, verbatim, se
+haya aceptado o descartado.
 """
 from typing import Sequence, Union
 
@@ -47,6 +66,10 @@ def upgrade() -> None:
     sa.Column('session_date', sa.Date(), nullable=False),
     sa.Column('started_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('ended_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('started_received_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
+    sa.Column('ended_received_at', sa.DateTime(timezone=True), nullable=True),
+    sa.Column('started_at_source', sa.String(length=20), server_default='server_receipt', nullable=False),
+    sa.Column('ended_at_source', sa.String(length=20), nullable=True),
     sa.Column('start_device_captured_at', sa.DateTime(timezone=True), nullable=True),
     sa.Column('start_utc_offset_minutes', sa.Integer(), nullable=True),
     sa.Column('end_device_captured_at', sa.DateTime(timezone=True), nullable=True),
@@ -57,6 +80,9 @@ def upgrade() -> None:
     sa.Column('updated_at', sa.DateTime(timezone=True), server_default=sa.text('now()'), nullable=False),
     sa.Column('version', sa.Integer(), server_default=sa.text('1'), nullable=False),
     sa.CheckConstraint("status IN ('active', 'ended')", name='ck_work_session_status'),
+    sa.CheckConstraint("started_at_source IN ('device', 'server_receipt')", name='ck_work_session_started_at_source'),
+    sa.CheckConstraint("ended_at_source IN ('device', 'server_receipt')", name='ck_work_session_ended_at_source'),
+    sa.CheckConstraint('ended_at IS NULL OR ended_at >= started_at', name='ck_work_session_end_after_start'),
     sa.ForeignKeyConstraint(['company_id'], ['company.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['user_id'], ['user.id'], ondelete='CASCADE'),
     sa.ForeignKeyConstraint(['vehicle_id', 'company_id'], ['vehicle.id', 'vehicle.company_id'], name='fk_work_session_vehicle_same_company', ondelete='RESTRICT'),

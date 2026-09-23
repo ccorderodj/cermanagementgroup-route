@@ -7,9 +7,10 @@ Lo que este archivo demuestra, y por qué cada bloque existe
   base — no por una lectura previa en Python (§4, §10.1 de las instrucciones).
 * **Snapshot de vehículo.** Se congela al empezar y no se vuelve a tocar,
   aunque el vehículo o la asignación cambien después (§6).
-* **Tiempo.** La fecha de la jornada sale del desfase que reporta el
-  dispositivo aplicado a la hora del servidor, nunca de un reloj de
-  dispositivo en el que no se confía (D-10, §7).
+* **Tiempo.** La jornada pertenece a la fecha local en la que **ocurrió** el
+  `Start Work`, no a la fecha en la que el servidor lo recibió — y las dos
+  pueden separarse horas si la acción esperó en la cola offline (D-10, §7, y
+  el cierre 002).
 * **Autorización.** Solo quien tiene `route.worksession.execute` puede actuar,
   y solo sobre su propia jornada (§9).
 * **Concurrencia.** Dos peticiones simultáneas de `Start Work` no producen dos
@@ -459,9 +460,15 @@ async def test_a_dst_boundary_does_not_split_a_session_into_two_days(seeded):
 
 
 async def test_skewed_device_clock_does_not_affect_authoritative_ordering(seeded):
-    """`device_captured_at` es evidencia, no autoridad: aunque el reloj del
-    dispositivo esté mal, el orden real —`started_at` del servidor— no se ve
-    afectado."""
+    """Evidencia imposible: una acción no puede ocurrir después de recibirse.
+
+    El dispositivo declara estar tres días en el futuro. El servidor no necesita
+    confiar en ningún reloj ajeno para saber que eso es contradictorio —lo
+    contradice su propia recepción—, así que descarta la evidencia, fecha la
+    ocurrencia por recepción y **lo deja escrito** en `started_at_source`. Sin
+    esa columna, esta jornada sería indistinguible de una cuya hora sí se
+    conoce.
+    """
     import time_machine
 
     with time_machine.travel("2026-09-25 12:00:00+00:00", tick=False):
@@ -483,13 +490,379 @@ async def test_skewed_device_clock_does_not_affect_authoritative_ordering(seeded
             select(WorkSession).where(WorkSession.id == creada["id"])
         )
     assert fila.started_at.date() == date(2026, 9, 25), (
-        "started_at debe venir del servidor, no del reloj declarado por el "
-        "dispositivo"
+        "la evidencia del futuro se descarta: la ocurrencia cae a la hora de "
+        "recepción del servidor"
+    )
+    assert fila.started_at_source == "server_receipt", (
+        "y el rechazo queda registrado, en vez de disimularse como una hora "
+        "conocida"
     )
     assert fila.start_device_captured_at.date() == date(2026, 9, 28), (
-        "lo que el dispositivo reportó se guarda como evidencia, pero no "
-        "gobierna el orden"
+        "lo que el dispositivo reportó se conserva verbatim aunque se haya "
+        "descartado: es la evidencia de qué se rechazó"
     )
+
+
+async def test_stale_device_evidence_beyond_the_window_is_rejected(seeded):
+    """Una ocurrencia de hace semanas no describe la jornada que se sincroniza.
+
+    Está dentro del pasado, así que la causalidad no la descarta; lo que la
+    descarta es la ventana máxima de antigüedad admisible para una acción
+    encolada. El límite es generoso a propósito (siete días), y rebasarlo no
+    bloquea el `Start Work`: solo degrada la procedencia.
+    """
+    import time_machine
+
+    with time_machine.travel("2026-09-25 12:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            respuesta = await cliente.post(
+                "/api/worksessions",
+                json={
+                    "device_captured_at": "2026-09-01T12:00:00+00:00",
+                    "utc_offset_minutes": 0,
+                },
+            )
+
+    assert respuesta.status_code == 200, "el tiempo nunca bloquea Start Work"
+    cuerpo = respuesta.json()
+    assert cuerpo["started_at_source"] == "server_receipt"
+    assert cuerpo["session_date"] == "2026-09-25", (
+        "la fecha sale de la recepción, no de una evidencia descartada"
+    )
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == cuerpo["id"])
+        )
+    assert fila.start_device_captured_at.date() == date(2026, 9, 1)
+
+
+# ── Ocurrencia frente a recepción: acciones encoladas (cierre 002) ───────────
+#
+# Estos tests fallan con el comportamiento anterior, en el que `started_at` era
+# la hora de recepción del servidor: ahí el retraso de sincronización se leía
+# como la jornada. Son la red que impide volver a ese estado.
+
+
+async def test_offline_start_queued_before_midnight_keeps_the_previous_day(seeded):
+    """El caso que motivó el cierre 002.
+
+    El supervisor pulsa `Start Work` el viernes a las 23:50 locales, sin
+    cobertura. La acción espera en la cola y sincroniza el sábado a las 08:00
+    locales. La jornada es del **viernes**: es el día que trabajó.
+
+    Con el comportamiento anterior `session_date` habría salido de la hora de
+    recepción (sábado) y la jornada habría quedado fechada en el día
+    equivocado.
+    """
+    import time_machine
+
+    # Viernes 23:50 EDT (UTC-4) = sábado 03:50 UTC. La acción se queda en la
+    # cola; el servidor no se enterará hasta ocho horas después.
+    ocurrencia = "2026-09-26T03:50:00+00:00"
+
+    # Sábado 12:00 UTC = 08:00 EDT: el supervisor recupera cobertura y la cola
+    # vacía lo pendiente.
+    with time_machine.travel("2026-09-26 12:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            respuesta = await cliente.post(
+                "/api/worksessions",
+                json={
+                    "device_captured_at": ocurrencia,
+                    "utc_offset_minutes": -240,
+                },
+            )
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert cuerpo["session_date"] == "2026-09-25", (
+        "la jornada pertenece al día en que se empezó a trabajar, no al día en "
+        "que la acción consiguió sincronizar"
+    )
+    assert cuerpo["started_at_source"] == "device"
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == cuerpo["id"])
+        )
+
+    assert fila.started_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 26, 3, 50, tzinfo=timezone.utc
+    ), "started_at es la ocurrencia"
+    assert fila.started_received_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 26, 12, 0, tzinfo=timezone.utc
+    ), "started_received_at es la recepción, y sigue estando disponible"
+    assert fila.started_at < fila.started_received_at, (
+        "los dos hechos son distinguibles: ocho horas de cola entre ellos"
+    )
+
+
+async def test_offline_end_keeps_its_occurrence_not_the_sync_time(seeded):
+    """Un `End Work` de las 17:00 que sincroniza de madrugada terminó a las
+    17:00. La hora de sincronización queda, aparte, como trazabilidad."""
+    import time_machine
+
+    with time_machine.travel("2026-09-25 14:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            creada = (
+                await cliente.post(
+                    "/api/worksessions",
+                    json={
+                        "device_captured_at": "2026-09-25T14:00:00+00:00",
+                        "utc_offset_minutes": -240,
+                    },
+                )
+            ).json()
+
+            # Doce horas después: la cola vacía el `End Work` que el supervisor
+            # pulsó a las 17:00 locales (21:00 UTC), siete horas antes.
+            with time_machine.travel("2026-09-26 02:00:00+00:00", tick=False):
+                terminada = await cliente.post(
+                    f"/api/worksessions/{creada['id']}/end",
+                    json={
+                        "device_captured_at": "2026-09-25T21:00:00+00:00",
+                        "utc_offset_minutes": -240,
+                    },
+                )
+
+    assert terminada.status_code == 200, terminada.text
+    assert terminada.json()["ended_at_source"] == "device"
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == creada["id"])
+        )
+
+    assert fila.ended_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 25, 21, 0, tzinfo=timezone.utc
+    ), "la jornada terminó cuando el supervisor la cerró"
+    assert fila.ended_received_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 26, 2, 0, tzinfo=timezone.utc
+    ), "y el servidor lo supo cinco horas más tarde, que es trazable"
+
+
+async def test_cross_midnight_session_with_device_evidence_stays_on_start_date(
+    seeded,
+):
+    """Empezar viernes 20:00 y terminar sábado 01:00 es una sola jornada del
+    viernes, con la evidencia de ocurrencia gobernando las dos puntas."""
+    import time_machine
+
+    with time_machine.travel("2026-09-26 00:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            creada = (
+                await cliente.post(
+                    "/api/worksessions",
+                    json={
+                        # Viernes 20:00 EDT.
+                        "device_captured_at": "2026-09-26T00:00:00+00:00",
+                        "utc_offset_minutes": -240,
+                    },
+                )
+            ).json()
+            assert creada["session_date"] == "2026-09-25"
+
+            with time_machine.travel("2026-09-26 05:00:00+00:00", tick=False):
+                terminada = (
+                    await cliente.post(
+                        f"/api/worksessions/{creada['id']}/end",
+                        json={
+                            # Sábado 01:00 EDT.
+                            "device_captured_at": "2026-09-26T05:00:00+00:00",
+                            "utc_offset_minutes": -240,
+                        },
+                    )
+                ).json()
+
+    assert terminada["id"] == creada["id"], "no se crea una segunda jornada"
+    assert terminada["session_date"] == "2026-09-25", (
+        "cruzar medianoche no reasigna la jornada al día siguiente"
+    )
+    assert terminada["ended_at"] is not None
+
+
+async def test_replaying_a_queued_action_does_not_move_the_occurrence(seeded):
+    """Rule 5 del cierre: un replay no reescribe la hora ya establecida.
+
+    Se reenvía la misma acción con la misma `Idempotency-Key` seis horas más
+    tarde. Ni la ocurrencia ni la recepción originales se mueven.
+    """
+    import time_machine
+
+    cabeceras = {"Idempotency-Key": "closure-002-replay-start"}
+    cuerpo = {
+        "device_captured_at": "2026-09-25T11:50:00+00:00",
+        "utc_offset_minutes": -240,
+    }
+
+    with time_machine.travel("2026-09-25 12:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            primera = (
+                await cliente.post(
+                    "/api/worksessions", json=cuerpo, headers=cabeceras
+                )
+            ).json()
+
+            with time_machine.travel("2026-09-25 18:00:00+00:00", tick=False):
+                replay = (
+                    await cliente.post(
+                        "/api/worksessions", json=cuerpo, headers=cabeceras
+                    )
+                ).json()
+
+    assert replay["id"] == primera["id"]
+    assert replay["started_at"] == primera["started_at"]
+    assert replay["started_received_at"] == primera["started_received_at"], (
+        "el replay no reescribe la hora de recepción original"
+    )
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == primera["id"])
+        )
+    assert fila.started_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 25, 11, 50, tzinfo=timezone.utc
+    )
+    assert fila.started_received_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 25, 12, 0, tzinfo=timezone.utc
+    )
+
+
+async def test_online_start_and_end_behave_as_before(seeded):
+    """Caso de control: online, ocurrencia y recepción coinciden.
+
+    La corrección no cambia el camino normal — es lo que exige la decisión 4
+    del cierre. Con cobertura, la evidencia del dispositivo llega al instante y
+    se acepta, así que las dos horas son la misma.
+    """
+    import time_machine
+
+    with time_machine.travel("2026-09-25 15:30:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            creada = (
+                await cliente.post(
+                    "/api/worksessions",
+                    json={
+                        "device_captured_at": "2026-09-25T15:30:00+00:00",
+                        "utc_offset_minutes": -240,
+                    },
+                )
+            ).json()
+            terminada = (
+                await cliente.post(
+                    f"/api/worksessions/{creada['id']}/end",
+                    json={
+                        "device_captured_at": "2026-09-25T15:30:00+00:00",
+                        "utc_offset_minutes": -240,
+                    },
+                )
+            ).json()
+
+    assert creada["started_at"] == creada["started_received_at"]
+    assert creada["started_at_source"] == "device"
+    assert creada["session_date"] == "2026-09-25"
+    assert terminada["ended_at"] == terminada["ended_received_at"]
+    assert terminada["status"] == "ended"
+
+
+async def test_without_device_evidence_the_receipt_time_is_labelled_as_such(seeded):
+    """Rule 9: la ausencia de evidencia no se disfraza de hora conocida.
+
+    Sin `device_captured_at` la recepción sigue siendo la mejor aproximación
+    disponible —y `Start Work` no se bloquea—, pero la fila dice
+    `server_receipt` para que nadie lea después esa hora como el instante en el
+    que el supervisor pulsó el botón.
+    """
+    async with TenantClient("alpha") as cliente:
+        await cliente.login(seeded.alpha.users["supervisor"].email)
+        cuerpo = (await cliente.post("/api/worksessions", json={})).json()
+
+    assert cuerpo["started_at_source"] == "server_receipt"
+    assert cuerpo["started_at"] == cuerpo["started_received_at"]
+
+
+async def test_end_evidence_before_start_is_rejected_as_impossible(seeded):
+    """Un `End Work` anterior a su propio `Start Work` es imposible.
+
+    No se cree por venir del dispositivo: se descarta, se fecha por recepción y
+    se registra la procedencia. La evidencia cruda se conserva.
+    """
+    import time_machine
+
+    with time_machine.travel("2026-09-25 12:00:00+00:00", tick=False):
+        async with TenantClient("alpha") as cliente:
+            await cliente.login(seeded.alpha.users["supervisor"].email)
+            creada = (await cliente.post("/api/worksessions", json={})).json()
+
+            with time_machine.travel("2026-09-25 13:00:00+00:00", tick=False):
+                terminada = (
+                    await cliente.post(
+                        f"/api/worksessions/{creada['id']}/end",
+                        json={
+                            # Dos horas ANTES de haber empezado.
+                            "device_captured_at": "2026-09-25T10:00:00+00:00",
+                            "utc_offset_minutes": 0,
+                        },
+                    )
+                ).json()
+
+    assert terminada["ended_at_source"] == "server_receipt"
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == creada["id"])
+        )
+
+    assert fila.ended_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 25, 13, 0, tzinfo=timezone.utc
+    )
+    assert fila.ended_at >= fila.started_at, "nunca una duración negativa"
+    assert fila.end_device_captured_at.astimezone(timezone.utc) == datetime(
+        2026, 9, 25, 10, 0, tzinfo=timezone.utc
+    ), "lo descartado se conserva como evidencia de qué se rechazó"
+
+
+async def test_the_database_rejects_an_end_before_its_start(seeded):
+    """`ck_work_session_end_after_start`, probado saltándose el servicio.
+
+    La hora de fin llega en parte de un reloj ajeno, así que la garantía no
+    puede depender de que el servicio se acuerde de comprobarlo.
+    """
+    from sqlalchemy import insert, update
+
+    async with async_session_maker() as session:
+        resultado = await session.execute(
+            insert(WorkSession)
+            .values(
+                company_id=seeded.alpha.id,
+                user_id=seeded.alpha.users["supervisor"].id,
+                status="active",
+                session_date=date(2026, 9, 25),
+                started_at=datetime(2026, 9, 25, 12, 0, tzinfo=timezone.utc),
+            )
+            .returning(WorkSession.id)
+        )
+        jornada_id = resultado.scalar_one()
+        await session.commit()
+
+    async with async_session_maker() as session:
+        with pytest.raises(Exception):
+            await session.execute(
+                update(WorkSession)
+                .where(WorkSession.id == jornada_id)
+                .values(
+                    status="ended",
+                    ended_at=datetime(2026, 9, 25, 11, 0, tzinfo=timezone.utc),
+                )
+            )
+            await session.commit()
+        await session.rollback()
 
 
 # ── Autorización ─────────────────────────────────────────────────────────────
