@@ -110,7 +110,15 @@ export function LoginForm() {
                 description: 'Welcome back!',
             });
 
-            window.location.href = appData?.default_path || '/admin';
+            // `next` devuelve a donde estaba quien perdió la sesión (D-09).
+            // Solo se acepta una ruta relativa de esta misma aplicación: nunca
+            // una URL absoluta, para que el parámetro no sirva como
+            // redirección abierta.
+            const params = new URLSearchParams(window.location.search);
+            const next = params.get('next');
+            const esRutaSegura = Boolean(next) && next!.startsWith('/') && !next!.startsWith('//');
+
+            window.location.href = (esRutaSegura ? next : appData?.default_path) || '/admin';
         } catch (error) {
             const errorMessage = error instanceof Error
                 ? error.message

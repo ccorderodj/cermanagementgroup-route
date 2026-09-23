@@ -13,6 +13,8 @@ permiso), `AUD-SEC-005` (listado de tenants para cualquier autenticado) y
 `AUD-BE-001` (páginas de administración sin comprobar permisos).
 """
 
+from urllib.parse import quote
+
 import pytest
 
 from app.core.rbac.catalog import DEFAULT_ROLES, capabilities_for
@@ -217,9 +219,15 @@ async def test_tenant_admin_cannot_promote_an_existing_user(seeded, alpha_client
 
 @pytest.mark.parametrize("path", ADMIN_PAGES)
 async def test_admin_pages_redirect_anonymous_visitors(seeded, alpha_client, path):
+    """`next=` (RTE03, D-09) vuelve a donde estaba quien perdió la sesión.
+
+    Antes redirigía a un `/login` seco; ahora recuerda la ruta para que
+    reautenticarse no deje a nadie varado en el panel de Admin cuando
+    trabajaba en otra pantalla (por ejemplo, `/route`).
+    """
     response = await alpha_client.get(path)
     assert response.status_code == 303
-    assert response.headers["location"] == "/login"
+    assert response.headers["location"] == f"/login?next={quote(path, safe='')}"
 
 
 @pytest.mark.parametrize(

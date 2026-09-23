@@ -231,6 +231,8 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "audit_event",
     # CER Route: hijos antes que padres. `vehicle_assignment` referencia a
     # `supervisor_profile` y `vehicle`, y `supervisor_profile` a `user_company`.
+    # `work_session` referencia a `vehicle` (RESTRICT), así que va antes.
+    "work_session",
     "vehicle_assignment",
     "supervisor_profile",
     "vehicle",
