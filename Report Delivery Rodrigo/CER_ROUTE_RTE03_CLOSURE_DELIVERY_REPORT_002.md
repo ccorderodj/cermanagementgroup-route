@@ -8,7 +8,7 @@
 | **Baseline delivery** | `Report Delivery Rodrigo/CER_ROUTE_RTE03_DELIVERY_REPORT_001.md` |
 | **Source branch** | `feature/rte03-closure-002` |
 | **Base commit** | `e9c4d0f` (tip of `dev` — see §1, this is **not** the branch the instruction expected) |
-| **Candidate commit** | `be104be` (plus this metadata follow-up) |
+| **Candidate commit** | `be104be` (closure implementation) — final tip including report metadata: see §12.1 |
 | **Push status** | Pushed to `origin/feature/rte03-closure-002` |
 | **MR status** | **Open, not merged** — [merge_requests/5](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/5), targeting `dev`. Awaiting CER certification; nothing was merged |
 | **Date** | 2026-09-23 |
@@ -260,8 +260,11 @@ IndexedDB does **not** protect against the user clearing site data, browser stor
 
 | Scope | Command | Result |
 |---|---|---|
-| Work Session + auth continuity | `uv run pytest tests/integration/test_work_sessions.py tests/integration/test_auth_continuity.py` | **46 passed** |
+| Work Session integration tests | `uv run pytest tests/integration/test_work_sessions.py` | **42 passed** |
+| Auth continuity tests (D-09) | `uv run pytest tests/integration/test_auth_continuity.py` | **4 passed** |
 | Time / occurrence subset | `uv run pytest tests/integration/test_work_sessions.py -k "offline or occurrence or …"` | **15 passed** |
+| Authorization / permission matrix | `uv run pytest tests/integration/test_authorization_matrix.py` | **50 passed** |
+| Architecture nets (permission catalog, public surface, page wiring, navigation wiring) | `uv run pytest tests/test_permission_catalog.py tests/test_public_surface.py tests/test_page_wiring.py tests/test_navigation_wiring.py` | **60 passed** |
 | Browser validation | `uv run pytest tests/e2e/test_work_session_offline_browser.py` | **1 passed** |
 | Full backend suite | `uv run pytest` | **399 passed**, 0 failed, 0 skipped, **exit code 0** (389 at delivery 001; +9 in `test_work_sessions.py`, +1 browser test) |
 | Frontend typecheck | `npm run typecheck` | clean, 0 errors |
@@ -280,7 +283,17 @@ IndexedDB does **not** protect against the user clearing site data, browser stor
 | `tests/integration/test_auth_continuity.py` | 4 | 4 | 0 |
 | `tests/e2e/test_work_session_offline_browser.py` | — | **1** | 1 |
 
-Bootstrap / role-capability behavior was **not** touched by this closure: no capability, role template or seed was changed.
+Bootstrap / role-capability behavior was **not** touched by this closure: no capability, role template or seed was changed. The architecture-net row above confirms it — `test_permission_catalog.py` fails by design if the catalog and the `require_permissions` calls diverge.
+
+### 12.1 Commits on the closure branch
+
+| Commit | Contents |
+|---|---|
+| `be104be` | The closure itself: model, service, schemas, migration amendment, 9 integration tests, browser test, this report |
+| `07b400a` | Report metadata only — candidate commit, push status and MR number, which could not exist before the commit did |
+| ``ec5ab4f`` | This section: itemized auth-continuity, authorization and architecture-net regression rows requested by instruction item 10 |
+
+The reviewable diff for CER is `e9c4d0f..` on `feature/rte03-closure-002`.
 
 ---
 
