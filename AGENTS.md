@@ -1,9 +1,11 @@
 # AGENTS.md
 
 Reglas para trabajar en este repositorio. Complementa `docs/ARCHITECTURE.md`
-(que explica *cómo está armado*), `docs/DEVELOPMENT_WORKFLOW.md` (cómo se trabaja)
-y `_cer_delivery/recomendaciones_eficientes_y_ejecutables.md` (cómo debe responder,
-recomendar y decidir el agente); esto dice *qué hacer y qué no*.
+(que explica *cómo está armado*), `docs/DEVELOPMENT_WORKFLOW.md` (cómo se trabaja),
+`_cer_delivery/recomendaciones_eficientes_y_ejecutables.md` (cómo debe responder,
+recomendar y decidir el agente) y
+`_cer_delivery/progreso_y_reporte_de_ejecucion.md` (cómo debe reportar mientras
+ejecuta); esto dice *qué hacer y qué no*.
 
 ---
 
@@ -325,3 +327,56 @@ concede autoridad nominal sobre algo que no existe.
 2. Listar los archivos cambiados y por qué.
 3. Indicar los comandos ejecutados y su resultado real.
 4. Si algo no se pudo verificar, decirlo. "No lo he probado" nunca es "funciona".
+
+---
+
+## Reporte de ejecución
+
+Estas reglas **complementan** las de arquitectura, testing, base de datos,
+seguridad, Git y Definition of Done; no las sustituyen. El documento completo,
+con plantillas y ejemplos, es
+`_cer_delivery/progreso_y_reporte_de_ejecucion.md`.
+
+1. **Reportar en hitos, no al final.** En trabajo largo —una implementación por
+   fases, una migración, una regresión, un build, una validación de navegador—
+   se informa cuando termina una fase, cuando termina un lote de tests, cuando
+   aparece un problema, cuando se corrige, cuando falla algo, cuando hace falta
+   una decisión humana y cuando empieza la validación final. **No** se narra
+   cada comando.
+2. **Lo importante, visible de inmediato**: qué está hecho, qué está corriendo,
+   qué queda, qué riesgos o hallazgos hay.
+3. **Evidencia concreta, nunca impresiones.** `24/24 PASS`, `0 errores`,
+   `776 ejecutados, 0 fallos`, `exit 0`. Nada de "parece que funciona" ni "todo
+   se ve bien". Lo que no se ejecutó se marca `PENDING`, `NOT RUN` o
+   `NOT APPLICABLE`: **la evidencia ausente nunca se convierte en PASS.**
+4. **`IMPLEMENTED` no es `VALIDATED`.** Un criterio de aceptación solo pasa a
+   validado cuando existe la evidencia que lo respalda, y la evidencia se
+   nombra junto al estado.
+5. **Regresión grande, por lotes** cuando la arquitectura de tests lo permita:
+   aísla el fallo y hace observable el avance. Por lote se registra nombre, nº
+   de tests, resultado, exit code y duración, con acumulado.
+6. **Un fallo nunca se esconde detrás de un verde global.** Se dice qué falló,
+   por qué si está confirmado, el impacto, la acción y el estado actual. Si no
+   se conoce la causa raíz, se dice — no se inventa. Tras corregir se reportan
+   **las dos cosas**: que falló y que después pasó.
+7. **Causas etiquetadas**: `CONFIRMED`, `LIKELY` o `UNVERIFIED`. Una suposición
+   no se presenta como hecho.
+8. **Hallazgos incidentales, a la vista.** Un problema descubierto fuera del
+   cambio previsto se reporta cuando aparece, no enterrado en el resumen final,
+   y con su **acción operativa** si algo tiene que ocurrir en otro sitio
+   (bootstrap, migración, semillas, despliegue, revisión manual).
+9. **Revisión humana separada de fallos de ingeniería.** Datos ambiguos,
+   decisiones de negocio, aprobaciones y credenciales faltantes no son bugs.
+10. **Migraciones**: revisión, resultado, head actual, nº de heads, y registros
+    evaluados / modificados / omitidos / que requieren revisión humana. **Un
+    dato de negocio ambiguo no se interpreta en silencio para que la migración
+    termine**: se reporta.
+11. **Local no es compartido.** Toda afirmación dice a qué entorno aplica. Una
+    corrección local no arregla el entorno compartido.
+12. **No se declara COMPLETED si falta validación.** Se distingue
+    implementación terminada, validación en curso y validación completa; si
+    queda algo, `COMPLETED WITH PENDING VALIDATION`.
+13. **Reportar no autoriza alcance.** Terminado lo pedido y su validación: se
+    emite el reporte final, se señalan la acción operativa pendiente y el
+    siguiente paso natural, y se **para**. No se empieza otra cosa por
+    iniciativa propia.
