@@ -1,7 +1,9 @@
 # AGENTS.md
 
 Reglas para trabajar en este repositorio. Complementa `docs/ARCHITECTURE.md`
-(que explica *cómo está armado*) y `docs/DEVELOPMENT_WORKFLOW.md` (cómo se trabaja); esto dice *qué hacer y qué no*.
+(que explica *cómo está armado*), `docs/DEVELOPMENT_WORKFLOW.md` (cómo se trabaja)
+y `_cer_delivery/recomendaciones_eficientes_y_ejecutables.md` (cómo debe responder,
+recomendar y decidir el agente); esto dice *qué hacer y qué no*.
 
 ---
 
