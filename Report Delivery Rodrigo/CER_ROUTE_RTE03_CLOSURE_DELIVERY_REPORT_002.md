@@ -8,9 +8,9 @@
 | **Baseline delivery** | `Report Delivery Rodrigo/CER_ROUTE_RTE03_DELIVERY_REPORT_001.md` |
 | **Source branch** | `feature/rte03-closure-002` |
 | **Base commit** | `e9c4d0f` (tip of `dev` — see §1, this is **not** the branch the instruction expected) |
-| **Candidate commit** | `be104be` (plus this metadata follow-up) |
+| **Candidate commit** | `be104be` (closure implementation) — final tip including report metadata: see §12.1 |
 | **Push status** | Pushed to `origin/feature/rte03-closure-002` |
-| **MR status** | **Open, not merged** — [merge_requests/5](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/5), targeting `dev`. Awaiting CER certification; nothing was merged |
+| **MR status** | [merge_requests/5](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/5) was opened targeting `dev` and **has since been merged** (`7290519`), before CER certification and not by this delivery — see §1 and §12.1 |
 | **Date** | 2026-09-23 |
 | **Proposed status** | **RTE03 closure — Completed / Ready for CER certification** |
 
@@ -260,8 +260,11 @@ IndexedDB does **not** protect against the user clearing site data, browser stor
 
 | Scope | Command | Result |
 |---|---|---|
-| Work Session + auth continuity | `uv run pytest tests/integration/test_work_sessions.py tests/integration/test_auth_continuity.py` | **46 passed** |
+| Work Session integration tests | `uv run pytest tests/integration/test_work_sessions.py` | **42 passed** |
+| Auth continuity tests (D-09) | `uv run pytest tests/integration/test_auth_continuity.py` | **4 passed** |
 | Time / occurrence subset | `uv run pytest tests/integration/test_work_sessions.py -k "offline or occurrence or …"` | **15 passed** |
+| Authorization / permission matrix | `uv run pytest tests/integration/test_authorization_matrix.py` | **50 passed** |
+| Architecture nets (permission catalog, public surface, page wiring, navigation wiring) | `uv run pytest tests/test_permission_catalog.py tests/test_public_surface.py tests/test_page_wiring.py tests/test_navigation_wiring.py` | **60 passed** |
 | Browser validation | `uv run pytest tests/e2e/test_work_session_offline_browser.py` | **1 passed** |
 | Full backend suite | `uv run pytest` | **399 passed**, 0 failed, 0 skipped, **exit code 0** (389 at delivery 001; +9 in `test_work_sessions.py`, +1 browser test) |
 | Frontend typecheck | `npm run typecheck` | clean, 0 errors |
@@ -280,7 +283,19 @@ IndexedDB does **not** protect against the user clearing site data, browser stor
 | `tests/integration/test_auth_continuity.py` | 4 | 4 | 0 |
 | `tests/e2e/test_work_session_offline_browser.py` | — | **1** | 1 |
 
-Bootstrap / role-capability behavior was **not** touched by this closure: no capability, role template or seed was changed.
+Bootstrap / role-capability behavior was **not** touched by this closure: no capability, role template or seed was changed. The architecture-net row above confirms it — `test_permission_catalog.py` fails by design if the catalog and the `require_permissions` calls diverge.
+
+### 12.1 Commits on the closure branch
+
+| Commit | Contents |
+|---|---|
+| `be104be` | The closure itself: model, service, schemas, migration amendment, 9 integration tests, browser test, this report |
+| `07b400a` | Report metadata only — candidate commit, push status and MR number, which could not exist before the commit did |
+| `d31db93` | This section: itemized auth-continuity, authorization and architecture-net regression rows requested by instruction item 10, on `feature/rte03-closure-002-report` |
+
+The reviewable diff for the closure itself is `e9c4d0f..07b400a` on `feature/rte03-closure-002`.
+
+**Both branches were merged into `dev` before CER certification, outside this delivery** — see §1 and §16, item 1. The instruction's *"do not merge before certification"* was therefore not honoured by the repository, though it was honoured by this delivery: nothing here merged anything.
 
 ---
 
@@ -329,7 +344,7 @@ The Work Session lifecycle remains `ACTIVE → ENDED`. `route.worksession.execut
 
 | # | Item | Assessment |
 |---|---|---|
-| 1 | **RTE03 was already merged to `dev` and pushed before this closure started**, by two merges, with hashes that do not match delivery 001 | Not done by delivery 001 or by this closure. Requires a CER governance decision (§1). No revert attempted |
+| 1 | **RTE03 was already merged to `dev` and pushed before this closure started**, by two merges, with hashes that do not match delivery 001. **The closure branch was then also merged to `dev` (`7290519`) before certification**, while this report was being finalized | None of these merges was performed by delivery 001 or by this closure — both left their branch unmerged with an open MR. Requires a CER governance decision (§1): accept the merged state, or revert on `dev` and re-land after certification. No revert attempted |
 | 2 | Migration `0003` amended instead of a new `0004` | Explicitly permitted by the instruction. Local databases on the previous `0003` need a downgrade/upgrade. No deployed environment affected |
 | 3 | `started_at` / `ended_at` changed meaning without changing name | Deliberate (§4). The alternative left the obvious field carrying the wrong semantics — a latent defect for RTE04. No certified consumer existed |
 | 4 | New dev dependency `playwright` | Dev-group only, no browser download, test skips where Edge is absent. Added to satisfy §B |
@@ -347,6 +362,6 @@ No STOP condition from the instruction was triggered: `session_date`'s meaning w
 
 The correctness gap is closed and proven with a test that demonstrably fails against the previous behavior. Browser-level offline evidence now exists; real-device validation remains explicitly pending.
 
-Two things need a CER decision before anything merges: the already-merged state of RTE03 on `dev` (§1), and confirmation of the two time-tolerance constants (§3).
+Two things need a CER decision: the already-merged state of both RTE03 and this closure on `dev` (§1, §16 item 1), and confirmation of the two time-tolerance constants (§3).
 
 Work stops here. RTE04 has not been started.
