@@ -1,12 +1,24 @@
 import { z } from 'zod';
 
-/** La Jornada, tal y como la sirve `GET /worksessions/current`. */
+/**
+ * La Jornada, tal y como la sirve `GET /worksessions/current`.
+ *
+ * `started_at`/`ended_at` son **ocurrencia**: cuándo pulsó el botón el
+ * supervisor, que puede ser bastante antes de que el servidor lo recibiera si
+ * la acción esperó en la cola offline. Es lo que la pantalla muestra.
+ * `*_received_at` es la hora de recepción del servidor y `*_at_source` dice de
+ * cuál de los dos relojes salió la ocurrencia.
+ */
 export const workSessionSchema = z.object({
     id: z.number(),
     status: z.enum(['active', 'ended']),
     session_date: z.string(),
     started_at: z.string(),
+    started_received_at: z.string(),
+    started_at_source: z.enum(['device', 'server_receipt']),
     ended_at: z.string().nullable().optional(),
+    ended_received_at: z.string().nullable().optional(),
+    ended_at_source: z.enum(['device', 'server_receipt']).nullable().optional(),
     vehicle_id: z.number().nullable().optional(),
     mpg_snapshot: z.union([z.string(), z.number()]).nullable().optional(),
     version: z.number(),

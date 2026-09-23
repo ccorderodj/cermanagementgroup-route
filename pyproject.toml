@@ -39,6 +39,7 @@ dev = [
     "flake8>=7.3.0",
     "isort>=8.0.1",
     "moto[s3]>=5.2.3",
+    "playwright>=1.63.0",
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
@@ -56,6 +57,7 @@ python_files = ["test_*.py"]
 addopts = "-q --strict-markers"
 markers = [
     "integration: necesita una base PostgreSQL 14 real (TEST_DATABASE_URL)",
+    "browser: conduce un navegador real (Edge del sistema) contra un uvicorn vivo",
 ]
 
 [tool.black]

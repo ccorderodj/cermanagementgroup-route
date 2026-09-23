@@ -14,6 +14,14 @@ Dos decisiones sostienen todo este módulo:
    propiedad: replay-safe, porque una acción offline reenviada tiene que
    producir el mismo resultado la primera vez y la enésima (§14 de las
    instrucciones).
+
+3. **Cuándo ocurrió y cuándo se recibió son dos hechos, no uno.** Si la cola
+   offline retuvo la acción, el reloj del servidor solo sabe cuándo se enteró.
+   Guardar únicamente eso convierte el retraso de sincronización en la jornada
+   —un `Start Work` del viernes por la noche sincronizado el sábado quedaría
+   fechado en sábado—, así que la ocurrencia y la recepción se guardan por
+   separado y `_resolve_occurrence` decide, con criterios que el servidor puede
+   verificar por sí mismo, cuál de los dos relojes describe la ocurrencia.
 """
 
 from __future__ import annotations
@@ -32,29 +40,103 @@ from app.routers_api.vehicles.dao import (
     VehiclesDAO,
 )
 from app.routers_api.worksessions.dao import WorkSessionsDAO
-from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
+from app.routers_api.worksessions.models import (
+    WorkSession,
+    WorkSessionStatus,
+    WorkSessionTimeSource,
+)
 
 
-def _session_date_from(started_at_utc: datetime, utc_offset_minutes: int | None) -> date:
-    """La fecha del calendario local en el que ocurrió `started_at` (D-10).
+#: Margen por el que se tolera que la evidencia del dispositivo vaya *por
+#: delante* del reloj del servidor: la red tarda, y unos segundos de deriva
+#: benigna no son una contradicción. Más allá de esto sí lo son: una acción no
+#: puede haber ocurrido después del instante en que se recibió.
+_FUTURE_EVIDENCE_TOLERANCE = timedelta(minutes=2)
 
-    Se confía en el desfase que reporta el dispositivo —qué zona horaria
-    tiene configurada—, no en su reloj —qué hora dice que es—. Son preguntas
-    distintas: el reloj de un teléfono puede estar mal ajustado por minutos u
-    horas (deriva), pero su zona horaria casi nunca lo está, porque sale de
-    la configuración del sistema operativo y no del deriva del reloj. Por eso
-    el ancla temporal sigue siendo `started_at`, autoritativo del servidor; el
-    desfase solo decide qué día del calendario sintió quien apretó el botón.
+#: Antigüedad máxima admisible para la evidencia de una acción encolada.
+#: Generoso a propósito —cubre un fin de semana largo sin cobertura—, pero
+#: acotado: una hora de ocurrencia de hace semanas no describe la jornada que
+#: se está sincronizando, describe un reloj roto o una cola corrupta.
+_MAX_EVIDENCE_AGE = timedelta(days=7)
 
-    Sin desfase —evidencia ausente, cliente antiguo, acción encolada sin
-    conectividad para reportarlo— la fecha cae a UTC. Es un límite honesto, no
-    un fallo silencioso: un `Start Work` nunca se bloquea por falta de esta
-    evidencia (D-10, "el manejo del tiempo nunca bloquea Start Work o End
-    Work").
+
+def _as_utc(momento: datetime) -> datetime:
+    """Un `datetime` sin zona se interpreta como UTC, no se rechaza.
+
+    El contrato pide ISO-8601 con desfase y el cliente lo cumple, pero recibir
+    uno sin zona no puede tumbar un `Start Work`: D-10 exige que el manejo del
+    tiempo nunca bloquee la acción.
+    """
+    if momento.tzinfo is None:
+        return momento.replace(tzinfo=timezone.utc)
+    return momento.astimezone(timezone.utc)
+
+
+def _resolve_occurrence(
+    *,
+    received_at: datetime,
+    device_captured_at: datetime | None,
+    not_before: datetime | None = None,
+) -> tuple[datetime, WorkSessionTimeSource]:
+    """Cuándo ocurrió la acción, y de qué reloj lo sabemos.
+
+    El reloj del dispositivo es la **única** fuente que puede saber cuándo se
+    pulsó el botón: si la acción esperó en la cola, el servidor solo conoce el
+    momento en que se enteró. Ignorarla obligaría a representar el retraso de
+    sincronización como la jornada, que es exactamente el defecto que corrige
+    este cierre.
+
+    Pero no se acepta a ciegas. Hay dos hechos que el servidor sí conoce con
+    certeza y que permiten descartar evidencia imposible sin confiar en nada
+    del cliente:
+
+    * **Causalidad.** Una acción no puede ocurrir después de recibirse. Una
+      evidencia por delante del reloj del servidor (más allá de la tolerancia
+      de red) es contradictoria.
+    * **Orden del ciclo de vida.** Un `End Work` no puede ocurrir antes del
+      `Start Work` de su propia jornada — eso es lo que aporta `not_before`.
+
+    Cuando la evidencia se descarta no se inventa precisión: se usa la hora de
+    recepción como aproximación y se devuelve `SERVER_RECEIPT`, que queda
+    almacenado. La evidencia cruda se guarda igual, aunque se haya rechazado
+    (ver `start_device_captured_at` en el modelo). Rechazar nunca bloquea la
+    acción: el supervisor termina su jornada igual, y la incertidumbre queda
+    escrita en vez de disimulada.
+    """
+    if device_captured_at is None:
+        return received_at, WorkSessionTimeSource.SERVER_RECEIPT
+
+    ocurrencia = _as_utc(device_captured_at)
+
+    if ocurrencia > received_at + _FUTURE_EVIDENCE_TOLERANCE:
+        return received_at, WorkSessionTimeSource.SERVER_RECEIPT
+    if ocurrencia < received_at - _MAX_EVIDENCE_AGE:
+        return received_at, WorkSessionTimeSource.SERVER_RECEIPT
+    if not_before is not None and ocurrencia < _as_utc(not_before):
+        return received_at, WorkSessionTimeSource.SERVER_RECEIPT
+
+    return ocurrencia, WorkSessionTimeSource.DEVICE
+
+
+def _session_date_from(occurred_at_utc: datetime, utc_offset_minutes: int | None) -> date:
+    """La fecha del calendario local en la que **ocurrió** el `Start Work`.
+
+    Dos evidencias distintas del dispositivo, con confianzas distintas:
+
+    * el **desfase** respecto a UTC dice en qué zona horaria está trabajando.
+      Sale de la configuración del sistema operativo, no de la deriva del
+      reloj, así que es fiable incluso en un teléfono mal ajustado.
+    * el **instante** de la ocurrencia dice cuándo pulsó el botón. Es la única
+      fuente posible para una acción encolada, y `_resolve_occurrence` ya la
+      validó contra lo que el servidor sabe con certeza antes de llegar aquí.
+
+    Sin desfase la fecha cae a UTC. Es un límite honesto y documentado, no un
+    fallo silencioso: un `Start Work` nunca se bloquea por falta de evidencia
+    (D-10, "el manejo del tiempo nunca bloquea Start Work o End Work").
     """
     if utc_offset_minutes is None:
-        return started_at_utc.date()
-    return (started_at_utc + timedelta(minutes=utc_offset_minutes)).date()
+        return occurred_at_utc.date()
+    return (occurred_at_utc + timedelta(minutes=utc_offset_minutes)).date()
 
 
 class WorkSessionService:
@@ -97,8 +179,11 @@ class WorkSessionService:
                 vehicle_id = vehiculo.id
                 mpg_snapshot = vehiculo.operational_mpg
 
-        ahora = datetime.now(timezone.utc)
-        session_date = _session_date_from(ahora, utc_offset_minutes)
+        recibido_en = datetime.now(timezone.utc)
+        ocurrido_en, origen = _resolve_occurrence(
+            received_at=recibido_en, device_captured_at=device_captured_at
+        )
+        session_date = _session_date_from(ocurrido_en, utc_offset_minutes)
 
         try:
             async with transaction() as session:
@@ -107,7 +192,9 @@ class WorkSessionService:
                     user_id=user_id,
                     status=WorkSessionStatus.ACTIVE.value,
                     session_date=session_date,
-                    started_at=ahora,
+                    started_at=ocurrido_en,
+                    started_received_at=recibido_en,
+                    started_at_source=origen.value,
                     start_device_captured_at=device_captured_at,
                     start_utc_offset_minutes=utc_offset_minutes,
                     vehicle_id=vehicle_id,
@@ -145,6 +232,12 @@ class WorkSessionService:
                 "status": {"old": None, "new": WorkSessionStatus.ACTIVE.value},
                 "session_date": {"old": None, "new": session_date.isoformat()},
                 "vehicle_id": {"old": None, "new": vehicle_id},
+                # La auditoría registra las dos horas y de cuál se fio, no solo
+                # el resultado: si una jornada quedó fechada por recepción, el
+                # rastro tiene que decirlo.
+                "started_at": {"old": None, "new": ocurrido_en.isoformat()},
+                "started_received_at": {"old": None, "new": recibido_en.isoformat()},
+                "started_at_source": {"old": None, "new": origen.value},
             },
         )
 
@@ -183,7 +276,15 @@ class WorkSessionService:
             # fallar ni volver a aplicarse.
             return existente
 
-        ahora = datetime.now(timezone.utc)
+        recibido_en = datetime.now(timezone.utc)
+        # `not_before` es el `started_at` de esta misma jornada: un `End Work`
+        # anterior a su propio `Start Work` es evidencia imposible, no un dato
+        # que haya que creer porque venga del dispositivo.
+        ocurrido_en, origen = _resolve_occurrence(
+            received_at=recibido_en,
+            device_captured_at=device_captured_at,
+            not_before=existente.started_at,
+        )
 
         async with transaction() as session:
             jornada = await session.scalar(
@@ -193,7 +294,9 @@ class WorkSessionService:
                 return jornada
 
             jornada.status = WorkSessionStatus.ENDED.value
-            jornada.ended_at = ahora
+            jornada.ended_at = ocurrido_en
+            jornada.ended_received_at = recibido_en
+            jornada.ended_at_source = origen.value
             jornada.end_device_captured_at = device_captured_at
             jornada.end_utc_offset_minutes = utc_offset_minutes
             jornada.version = jornada.version + 1
@@ -211,7 +314,9 @@ class WorkSessionService:
                     "old": WorkSessionStatus.ACTIVE.value,
                     "new": WorkSessionStatus.ENDED.value,
                 },
-                "ended_at": {"old": None, "new": ahora.isoformat()},
+                "ended_at": {"old": None, "new": ocurrido_en.isoformat()},
+                "ended_received_at": {"old": None, "new": recibido_en.isoformat()},
+                "ended_at_source": {"old": None, "new": origen.value},
             },
         )
 
