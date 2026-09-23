@@ -8,9 +8,9 @@
 | **Baseline delivery** | `Report Delivery Rodrigo/CER_ROUTE_RTE03_DELIVERY_REPORT_001.md` |
 | **Source branch** | `feature/rte03-closure-002` |
 | **Base commit** | `e9c4d0f` (tip of `dev` — see §1, this is **not** the branch the instruction expected) |
-| **Candidate commit** | `[[CANDIDATE]]` |
-| **Push status** | `[[PUSH]]` |
-| **MR status** | **Not opened.** Closure is not merged to `dev` until CER certifies it |
+| **Candidate commit** | `be104be` (plus this metadata follow-up) |
+| **Push status** | Pushed to `origin/feature/rte03-closure-002` |
+| **MR status** | **Open, not merged** — [merge_requests/5](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/5), targeting `dev`. Awaiting CER certification; nothing was merged |
 | **Date** | 2026-09-23 |
 | **Proposed status** | **RTE03 closure — Completed / Ready for CER certification** |
 
