@@ -18,6 +18,8 @@ Comprobaciones que faltaban y ahora se hacen (D7, AUD-SEC-018):
 Los archivos estáticos salen por la puerta rápida antes de tocar la base.
 """
 
+from urllib.parse import quote
+
 from fastapi import status
 from fastapi.responses import RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -77,7 +79,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if not token:
             if path in self.PUBLIC_PATHS or path.startswith(self.PUBLIC_PATH_PREFIXES):
                 return await call_next(request)
-            return self._redirect_to_login()
+            return self._redirect_to_login(next_path=path)
 
         user, membership = await self._load_session(request, token)
 
@@ -89,7 +91,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 response = await call_next(request)
                 clear_session_cookies(response)
                 return response
-            return self._redirect_to_login(clear_cookies=True)
+            return self._redirect_to_login(clear_cookies=True, next_path=path)
 
         request.state.user = user
         request.state.membership = membership
@@ -133,11 +135,19 @@ class AuthMiddleware(BaseHTTPMiddleware):
         return user, membership
 
     @staticmethod
-    def _redirect_to_login(clear_cookies: bool = False):
-        response = RedirectResponse(
-            url="/login",
-            status_code=status.HTTP_303_SEE_OTHER,
-        )
+    def _redirect_to_login(clear_cookies: bool = False, next_path: str | None = None):
+        """Vuelve a `/login`, recordando adónde iba quien perdió la sesión.
+
+        `next_path` es una ruta relativa de esta misma aplicación —nunca una
+        URL absoluta—, así que no hay redirección abierta que explotar: se
+        construye aquí a partir de `request.url.path`, no de un valor que
+        llegue del cliente.
+        """
+        url = "/login"
+        if next_path and next_path not in AuthMiddleware.PUBLIC_PATHS:
+            url = f"/login?next={quote(next_path, safe='')}"
+
+        response = RedirectResponse(url=url, status_code=status.HTTP_303_SEE_OTHER)
         if clear_cookies:
             clear_session_cookies(response)
         return response

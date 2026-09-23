@@ -117,9 +117,18 @@ $api.interceptors.response.use(
     (response) => response,
     (error: AxiosError) => {
         // Sesión caducada o inválida: al login. La cookie ya viene limpia del
-        // servidor, así que no hay estado que arrastrar.
+        // servidor, así que no hay estado que arrastrar — salvo la cola de
+        // acciones pendientes en IndexedDB, que es independiente de la cookie
+        // de sesión y sobrevive a este redirect (ver widgets/RouteOfflineQueue).
+        //
+        // `next` lleva de vuelta a donde estaba quien perdió la sesión, para
+        // que reautenticarse no lo deje varado en el panel de Admin cuando
+        // trabajaba, por ejemplo, en /route (D-09).
         if (error.response?.status === 401 && typeof window !== 'undefined') {
-            window.location.assign('/login');
+            const volver = encodeURIComponent(
+                window.location.pathname + window.location.search,
+            );
+            window.location.assign(`/login?next=${volver}`);
         }
 
         return Promise.reject(error);

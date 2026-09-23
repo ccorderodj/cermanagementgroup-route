@@ -64,6 +64,7 @@ from app.core.middleware.security_headers_middleware import (
 )
 from app.core.middleware.query_performance_middleware import query_performance_middleware
 from app.core.security.csrf import CsrfMiddleware
+from app.core.security.session_renewal import SlidingSessionMiddleware
 from app.logger import logger
 from app.routers_api.api import api_router
 from app.routers_api_public.api import api_router_public
@@ -184,6 +185,8 @@ api = FastAPI(
 gzip_middleware.add(api)
 api.add_middleware(CsrfMiddleware)
 api.add_middleware(exception_middleware.ExceptionMiddleware)
+# Sesión deslizante (D-09): ver app/core/security/session_renewal.py.
+api.add_middleware(SlidingSessionMiddleware)
 api.middleware("http")(query_performance_middleware)
 
 handler.register_api_error_handlers(api)

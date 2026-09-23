@@ -78,16 +78,21 @@ CAPABILITIES: tuple[Capability, ...] = (
     # ── CER Route ───────────────────────────────────────────────────────────
     #
     # Solo las capacidades que RTE02 **exige de verdad** en un endpoint. El
-    # catálogo certificado de RTE01 contempla además `route.worksession.execute`,
-    # `route.live.read`, `route.activity.read`, `route.reports.read`,
-    # `route.reports.export`, `route.fuelreference.manage` y
-    # `route.records.adjust`: entran con el checkpoint que construya su
-    # superficie protegida, porque `test_permission_catalog.py` rechaza —a
-    # propósito— una capacidad que ningún endpoint pide. Declararlas antes
-    # concedería autoridad sobre algo que todavía no existe.
+    # catálogo certificado de RTE01 contempla además `route.live.read`,
+    # `route.activity.read`, `route.reports.read`, `route.reports.export`,
+    # `route.fuelreference.manage` y `route.records.adjust`: entran con el
+    # checkpoint que construya su superficie protegida, porque
+    # `test_permission_catalog.py` rechaza —a propósito— una capacidad que
+    # ningún endpoint pide. Declararlas antes concedería autoridad sobre algo
+    # que todavía no existe.
     _cap("route", "vehicles.read", "View Route vehicles and their assignments"),
     _cap("route", "vehicles.manage", "Create and edit Route vehicles and assign them to supervisors"),
     _cap("route", "standardvalues.manage", "Manage the Route admin-configurable value lists"),
+    # RTE03: la Jornada. Un supervisor solo puede ejecutar la suya —el
+    # endpoint nunca acepta la identidad de otro usuario, siempre la de la
+    # sesión autenticada—, así que una sola capacidad basta para Start Work,
+    # End Work y el estado actual.
+    _cap("route", "worksession.execute", "Start and end the caller's own Work Session"),
 )
 
 CAPABILITY_NAMES: frozenset[str] = frozenset(c.name for c in CAPABILITIES)
@@ -160,15 +165,13 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
         name="supervisor",
         description="CER Route field supervisor; mobile-only workday experience",
         category="operative",
-        # Sin capacidades administrativas, y en RTE02 sin capacidades Route:
-        # las suyas —`route.worksession.execute`— llegan con el checkpoint que
-        # construya la jornada. Su espacio de trabajo móvil exige sesión, no un
-        # permiso, igual que `ProfilePage`: es su propia pantalla, y lo que
-        # pueda HACER en ella se autoriza cuando esos endpoints existan.
-        #
-        # El rol se crea igualmente porque es lo que permite a un administrador
-        # designar supervisores y asignarles vehículo, que es trabajo de RTE02.
-        capabilities=(),
+        # RTE03: la primera capacidad real del rol. Un Route Admin no la
+        # recibe por administrar la compañía —"acceder a Admin" y "ejecutar
+        # trabajo de campo" son autorizaciones distintas (§9 de las
+        # instrucciones RTE03)—; si algún día alguien necesita las dos, se
+        # resuelve con un rol compuesto desde la pantalla de Roles existente,
+        # no concediéndosela aquí por defecto.
+        capabilities=("route.worksession.execute",),
     ),
     RoleTemplate(
         name="route_admin",
