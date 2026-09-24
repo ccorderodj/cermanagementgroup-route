@@ -99,6 +99,15 @@ export const SecurityUsersPanel = () => {
         dispatch(fetchUserManagementPagination({ q: '' }));
     }, [dispatch]);
 
+    /**
+     * Tras retirar a alguien, se recarga la página actual en vez de quitar la
+     * fila en memoria: el total y la paginación cambian, y dejar la tabla con
+     * una fila menos pero el mismo recuento mostraría un número que no cuadra.
+     */
+    const handleDeleted = useCallback(() => {
+        dispatch(fetchUserManagementPagination({}));
+    }, [dispatch]);
+
     const columns = useMemo(() => getSecurityUsersColumns(), []);
 
     if (!canRead) {
@@ -201,6 +210,7 @@ export const SecurityUsersPanel = () => {
                             <DataTableRowActions
                                 row={row}
                                 onEdited={handleEdited}
+                                onDeleted={handleDeleted}
                                 disabled={!canUpdate}
                             />
                         ),
