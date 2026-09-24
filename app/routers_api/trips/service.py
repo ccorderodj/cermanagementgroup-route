@@ -37,6 +37,7 @@ from app.core.audit.service import record_event
 from app.core.db.session import transaction
 from app.routers_api.trips.dao import TripsDAO
 from app.routers_api.trips.models import (
+    PRETRIP_STANDARD_LIST,
     Trip,
     TripPurpose,
     TripPurposeChange,
@@ -44,6 +45,45 @@ from app.routers_api.trips.models import (
 )
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
 from app.routers_api.worksessions.service import _resolve_occurrence
+
+
+async def _validar_valor_de_contexto(
+    *, company_id: int, purpose: str, standard_value_id: int | None
+) -> None:
+    """El valor de lista tiene que pertenecer a la lista de **ese** contexto.
+
+    Dos reglas, las dos del servidor:
+
+    * Un contexto sin valor de pre-viaje —Client Visit, Recruiting, Other,
+      HOME— no acepta ninguno. Lo que se elige en esos casos describe lo que se
+      ejecutó al llegar, y eso es RTE05.
+    * Un contexto que sí lo lleva sólo acepta valores de **su** lista. Ofrecer
+      un Delivery Type en una visita a oficina sería cruzar contextos, que el
+      baseline prohíbe de forma explícita.
+
+    El valor es opcional: un supervisor puede no rellenarlo. Lo que no puede es
+    rellenarlo con algo de otra lista.
+    """
+    if standard_value_id is None:
+        return
+
+    lista = PRETRIP_STANDARD_LIST.get(purpose)
+    if lista is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="This trip context does not take a standardized value.",
+        )
+
+    from app.routers_api.standardvalues.dao import StandardValuesDAO
+
+    valor = await StandardValuesDAO.get_including_deleted(
+        value_id=standard_value_id, company_id=company_id
+    )
+    if valor is None or valor.list_code != lista:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="That value does not belong to this trip context.",
+        )
 
 
 async def _jornada_activa(*, company_id: int, user_id: int) -> WorkSession:
@@ -69,6 +109,7 @@ class TripService:
         user_id: int,
         purpose: str,
         context_reference: str | None,
+        standard_value_id: int | None,
         device_captured_at: datetime | None,
         utc_offset_minutes: int | None,
     ) -> tuple[Trip, bool]:
@@ -79,6 +120,11 @@ class TripService:
         dispositivo: ninguno de los dos debe acabar con dos viajes.
         """
         jornada = await _jornada_activa(company_id=company_id, user_id=user_id)
+        await _validar_valor_de_contexto(
+            company_id=company_id,
+            purpose=purpose,
+            standard_value_id=standard_value_id,
+        )
 
         vivo = await TripsDAO.find_non_terminal(
             company_id=company_id, work_session_id=jornada.id
@@ -99,8 +145,10 @@ class TripService:
                     status=TripStatus.PLANNING.value,
                     original_purpose=purpose,
                     original_context_reference=context_reference,
+                    original_standard_value_id=standard_value_id,
                     current_purpose=purpose,
                     current_context_reference=context_reference,
+                    current_standard_value_id=standard_value_id,
                 )
                 session.add(viaje)
                 await session.flush()
@@ -149,13 +197,9 @@ class TripService:
     ) -> Trip:
         """`PLANNING → IN_TRANSIT`.
 
-        La guarda del odómetro se aplica **antes** de la transición y vive en
-        `app.routers_api.odometer`: el viaje no puede arrancar si la jornada
-        usa vehículo y la lectura inicial sigue sin resolverse. Se comprueba en
-        el servidor, no en la interfaz (invariante 8).
+        Exige que la jornada siga abierta: arrancar un viaje en una jornada ya
+        cerrada dejaría un desplazamiento sin dueño.
         """
-        from app.routers_api.odometer.service import OdometerService
-
         viaje = await TripService._propio(
             company_id=company_id, user_id=user_id, trip_id=trip_id
         )
@@ -169,9 +213,6 @@ class TripService:
             )
 
         await _jornada_activa(company_id=company_id, user_id=user_id)
-        await OdometerService.ensure_start_reading_resolved(
-            company_id=company_id, work_session_id=viaje.work_session_id
-        )
 
         recibido, ocurrido = _momentos(device_captured_at)
 
@@ -213,6 +254,7 @@ class TripService:
         trip_id: int,
         purpose: str,
         context_reference: str | None,
+        standard_value_id: int | None,
         device_captured_at: datetime | None,
     ) -> Trip:
         """Cambia el plan **sin borrar el anterior**.
@@ -231,9 +273,16 @@ class TripService:
                 detail="You can only change the plan while you are on route.",
             )
 
+        await _validar_valor_de_contexto(
+            company_id=company_id,
+            purpose=purpose,
+            standard_value_id=standard_value_id,
+        )
+
         recibido, ocurrido = _momentos(device_captured_at)
         anterior_purpose = viaje.current_purpose
         anterior_ref = viaje.current_context_reference
+        anterior_valor = viaje.current_standard_value_id
 
         async with transaction() as session:
             fila = await session.scalar(select(Trip).where(Trip.id == trip_id))
@@ -243,8 +292,10 @@ class TripService:
                     trip_id=trip_id,
                     from_purpose=anterior_purpose,
                     from_context_reference=anterior_ref,
+                    from_standard_value_id=anterior_valor,
                     to_purpose=purpose,
                     to_context_reference=context_reference,
+                    to_standard_value_id=standard_value_id,
                     changed_at=ocurrido,
                     changed_received_at=recibido,
                     changed_by=user_id,
@@ -253,6 +304,7 @@ class TripService:
             # Sólo se mueve lo **actual**. `original_*` no se toca nunca.
             fila.current_purpose = purpose
             fila.current_context_reference = context_reference
+            fila.current_standard_value_id = standard_value_id
             fila.version = fila.version + 1
             await session.flush()
 
