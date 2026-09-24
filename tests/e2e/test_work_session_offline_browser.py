@@ -41,21 +41,13 @@ recargar.
 
 from __future__ import annotations
 
-import os
-import socket
-import subprocess
-import sys
-import time
-from pathlib import Path
 
-import httpx
 import pytest
 from sqlalchemy import func, select
 
-from app.config import settings
 from app.database import async_session_maker
 from app.routers_api.worksessions.models import WorkSession
-from tests.integration.conftest import TEST_PASSWORD
+from tests.e2e.conftest import abrir_sesion, lanzar_edge
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.browser]
@@ -64,8 +56,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.browser]
 #: la suite siga corriendo en un entorno sin herramientas de navegador.
 pytest.importorskip("playwright", reason="playwright no está instalado")
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 #: Lee la cola tal y como la escribe `shared/lib/offlineQueue`. Si la base
 #: todavía no existe —o existe sin el almacén— devuelve vacío en vez de fallar:
@@ -88,75 +78,6 @@ READ_QUEUE_JS = """
 })
 """
 
-#: Inicia sesión desde dentro del propio navegador, con el mismo intercambio de
-#: CSRF que hace la aplicación. Se evita rellenar el formulario a propósito:
-#: este test valida la cola, no el marcado del login, y un cambio de maquetación
-#: no debería romperlo.
-LOGIN_JS = """
-async ({ email, password, header }) => {
-    const csrf = document.cookie
-        .split('; ')
-        .find((c) => c.startsWith('cer_csrf_token='));
-    const respuesta = await fetch('/api/public/auth/login', {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            [header]: csrf ? csrf.split('=')[1] : '',
-        },
-        body: JSON.stringify({ email, password }),
-    });
-    return respuesta.status;
-}
-"""
-
-CSRF_HEADER = "X-CSRF-Token"
-
-
-def _puerto_libre() -> int:
-    with socket.socket() as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
-
-
-@pytest.fixture(scope="module")
-def live_server(database_schema):
-    """Un `uvicorn` de verdad contra la base de tests, para que haya navegador."""
-    puerto = _puerto_libre()
-    proceso = subprocess.Popen(
-        [
-            sys.executable, "-m", "uvicorn", "app.main:app",
-            "--host", "127.0.0.1", "--port", str(puerto), "--log-level", "warning",
-        ],
-        cwd=REPO_ROOT,
-        env={**os.environ, "MODE": "TEST"},
-    )
-
-    limite = time.monotonic() + 90
-    while time.monotonic() < limite:
-        if proceso.poll() is not None:
-            raise RuntimeError("uvicorn terminó antes de aceptar conexiones")
-        try:
-            respuesta = httpx.get(
-                f"http://127.0.0.1:{puerto}/login",
-                headers={"Host": f"alpha.{settings.BASE_DOMAIN}"},
-                timeout=3,
-            )
-            if respuesta.status_code < 500:
-                break
-        except httpx.HTTPError:
-            time.sleep(0.5)
-    else:
-        proceso.terminate()
-        raise RuntimeError("uvicorn no llegó a responder")
-
-    yield f"http://alpha.{settings.BASE_DOMAIN}:{puerto}"
-
-    proceso.terminate()
-    try:
-        proceso.wait(timeout=20)
-    except subprocess.TimeoutExpired:
-        proceso.kill()
-
 
 async def _contar_jornadas(company_id: int, user_id: int) -> int:
     async with async_session_maker() as session:
@@ -168,30 +89,6 @@ async def _contar_jornadas(company_id: int, user_id: int) -> int:
                 WorkSession.user_id == user_id,
             )
         )
-
-
-async def _lanzar_edge(playwright):
-    """El Edge del sistema, sin descargar ningún navegador.
-
-    Donde no haya —un CI Linux, por ejemplo— el test se omite con un motivo
-    explícito: es mejor que un fallo rojo que no señala ningún defecto del
-    producto, y mejor que silenciarlo sin decir por qué.
-    """
-    try:
-        return await playwright.chromium.launch(channel="msedge")
-    except Exception as error:  # noqa: BLE001 - el mensaje es lo que decide
-        if "msedge" in str(error) or "executable doesn't exist" in str(error).lower():
-            pytest.skip(f"Microsoft Edge no está disponible en esta máquina: {error}")
-        raise
-
-
-async def _abrir_sesion(page, email: str) -> None:
-    await page.goto("/login")
-    estado = await page.evaluate(
-        LOGIN_JS,
-        {"email": email, "password": TEST_PASSWORD, "header": CSRF_HEADER},
-    )
-    assert estado == 200, f"el login del navegador devolvió {estado}"
 
 
 async def test_queued_start_work_survives_reload_and_reauthentication(
@@ -212,7 +109,7 @@ async def test_queued_start_work_survives_reload_and_reauthentication(
     supervisor = seeded.alpha.users["supervisor"]
 
     async with async_playwright() as p:
-        navegador = await _lanzar_edge(p)
+        navegador = await lanzar_edge(p)
         try:
             contexto = await navegador.new_context(
                 base_url=live_server,
@@ -221,7 +118,7 @@ async def test_queued_start_work_survives_reload_and_reauthentication(
                 viewport={"width": 390, "height": 844},
             )
             page = await contexto.new_page()
-            await _abrir_sesion(page, supervisor.email)
+            await abrir_sesion(page, supervisor.email)
 
             await page.goto("/route")
             await page.wait_for_selector("text=Ready to start your day?", timeout=20_000)
@@ -267,7 +164,7 @@ async def test_queued_start_work_survives_reload_and_reauthentication(
             assert sin_sesion[0]["id"] == encoladas[0]["id"]
 
             # ── Reautenticación y reconexión ────────────────────────────────
-            await _abrir_sesion(page, supervisor.email)
+            await abrir_sesion(page, supervisor.email)
             await contexto.unroute("**/api/worksessions**")
             await page.goto("/route")
             await page.wait_for_selector("text=Working since", timeout=20_000)

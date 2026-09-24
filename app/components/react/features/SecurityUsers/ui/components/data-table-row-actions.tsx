@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import {
-    Pencil, ShieldOff, ShieldCheck, User, X,
+    Pencil, ShieldOff, ShieldCheck, Trash2, User, X,
 } from 'lucide-react';
 import type { Row } from '@tanstack/react-table';
 import {
@@ -17,26 +17,46 @@ import {
     DropdownMenuSeparator,
     DropdownMenuTrigger,
 } from '@/shared/ui/shadcn/new-york';
+import { ConfirmDestructiveDialog } from '@/features/Common';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch/useAppDispatch';
-import { setUserAccess, type UserManagementEntity } from '@/entities/UserManagement';
+import { useUser } from '@/app/providers/StoreProvider';
+import {
+    deleteUserManagement,
+    setUserAccess,
+    type UserManagementEntity,
+} from '@/entities/UserManagement';
 import SecurityUserForm from '../SecurityUserForm';
 
 interface DataTableRowActionsProps<TData> {
     row: Row<TData>;
     disabled?: boolean;
     onEdited: (data: UserManagementEntity) => void;
+    onDeleted?: (userId: number) => void;
     onError?: (message: string) => void;
 }
 
 export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData>) {
     const {
-        row, disabled, onEdited, onError,
+        row, disabled, onEdited, onDeleted, onError,
     } = props;
 
     const dispatch = useAppDispatch();
+    const { userLogged, hasUserPermission } = useUser();
     const rowData = row.original as UserManagementEntity;
     const [isOpenPopup, setOpenPopup] = React.useState(false);
     const [isBusy, setBusy] = React.useState(false);
+    const [confirmDelete, setConfirmDelete] = React.useState(false);
+    const [blockedReason, setBlockedReason] = React.useState<string | null>(null);
+
+    // Ocultar el botón es experiencia de usuario, no un control: quien no tenga
+    // la capacidad recibe 403 aunque lo vea (invariante 8 de AGENTS.md). Se
+    // oculta para no ofrecer una acción que va a fallar.
+    const puedeBorrar = hasUserPermission('users.delete');
+
+    // Nadie se retira a sí mismo. El servidor también lo rechaza; aquí se evita
+    // ofrecer la acción que dejaría al administrador fuera de la pantalla en la
+    // que está trabajando.
+    const esUnoMismo = userLogged?.user_id === rowData.id;
 
     const closeDialog = React.useCallback(() => setOpenPopup(false), []);
 
@@ -60,6 +80,37 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
             setBusy(false);
         }
     }, [dispatch, onEdited, onError, rowData.id, rowData.is_active]);
+
+    /**
+     * Retira a la persona de esta compañía. Un 409 no es un fallo genérico: es
+     * el servidor explicando por qué no puede —retirarse a uno mismo—, y se
+     * enseña en el mismo diálogo en vez de como un error suelto.
+     */
+    const borrar = React.useCallback(async () => {
+        setBusy(true);
+        try {
+            await dispatch(deleteUserManagement({ userId: rowData.id })).unwrap();
+            setConfirmDelete(false);
+            onDeleted?.(rowData.id);
+        } catch (e) {
+            const mensaje = typeof e === 'string' ? e : 'Could not remove this user';
+            if (mensaje.toLowerCase().includes('your own access')) {
+                setBlockedReason(mensaje);
+            } else {
+                setConfirmDelete(false);
+                onError?.(mensaje);
+            }
+        } finally {
+            setBusy(false);
+        }
+    }, [dispatch, onDeleted, onError, rowData.id]);
+
+    const cerrarBorrado = React.useCallback((abierto: boolean) => {
+        if (!abierto) {
+            setConfirmDelete(false);
+            setBlockedReason(null);
+        }
+    }, []);
 
     return (
         <>
@@ -115,8 +166,45 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
                             </>
                         )}
                     </DropdownMenuItem>
+
+                    {/* Borrar es otra cosa que suspender: suspender corta el
+                        acceso y deja al usuario aquí; borrar lo saca de esta
+                        pantalla. Va separado y al final por eso. */}
+                    {puedeBorrar && !esUnoMismo && (
+                        <>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem
+                                disabled={disabled || isBusy}
+                                onClick={() => setConfirmDelete(true)}
+                                className="text-destructive focus:text-destructive"
+                            >
+                                <Trash2 className="mr-2 size-4" />
+                                Remove from company
+                            </DropdownMenuItem>
+                        </>
+                    )}
                 </DropdownMenuContent>
             </DropdownMenu>
+
+            <ConfirmDestructiveDialog
+                open={confirmDelete}
+                onOpenChange={cerrarBorrado}
+                title={`Remove ${rowData.email || rowData.username} from this company?`}
+                description={(
+                    <>
+                        They lose access to this company immediately and stop
+                        appearing in this list. Their account itself is not deleted —
+                        it may belong to other companies — but under the current
+                        model they cannot be added back here.
+                        {' '}
+                        To cut access temporarily instead, suspend them.
+                    </>
+                )}
+                confirmLabel="Remove"
+                blockedReason={blockedReason}
+                busy={isBusy}
+                onConfirm={borrar}
+            />
         </>
     );
 }
