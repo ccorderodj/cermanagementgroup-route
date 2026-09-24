@@ -10,7 +10,7 @@ llamaba, y eran precisamente los que operaban sin compañía.
 """
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, and_, insert, or_, select, update
+from sqlalchemy import Select, and_, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.dao.base import BaseDAO
@@ -66,7 +66,12 @@ class UserManagementDAO(BaseDAO):
                     Role.company_id == UserCompany.company_id,
                 ),
             )
-            .where(UserCompany.company_id == company_id)
+            .where(
+                UserCompany.company_id == company_id,
+                # Quien fue borrado del tenant sale de la experiencia normal:
+                # no aparece ni entre los activos ni entre los suspendidos.
+                UserCompany.deleted_at.is_(None),
+            )
         )
 
         # `is_active` filtra por la PERTENENCIA, que es lo que administra el
@@ -278,6 +283,7 @@ class UserManagementDAO(BaseDAO):
                 .where(
                     UserCompany.user_id == user_id,
                     UserCompany.company_id == company_id,
+                    UserCompany.deleted_at.is_(None),
                 )
                 .values(is_active=is_active)
                 .returning(UserCompany.id)
@@ -289,3 +295,39 @@ class UserManagementDAO(BaseDAO):
                 )
 
         return await cls.find_for_company(user_id=user_id, company_id=company_id)
+
+    @classmethod
+    async def delete_membership(cls, *, user_id: int, company_id: int) -> dict:
+        """Retira a la persona de ESTA compañía. **No destruye su identidad.**
+
+        `user` puede pertenecer a otras compañías y al plano de plataforma, así
+        que quien administra un tenant no puede borrarla: borra lo que posee,
+        que es la pertenencia. Y la borra con lápida, porque
+        `supervisor_profile` la referencia con `CASCADE` y un `DELETE` físico se
+        llevaría por delante la designación de Route de esa persona junto con su
+        historial de vehículos.
+
+        Devuelve la fila **antes** de marcarla: el llamador la necesita para
+        dejar en la auditoría a quién se retiró, y después de la lápida ya no
+        sería recuperable por la consulta normal.
+        """
+        previo = await cls.find_for_company(user_id=user_id, company_id=company_id)
+
+        async with transaction() as session:
+            result = await session.execute(
+                update(UserCompany)
+                .where(
+                    UserCompany.user_id == user_id,
+                    UserCompany.company_id == company_id,
+                    UserCompany.deleted_at.is_(None),
+                )
+                .values(deleted_at=func.now())
+                .returning(UserCompany.id)
+            )
+            if result.scalar_one_or_none() is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="User not found for this company",
+                )
+
+        return previo

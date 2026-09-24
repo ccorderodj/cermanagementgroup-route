@@ -54,6 +54,12 @@ CAPABILITIES: tuple[Capability, ...] = (
     _cap("users", "read", "View users of this company"),
     _cap("users", "create", "Add users to this company"),
     _cap("users", "update", "Edit users and suspend their access"),
+    # Retirar a alguien de la compañía es más que suspenderlo, y por eso no va
+    # dentro de `users.update`: esa capacidad dice "editar y suspender", y quien
+    # la tenga no debería quedarse con el borrado de regalo por un cambio de
+    # alcance silencioso. El catálogo ya separa `roles.delete` de
+    # `roles.update` por el mismo motivo (RTE02-A01).
+    _cap("users", "delete", "Remove users from this company"),
     # Seguridad
     _cap("roles", "read", "View roles"),
     _cap("roles", "create", "Create roles"),
@@ -195,6 +201,10 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             "users.read",
             "users.create",
             "users.update",
+            # RTE02-A01: administrar Route incluye retirar del tenant a quien
+            # ya no trabaja aquí, sin pedírselo a nadie más. Sigue siendo
+            # pertenencia, no identidad: la persona no se destruye.
+            "users.delete",
             "roles.read",
             "route.vehicles.read",
             "route.vehicles.manage",

@@ -29,6 +29,7 @@ from sqlalchemy import (
 
 from app.core.enums import BusinessEnum
 from app.core.models.IsActiveMixin import IsActiveMixin
+from app.core.models.SoftDelete import SoftDeleteMixin
 from app.core.models.TimeStamped import TimeStampedModel
 from app.core.models.Versioned import VersionedMixin
 
@@ -47,7 +48,7 @@ class FuelGrade(BusinessEnum):
     DIESEL = "diesel"
 
 
-class Vehicle(TimeStampedModel, IsActiveMixin, VersionedMixin):
+class Vehicle(TimeStampedModel, IsActiveMixin, SoftDeleteMixin, VersionedMixin):
     """Vehículo de la compañía, con los datos operativos que RTE01 fijó.
 
     Es **configuración operativa, no gestión de flota**: no hay mantenimiento,
@@ -55,9 +56,19 @@ class Vehicle(TimeStampedModel, IsActiveMixin, VersionedMixin):
     combustible necesitará más adelante (`operational_mpg`, `fuel_grade`) y lo
     que identifica la unidad para quien la administra.
 
-    No se borra: se desactiva. Un vehículo con jornadas históricas detrás no
-    puede desaparecer sin llevarse por delante la trazabilidad de esas jornadas,
-    así que `is_active` es el final de su ciclo de vida.
+    Desactivar y borrar son distintos (RTE02-A01)
+    ----------------------------------------------
+    `is_active = False` lo retira del uso operativo pero lo deja en la
+    administración, reactivable. `deleted_at` lo saca de la experiencia normal
+    del administrador. **La fila no desaparece en ninguno de los dos casos**: un
+    vehículo con jornadas históricas detrás no puede irse sin llevarse la
+    trazabilidad de esas jornadas — y la base ya lo impide, porque
+    `work_session.vehicle_id` y `vehicle_assignment.vehicle_id` lo referencian
+    con `RESTRICT`. Ver `app/core/models/SoftDelete.py`.
+
+    Borrar exige además que **no haya una asignación vigente**. Esa regla la
+    comprueba el servidor, no la interfaz: ocultar el botón es experiencia de
+    usuario, no un control (invariante 8).
     """
 
     __tablename__ = "vehicle"
@@ -69,7 +80,17 @@ class Vehicle(TimeStampedModel, IsActiveMixin, VersionedMixin):
         # La unidad es como la compañía llama a ese vehículo por dentro. Dos
         # unidades iguales en el mismo tenant harían ambigua cualquier
         # conversación sobre "la V-014".
-        UniqueConstraint("company_id", "unit", name="uq_vehicle_company_unit"),
+        #
+        # Parcial desde RTE02-A01: una unidad borrada deja de ocupar sitio. Si
+        # no, borrar "V-014" impediría dar de alta otro "V-014" para siempre,
+        # chocando contra una fila que para el administrador ya no existe.
+        Index(
+            "uq_vehicle_company_unit",
+            "company_id",
+            "unit",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
+        ),
         CheckConstraint("operational_mpg > 0", name="ck_vehicle_operational_mpg_positive"),
         CheckConstraint(
             "year >= 1900 AND year <= 2100", name="ck_vehicle_year_range"
@@ -101,7 +122,7 @@ class Vehicle(TimeStampedModel, IsActiveMixin, VersionedMixin):
         return f"<Vehicle id={self.id} unit={self.unit} company_id={self.company_id}>"
 
 
-class SupervisorProfile(TimeStampedModel, IsActiveMixin, VersionedMixin):
+class SupervisorProfile(TimeStampedModel, IsActiveMixin, SoftDeleteMixin, VersionedMixin):
     """Extensión de dominio de un usuario que hace trabajo de campo en Route.
 
     **No es una segunda ficha de persona.** El nombre, el correo, la
@@ -122,12 +143,30 @@ class SupervisorProfile(TimeStampedModel, IsActiveMixin, VersionedMixin):
     La FK compuesta `(user_id, company_id) -> user_company` es lo que impide
     crear un perfil para alguien que no pertenece a la compañía, sin depender
     de que ningún servicio se acuerde de comprobarlo.
+
+    Borrar la designación no borra a la persona (RTE02-A01)
+    -------------------------------------------------------
+    `deleted_at` retira la designación de Route de la experiencia normal del
+    administrador. El `user` y su `user_company` **no se tocan**: son del
+    núcleo, y quien dejó de ser supervisor sigue siendo un usuario del tenant.
+
+    La fila se marca en vez de destruirse porque `vehicle_assignment` la
+    referencia con `CASCADE`: un `DELETE` físico se llevaría por delante todo el
+    historial de asignaciones de esa persona, que es justo lo que el addendum
+    exige preservar.
     """
 
     __tablename__ = "supervisor_profile"
     __table_args__ = (
-        UniqueConstraint(
-            "company_id", "user_id", name="uq_supervisor_profile_company_user"
+        # Parcial desde RTE02-A01: borrada la designación, la misma persona
+        # puede volver a designarse. Con la restricción completa, un borrado
+        # sería irreversible y sin explicación visible.
+        Index(
+            "uq_supervisor_profile_company_user",
+            "company_id",
+            "user_id",
+            unique=True,
+            postgresql_where=text("deleted_at IS NULL"),
         ),
         UniqueConstraint("id", "company_id", name="uq_supervisor_profile_id_company"),
         ForeignKeyConstraint(

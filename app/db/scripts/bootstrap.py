@@ -54,6 +54,7 @@ from app.routers_api.permissions.models import Permission
 from app.routers_api.regions.models import Region
 from app.routers_api.rolepermissions.models import RolePermission
 from app.routers_api.roles.models import Role
+from app.routers_api.standardvalues.provisioning import provision_standard_values
 from app.routers_api.users.auth import get_password_hash
 from app.routers_api.users.models import Users
 
@@ -385,6 +386,18 @@ async def main() -> None:
 
         print("Roles")
         roles = await seed_roles(session, company, permissions)
+
+        print("Listas estandarizadas de Route")
+        resultado = await provision_standard_values(session, company_id=company.id)
+        print(
+            f"  + {resultado.created} valores creados, "
+            f"{resultado.skipped} ya existían ({resultado.total} aprobados)"
+        )
+        if resultado.skipped:
+            print(
+                "      los existentes no se tocan: un valor renombrado, "
+                "desactivado o borrado por el administrador se queda como está"
+            )
 
         print("Administrador")
         _, created = await seed_admin(session, company, roles[ADMIN_ROLE], password)

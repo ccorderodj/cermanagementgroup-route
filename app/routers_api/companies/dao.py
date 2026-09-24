@@ -39,6 +39,7 @@ class CompaniesDAO(BaseDAO):
                 .where(
                     UserCompany.company_id == company_id,
                     UserCompany.is_active.is_(True),
+                    UserCompany.deleted_at.is_(None),
                     Users.is_active.is_(True),
                 )
                 .order_by(Users.first_name.asc(), Users.last_name.asc())

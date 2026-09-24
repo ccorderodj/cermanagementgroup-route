@@ -1,10 +1,21 @@
 """
 Reglas de las listas configurables.
 
-La regla que gobierna todo este módulo: **nada se borra**. Un valor retirado
-sigue existiendo porque un registro histórico guardó su identificador y tiene
-que poder resolverlo años después. Lo único que cambia es si se ofrece o no en
-los formularios.
+La regla que gobierna todo este módulo: **ninguna fila se destruye**. Un
+registro histórico guardó el identificador del valor que eligió y tiene que
+poder resolverlo años después, así que lo único que cambia es dónde se ofrece.
+
+Tres estados, no dos (RTE02-A01)
+---------------------------------
+* **Activo** — se ofrece en los formularios operativos.
+* **Desactivado** — retirado del uso; el administrador lo sigue viendo al pedir
+  los inactivos y puede reactivarlo.
+* **Borrado** — fuera de la experiencia normal: ni entre los activos ni entre
+  los inactivos ni en ningún selector. La fila sigue en la tabla.
+
+Antes del addendum, "borrar" y "desactivar" eran la misma acción con dos
+nombres, y no había forma de quitar de en medio un valor creado por error sin
+dejarlo para siempre en la lista de retirados.
 """
 
 from __future__ import annotations
@@ -104,6 +115,7 @@ class StandardValueService:
                 select(StandardValue).where(
                     StandardValue.id == value_id,
                     StandardValue.company_id == company_id,
+                    StandardValue.deleted_at.is_(None),
                 )
             )
             if valor is None:
@@ -147,6 +159,61 @@ class StandardValueService:
         )
 
     @staticmethod
+    async def delete(
+        *,
+        company_id: int,
+        value_id: int,
+        actor_user_id: int,
+        expected_version: int | None,
+    ) -> None:
+        """Saca el valor de la experiencia normal del administrador.
+
+        No es un `DELETE`: la fila se queda con su lápida para que cualquier
+        registro histórico que guardara este identificador lo siga resolviendo.
+        Lo que desaparece es la presencia — listas de activos, de inactivos y
+        selectores operativos.
+
+        Borrar dos veces no es un error: la segunda llamada encuentra la fila ya
+        fuera de la experiencia normal y devuelve 404, que es lo mismo que
+        respondería sobre un valor de otro tenant. No se confirma la existencia
+        de algo que el administrador ya no puede ver.
+        """
+        async with transaction() as session:
+            valor = await session.scalar(
+                select(StandardValue).where(
+                    StandardValue.id == value_id,
+                    StandardValue.company_id == company_id,
+                    StandardValue.deleted_at.is_(None),
+                )
+            )
+            if valor is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Standard value not found",
+                )
+
+            ensure_version(current=valor.version, expected=expected_version)
+
+            antes = _instantanea(valor)
+            valor.soft_delete()
+            valor.version = valor.version + 1
+            await session.flush()
+
+            codigo, etiqueta = valor.list_code, valor.label
+
+        await record_event(
+            company_id=company_id,
+            entity_type="standard_value",
+            entity_id=value_id,
+            action="delete",
+            actor_user_id=actor_user_id,
+            summary=f"Standard value '{etiqueta}' deleted from {codigo}",
+            # El estado previo completo queda en la traza: es lo que permite
+            # entender después qué se quitó, ya que la pantalla no lo muestra.
+            changes={campo: {"old": dato, "new": None} for campo, dato in antes.items()},
+        )
+
+    @staticmethod
     async def reorder(
         *,
         company_id: int,
@@ -168,6 +235,10 @@ class StandardValueService:
                         select(StandardValue).where(
                             StandardValue.company_id == company_id,
                             StandardValue.list_code == list_code,
+                            # Un valor borrado no participa del orden: pedirlo
+                            # en el cuerpo sería pedir algo que el
+                            # administrador ya no ve.
+                            StandardValue.deleted_at.is_(None),
                         )
                     )
                 )

@@ -12,8 +12,10 @@ import {
     TableHeader,
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
+import { ConfirmDestructiveDialog, LifecycleRowActions } from '@/features/Common';
 import {
     createStandardValue,
+    deleteStandardValue,
     fetchStandardValueLists,
     fetchStandardValues,
     reorderStandardValues,
@@ -26,10 +28,18 @@ import {
  * Administración de las ocho listas configurables.
  *
  * Las listas son del producto y no se pueden crear ni borrar desde aquí; lo que
- * el tenant configura son los **valores** de dentro. Un valor retirado sigue
- * existiendo: una actividad de marzo guardó su identificador y tiene que poder
- * resolverlo. Por eso la acción dice "Retire" y el listado puede mostrar lo
- * retirado en vez de esconderlo para siempre.
+ * el tenant configura son los **valores** de dentro.
+ *
+ * Tres estados, no dos (RTE02-A01)
+ * ---------------------------------
+ * * **Desactivar** retira el valor del uso operativo y lo deja aquí, visible al
+ *   marcar "Show inactive values", para poder reactivarlo.
+ * * **Borrar** lo saca también de esa vista. Es lo que se hace con un valor
+ *   creado por error, que antes se quedaba para siempre entre los retirados.
+ *
+ * En los dos casos la fila sobrevive en el servidor: una actividad de marzo
+ * guardó su identificador y tiene que poder resolverlo. Lo que cambia es dónde
+ * se ofrece, no si existe.
  */
 export function StandardValuesPanel() {
     const [lists, setLists] = useState<StandardValueListSummary[]>([]);
@@ -41,6 +51,9 @@ export function StandardValuesPanel() {
     const [editLabel, setEditLabel] = useState('');
     const [error, setError] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
+    // El valor cuyo borrado espera confirmación. `null` = diálogo cerrado.
+    const [porBorrar, setPorBorrar] = useState<StandardValue | null>(null);
+    const [borrando, setBorrando] = useState(false);
 
     const cargarListas = useCallback(async () => {
         try {
@@ -125,6 +138,25 @@ export function StandardValuesPanel() {
         }
     };
 
+    /** Confirma el borrado. El servidor es quien decide si se puede. */
+    const confirmarBorrado = async () => {
+        if (!porBorrar) return;
+        setError(null);
+        setBorrando(true);
+        try {
+            await deleteStandardValue(porBorrar.id, porBorrar.version);
+            setPorBorrar(null);
+            await Promise.all([cargarValores(), cargarListas()]);
+        } catch (err) {
+            const detalle = (err as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail;
+            setError(detalle ?? 'The value could not be deleted.');
+            setPorBorrar(null);
+        } finally {
+            setBorrando(false);
+        }
+    };
+
     /** Mueve un valor una posición y reenvía el orden completo de la lista. */
     const mover = async (indice: number, direccion: -1 | 1) => {
         const destino = indice + direccion;
@@ -204,7 +236,7 @@ export function StandardValuesPanel() {
                         onCheckedChange={(v) => setIncludeInactive(v === true)}
                     />
                     <Label htmlFor="show-retired" className="text-sm text-muted-foreground">
-                        Show retired values
+                        Show inactive values
                     </Label>
                 </div>
 
@@ -262,7 +294,7 @@ export function StandardValuesPanel() {
                                             <Badge
                                                 variant={valor.is_active ? 'default' : 'secondary'}
                                             >
-                                                {valor.is_active ? 'Active' : 'Retired'}
+                                                {valor.is_active ? 'Active' : 'Inactive'}
                                             </Badge>
                                         </TableCell>
                                         <TableCell className="text-right">
@@ -284,20 +316,17 @@ export function StandardValuesPanel() {
                                             >
                                                 ↓
                                             </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => empezarEdicion(valor)}
-                                            >
-                                                Edit
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                onClick={() => alternarEstado(valor)}
-                                            >
-                                                {valor.is_active ? 'Retire' : 'Restore'}
-                                            </Button>
+                                            {/* Las flechas son posición, no
+                                                ciclo de vida; el ciclo de vida
+                                                va al menú contextual, que es lo
+                                                que pide el addendum. */}
+                                            <LifecycleRowActions
+                                                isActive={valor.is_active}
+                                                onEdit={() => empezarEdicion(valor)}
+                                                onDeactivate={() => alternarEstado(valor)}
+                                                onReactivate={() => alternarEstado(valor)}
+                                                onDelete={() => setPorBorrar(valor)}
+                                            />
                                         </TableCell>
                                     </TableRow>
                                 ))}
@@ -306,6 +335,23 @@ export function StandardValuesPanel() {
                     )}
                 </section>
             </div>
+
+            <ConfirmDestructiveDialog
+                open={porBorrar !== null}
+                onOpenChange={(abierto) => !abierto && setPorBorrar(null)}
+                title={`Delete ${porBorrar?.label ?? ''}?`}
+                description={(
+                    <>
+                        It will no longer appear in this list or in operational
+                        forms, not even when showing inactive values. Past records
+                        that used it stay readable.
+                        {' '}
+                        To take it out of use but keep it here, deactivate it instead.
+                    </>
+                )}
+                busy={borrando}
+                onConfirm={confirmarBorrado}
+            />
         </div>
     );
 }

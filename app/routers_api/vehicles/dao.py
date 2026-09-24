@@ -36,7 +36,9 @@ class VehiclesDAO(BaseDAO):
         fuel_grade: str | None = None,
         **_: object,
     ) -> Select:
-        stmt = select(Vehicle).where(Vehicle.company_id == company_id)
+        stmt = select(Vehicle).where(
+            Vehicle.company_id == company_id, Vehicle.deleted_at.is_(None)
+        )
         if search:
             patron = f"%{search}%"
             stmt = stmt.where(
@@ -56,15 +58,18 @@ class VehiclesDAO(BaseDAO):
 
     @classmethod
     async def get_for_company(cls, *, vehicle_id: int, company_id: int) -> Vehicle:
-        """El vehículo, sólo si es de esta compañía.
+        """El vehículo, sólo si es de esta compañía y sigue en la administración.
 
         404 y no 403: confirmar que existe un recurso de otro tenant ya es
-        filtrar información (regla 8 de `AGENTS.md`).
+        filtrar información (regla 8 de `AGENTS.md`). Un vehículo borrado recibe
+        el mismo trato, por el mismo motivo: el administrador ya no puede verlo.
         """
         async with db_session() as session:
             vehiculo = await session.scalar(
                 select(Vehicle).where(
-                    Vehicle.id == vehicle_id, Vehicle.company_id == company_id
+                    Vehicle.id == vehicle_id,
+                    Vehicle.company_id == company_id,
+                    Vehicle.deleted_at.is_(None),
                 )
             )
 
@@ -76,10 +81,18 @@ class VehiclesDAO(BaseDAO):
 
     @classmethod
     async def find_by_unit(cls, *, company_id: int, unit: str) -> Vehicle | None:
+        """Ignora los borrados: su unidad queda libre para reutilizarse.
+
+        Es la contraparte en código del índice único parcial. Si mirara también
+        las lápidas, el alta rechazaría "V-014" por un conflicto con una fila
+        que el administrador ya no ve, y no habría forma de entender el error.
+        """
         async with db_session() as session:
             return await session.scalar(
                 select(Vehicle).where(
-                    Vehicle.company_id == company_id, Vehicle.unit == unit
+                    Vehicle.company_id == company_id,
+                    Vehicle.unit == unit,
+                    Vehicle.deleted_at.is_(None),
                 )
             )
 
@@ -96,7 +109,8 @@ class SupervisorProfilesDAO(BaseDAO):
         **_: object,
     ) -> Select:
         stmt = select(SupervisorProfile).where(
-            SupervisorProfile.company_id == company_id
+            SupervisorProfile.company_id == company_id,
+            SupervisorProfile.deleted_at.is_(None),
         )
         if is_active is not None:
             stmt = stmt.where(SupervisorProfile.is_active.is_(is_active))
@@ -111,6 +125,7 @@ class SupervisorProfilesDAO(BaseDAO):
                 select(SupervisorProfile).where(
                     SupervisorProfile.id == supervisor_profile_id,
                     SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
                 )
             )
 
@@ -125,11 +140,18 @@ class SupervisorProfilesDAO(BaseDAO):
     async def find_by_user(
         cls, *, company_id: int, user_id: int
     ) -> SupervisorProfile | None:
+        """La designación vigente de esa persona, o `None` si ya no la tiene.
+
+        Ignora las borradas a propósito: es la consulta que usa `Start Work`
+        para resolver el vehículo del supervisor, y una designación retirada no
+        debe seguir aportando contexto operativo.
+        """
         async with db_session() as session:
             return await session.scalar(
                 select(SupervisorProfile).where(
                     SupervisorProfile.company_id == company_id,
                     SupervisorProfile.user_id == user_id,
+                    SupervisorProfile.deleted_at.is_(None),
                 )
             )
 
@@ -168,6 +190,10 @@ class SupervisorProfilesDAO(BaseDAO):
                     and_(
                         SupervisorProfile.user_id == Users.id,
                         SupervisorProfile.company_id == company_id,
+                        # Una designación borrada no cuenta: la persona vuelve a
+                        # aparecer como candidata, que es lo que hace el borrado
+                        # reversible sin resucitar la fila anterior.
+                        SupervisorProfile.deleted_at.is_(None),
                     ),
                 )
                 .where(UserCompany.company_id == company_id)
@@ -197,7 +223,10 @@ class SupervisorProfilesDAO(BaseDAO):
                     Users.email.label("email"),
                 )
                 .join(Users, Users.id == SupervisorProfile.user_id)
-                .where(SupervisorProfile.company_id == company_id)
+                .where(
+                    SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
+                )
                 .order_by(Users.first_name.asc(), Users.last_name.asc())
             )
             return [dict(fila) for fila in filas.mappings().all()]

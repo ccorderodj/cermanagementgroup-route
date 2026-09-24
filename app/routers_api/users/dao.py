@@ -32,11 +32,20 @@ class UsersDAO(BaseDAO):
         user_id: int,
         company_id: int,
     ) -> UserCompany | None:
+        """La pertenencia que autoriza cada petición.
+
+        Exige las dos condiciones: activa **y** no borrada. Son dos formas
+        distintas de perder el acceso —suspendido temporalmente, o retirado del
+        tenant— y ninguna de las dos puede seguir autorizando nada. Que la
+        comprobación viva en un único sitio es lo que garantiza que añadir el
+        borrado no dejara una puerta abierta por olvido.
+        """
         async with db_session() as session:
             stmt = select(UserCompany).where(
                 UserCompany.user_id == user_id,
                 UserCompany.company_id == company_id,
                 UserCompany.is_active.is_(True),
+                UserCompany.deleted_at.is_(None),
             )
             return await session.scalar(stmt)
 
@@ -44,10 +53,11 @@ class UsersDAO(BaseDAO):
     async def find_login_candidate(cls, *, email: str, company_id: int) -> Users | None:
         """Usuario que puede iniciar sesión en esta compañía.
 
-        Exige las dos banderas: identidad global activa y pertenencia activa a
-        este tenant. Devuelve `None` en todos los casos de fallo —usuario
-        inexistente, desactivado, o sin membresía— para que el llamador no pueda
-        construir una respuesta que los distinga (AUD-BE-006).
+        Exige identidad global activa y pertenencia a este tenant que esté
+        activa **y no borrada**. Devuelve `None` en todos los casos de fallo
+        —usuario inexistente, desactivado, sin membresía, suspendido o
+        retirado del tenant— para que el llamador no pueda construir una
+        respuesta que los distinga (AUD-BE-006).
         """
         normalized = (email or "").strip().lower()
 
@@ -60,6 +70,7 @@ class UsersDAO(BaseDAO):
                     Users.is_active.is_(True),
                     UserCompany.company_id == company_id,
                     UserCompany.is_active.is_(True),
+                    UserCompany.deleted_at.is_(None),
                 )
                 .limit(1)
             )

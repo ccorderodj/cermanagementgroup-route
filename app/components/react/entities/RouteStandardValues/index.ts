@@ -15,4 +15,5 @@ export {
     createStandardValue,
     updateStandardValue,
     reorderStandardValues,
+    deleteStandardValue,
 } from './model/services/standardValuesService';
