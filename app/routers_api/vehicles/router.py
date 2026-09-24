@@ -6,7 +6,7 @@ siempre de `get_company_required` —del subdominio, nunca del cuerpo— y la
 autorización la exige el servidor en cada endpoint.
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request, status
 from pydantic import TypeAdapter
 
 from app.core import schema
@@ -143,7 +143,9 @@ async def deactivate_vehicle(
     _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
     company: TenantContext = Depends(get_company_required),
 ) -> VehicleRead:
-    """Retira el vehículo. No hay borrado: se conserva por la historia."""
+    """Retira el vehículo del uso operativo, dejándolo visible entre los
+    inactivos para poder reactivarlo. Para sacarlo de la administración por
+    completo está `DELETE`, que es una acción distinta."""
     vehiculo = await VehicleService.set_active(
         company_id=company.id,
         vehicle_id=vehicle_id,
@@ -170,6 +172,35 @@ async def activate_vehicle(
         expected_version=payload.version if payload else None,
     )
     return VehicleRead.model_validate(vehiculo)
+
+
+@router.delete("/{vehicle_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_vehicle(
+    vehicle_id: int,
+    version: int | None = Query(
+        None,
+        description=(
+            "Versión que el administrador tenía en pantalla; si otra persona "
+            "editó el vehículo entretanto, la respuesta es 409."
+        ),
+    ),
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> None:
+    """Saca el vehículo de la administración. Distinto de desactivarlo.
+
+    409 si tiene una asignación vigente, con el motivo en lenguaje normal para
+    que el administrador pueda resolverlo. La comprobación es del servidor: que
+    la interfaz deshabilite el botón es experiencia de usuario, no un control
+    (invariante 8).
+    """
+    await VehicleService.delete(
+        company_id=company.id,
+        vehicle_id=vehicle_id,
+        actor_user_id=current_user.id,
+        expected_version=version,
+    )
 
 
 # ── Supervisores y sus asignaciones ─────────────────────────────────────────
@@ -257,7 +288,9 @@ async def set_supervisor_designation(
     _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
     company: TenantContext = Depends(get_company_required),
 ) -> SupervisorProfileRead:
-    """Retira o restaura la designación. No la borra: la historia la referencia."""
+    """Retira o restaura la designación, dejándola visible en la administración.
+
+    Para sacarla de ahí por completo está `DELETE`, que es otra acción."""
     perfil = await SupervisorProfileService.set_active(
         company_id=company.id,
         supervisor_profile_id=supervisor_profile_id,
@@ -268,6 +301,32 @@ async def set_supervisor_designation(
     filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)
     fila = next(f for f in filas if f["id"] == perfil.id)
     return await _leer_perfil(fila, company.id)
+
+
+@supervisors_router.delete(
+    "/{supervisor_profile_id}", status_code=status.HTTP_204_NO_CONTENT
+)
+async def delete_supervisor_designation(
+    supervisor_profile_id: int,
+    version: int | None = Query(None),
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> None:
+    """Saca la designación de Route de la administración.
+
+    **No borra al usuario.** La identidad es del núcleo; esto retira una
+    designación de dominio. La persona sigue en el tenant con su rol y su
+    acceso, y puede volver a designarse después.
+
+    409 si el supervisor todavía tiene un vehículo asignado.
+    """
+    await SupervisorProfileService.delete(
+        company_id=company.id,
+        supervisor_profile_id=supervisor_profile_id,
+        actor_user_id=current_user.id,
+        expected_version=version,
+    )
 
 
 @supervisors_router.get("/me")

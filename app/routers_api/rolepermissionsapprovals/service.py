@@ -105,6 +105,7 @@ class RolePermissionApprovalService:
                     UserCompany.user_id == user_id,
                     UserCompany.company_id == company_id,
                     UserCompany.is_active.is_(True),
+                    UserCompany.deleted_at.is_(None),
                     Role.company_id == company_id,
                     Role.is_active.is_(True),
                     Role.category == RoleCategory.MANAGEMENT,

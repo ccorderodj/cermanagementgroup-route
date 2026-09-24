@@ -3,6 +3,8 @@ import { DataTablePagination } from './ui/components/DataTablePagination';
 import { DataTableColumnHeader } from './ui/components/DataTableColumnHeader';
 import { TabCard } from './ui/components/TabCard';
 import { ProfileListItem } from './ui/components/ProfileListItem';
+import { LifecycleRowActions } from './ui/components/LifecycleRowActions';
+import { ConfirmDestructiveDialog } from './ui/components/ConfirmDestructiveDialog';
 
 export {
     DataTable,
@@ -10,4 +12,6 @@ export {
     DataTableColumnHeader,
     TabCard,
     ProfileListItem,
+    LifecycleRowActions,
+    ConfirmDestructiveDialog,
 };

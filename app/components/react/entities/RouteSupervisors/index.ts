@@ -18,4 +18,5 @@ export {
     fetchSupervisorCandidates,
     designateSupervisor,
     setSupervisorDesignation,
+    deleteSupervisorProfile,
 } from './model/services/supervisorsService';

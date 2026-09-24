@@ -15,4 +15,6 @@ export {
     createVehicle,
     updateVehicle,
     setVehicleActive,
+    deleteVehicle,
+    fetchVehiclesForAdmin,
 } from './model/services/vehiclesService';

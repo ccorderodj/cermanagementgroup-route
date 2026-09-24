@@ -13,6 +13,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import relationship
 
 from app.core.models.IsActiveMixin import IsActiveMixin
+from app.core.models.SoftDelete import SoftDeleteMixin
 from app.core.models.TimeStamped import TimeStampedModel
 
 
@@ -55,7 +56,7 @@ class Company(TimeStampedModel, IsActiveMixin):
         return f"<Company id={self.id} name={self.name} subdomain={self.subdomain}>"
 
 
-class UserCompany(TimeStampedModel, IsActiveMixin):
+class UserCompany(TimeStampedModel, IsActiveMixin, SoftDeleteMixin):
     """Pertenencia de un usuario a una compañía, con su rol en ella.
 
     Dos invariantes, ambas **garantizadas por la base** y no por código Python:
@@ -70,6 +71,31 @@ class UserCompany(TimeStampedModel, IsActiveMixin):
        `(role_id, company_id) -> role(id, company_id)`: PostgreSQL rechaza la
        fila si el rol es de otro tenant, sin depender de que ningún servicio se
        acuerde de comprobarlo.
+
+    Borrar a alguien de un tenant es borrar esta fila, no la persona
+    -----------------------------------------------------------------
+    La identidad (`user`) puede pertenecer a varias compañías y al plano de
+    plataforma; destruirla para sacar a alguien de **un** tenant sería un daño
+    desproporcionado y fuera del alcance de quien administra ese tenant. Lo que
+    se retira es la pertenencia, que es lo que ese administrador posee.
+
+    Y se retira con lápida, no con `DELETE`: `supervisor_profile` referencia
+    esta fila con `CASCADE`, así que destruirla se llevaría por delante la
+    designación de Route de esa persona y, tras ella, su historial de
+    asignaciones de vehículo.
+
+    **`deleted_at` cierra el acceso.** No es sólo presentación: las dos puertas
+    de entrada —`find_active_membership`, que autoriza cada petición, y
+    `find_login_candidate`, que autentica— lo exigen `NULL`. Una pertenencia
+    borrada no entra, igual que una desactivada.
+
+    Límite conocido y deliberado
+    ----------------------------
+    `uq_user_company_user_company` **no** se hizo parcial. Eso significa que
+    borrar es terminal bajo el modelo actual: esa persona no puede volver a
+    darse de alta en esta compañía sin una reincorporación de identidad, que el
+    addendum RTE02-A01 difiere explícitamente. Su propia guía operativa lo dice:
+    si alguien puede volver, se **desactiva**, no se borra.
     """
 
     __tablename__ = "user_company"

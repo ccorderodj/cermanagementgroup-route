@@ -191,6 +191,72 @@ class VehicleService:
             expected_version=expected_version,
         )
 
+    @staticmethod
+    async def delete(
+        *,
+        company_id: int,
+        vehicle_id: int,
+        actor_user_id: int,
+        expected_version: int | None,
+    ) -> None:
+        """Saca el vehículo de la administración. **No** es desactivarlo.
+
+        Desactivar lo retira del uso dejándolo visible entre los inactivos, por
+        si vuelve. Borrar lo quita también de ahí: es lo que se hace con una
+        unidad dada de alta por error o que la compañía ya no tiene.
+
+        La fila permanece, con su lápida. No es una decisión de estilo: las
+        jornadas y las asignaciones históricas la referencian con `RESTRICT`, y
+        destruirla se llevaría por delante la trazabilidad de todo lo que se
+        condujo con ella — que es justo lo que el addendum exige conservar.
+
+        Una asignación vigente lo bloquea, igual que bloquea desactivarlo. El
+        motivo se devuelve en lenguaje normal porque acaba en pantalla: el
+        administrador tiene que poder resolverlo sin preguntar a nadie.
+        """
+        conductores = await VehicleAssignmentsDAO.current_holders(
+            company_id=company_id, vehicle_id=vehicle_id
+        )
+        if conductores:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Delete unavailable — end the current vehicle assignment "
+                    "first."
+                ),
+            )
+
+        async with transaction() as session:
+            vehiculo = await session.scalar(
+                select(Vehicle).where(
+                    Vehicle.id == vehicle_id,
+                    Vehicle.company_id == company_id,
+                    Vehicle.deleted_at.is_(None),
+                )
+            )
+            if vehiculo is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found"
+                )
+
+            ensure_version(current=vehiculo.version, expected=expected_version)
+
+            antes = _instantanea(vehiculo)
+            unidad = vehiculo.unit
+            vehiculo.soft_delete()
+            vehiculo.version = vehiculo.version + 1
+            await session.flush()
+
+        await record_event(
+            company_id=company_id,
+            entity_type="vehicle",
+            entity_id=vehicle_id,
+            action="delete",
+            actor_user_id=actor_user_id,
+            summary=f"Vehicle {unidad} deleted",
+            changes={campo: {"old": dato, "new": None} for campo, dato in antes.items()},
+        )
+
 
 class SupervisorProfileService:
     """Designación de supervisores de Route."""
@@ -271,6 +337,7 @@ class SupervisorProfileService:
                 select(SupervisorProfile).where(
                     SupervisorProfile.id == supervisor_profile_id,
                     SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
                 )
             )
             if perfil is None:
@@ -303,6 +370,77 @@ class SupervisorProfileService:
 
         return await SupervisorProfilesDAO.get_for_company(
             supervisor_profile_id=supervisor_profile_id, company_id=company_id
+        )
+
+    @staticmethod
+    async def delete(
+        *,
+        company_id: int,
+        supervisor_profile_id: int,
+        actor_user_id: int,
+        expected_version: int | None,
+    ) -> None:
+        """Saca la designación de Route de la administración.
+
+        **No toca al usuario.** `user` y `user_company` son del núcleo: quien
+        deja de ser supervisor sigue siendo una persona del tenant, con su
+        acceso y su rol intactos. Borrar aquí borra una designación de dominio,
+        no una identidad — y confundir las dos cosas era precisamente lo que el
+        addendum vino a separar.
+
+        La fila se marca en vez de destruirse porque `vehicle_assignment` la
+        referencia con `CASCADE`: un `DELETE` físico se llevaría por delante
+        todo el historial de vehículos que condujo esa persona.
+
+        Una asignación vigente lo bloquea. Si no, quedaría un vehículo en manos
+        de alguien que ya no figura como supervisor, que es un estado que nadie
+        sabría leer después.
+        """
+        vigente = await VehicleAssignmentsDAO.current_for_supervisor(
+            company_id=company_id, supervisor_profile_id=supervisor_profile_id
+        )
+        if vigente is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Delete unavailable — end the current vehicle assignment "
+                    "first."
+                ),
+            )
+
+        async with transaction() as session:
+            perfil = await session.scalar(
+                select(SupervisorProfile).where(
+                    SupervisorProfile.id == supervisor_profile_id,
+                    SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
+                )
+            )
+            if perfil is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Supervisor profile not found",
+                )
+
+            ensure_version(current=perfil.version, expected=expected_version)
+
+            user_id = perfil.user_id
+            estaba_activo = perfil.is_active
+            perfil.soft_delete()
+            perfil.version = perfil.version + 1
+            await session.flush()
+
+        await record_event(
+            company_id=company_id,
+            entity_type="supervisor_profile",
+            entity_id=supervisor_profile_id,
+            action="delete",
+            actor_user_id=actor_user_id,
+            summary="Route supervisor designation deleted",
+            changes={
+                "user_id": {"old": user_id, "new": None},
+                "is_active": {"old": estaba_activo, "new": None},
+            },
         )
 
 

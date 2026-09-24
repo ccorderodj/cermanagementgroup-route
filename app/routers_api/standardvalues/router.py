@@ -6,7 +6,7 @@ no llega al DAO, la rechaza FastAPI con 422. Las ocho son producto; los valores
 de dentro, del tenant.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, status
 
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
@@ -102,6 +102,35 @@ async def update_value(
         expected_version=version,
     )
     return StandardValueRead.model_validate(valor)
+
+
+@router.delete("/{value_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_value(
+    value_id: int,
+    version: int | None = Query(
+        None,
+        description=(
+            "Versión que el administrador tenía en pantalla. Si otra persona "
+            "editó el valor entretanto, la respuesta es 409 en vez de borrar "
+            "algo distinto de lo que se estaba mirando."
+        ),
+    ),
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.standardvalues.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> None:
+    """Saca el valor de la administración. **No** es un sinónimo de desactivar.
+
+    Desactivar lo retira del uso pero lo deja visible al pedir los inactivos;
+    borrar lo quita también de ahí. La fila permanece en la base para que la
+    historia siga siendo interpretable.
+    """
+    await StandardValueService.delete(
+        company_id=company.id,
+        value_id=value_id,
+        actor_user_id=current_user.id,
+        expected_version=version,
+    )
 
 
 @router.post("/{list_code}/reorder")

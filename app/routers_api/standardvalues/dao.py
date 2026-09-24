@@ -1,4 +1,12 @@
-"""Acceso a datos de las listas configurables. Siempre acotado por compañía."""
+"""Acceso a datos de las listas configurables. Siempre acotado por compañía.
+
+**Todo este módulo ignora los valores borrados.** `deleted_at IS NULL` no es un
+filtro opcional que el llamador elija: un valor con lápida está fuera de la
+experiencia normal por definición, así que no aparece ni entre los activos ni
+entre los inactivos ni en los recuentos. La única forma de alcanzarlo es
+`get_including_deleted`, que existe para resolver una referencia histórica y
+para que el aprovisionamiento sepa que ya sembró ahí.
+"""
 
 from __future__ import annotations
 
@@ -22,7 +30,10 @@ class StandardValuesDAO(BaseDAO):
         is_active: bool | None = None,
         **_: object,
     ) -> Select:
-        stmt = select(StandardValue).where(StandardValue.company_id == company_id)
+        stmt = select(StandardValue).where(
+            StandardValue.company_id == company_id,
+            StandardValue.deleted_at.is_(None),
+        )
         if list_code:
             stmt = stmt.where(StandardValue.list_code == list_code)
         if is_active is not None:
@@ -52,6 +63,7 @@ class StandardValuesDAO(BaseDAO):
             stmt = select(StandardValue).where(
                 StandardValue.company_id == company_id,
                 StandardValue.list_code == list_code,
+                StandardValue.deleted_at.is_(None),
             )
             if not include_inactive:
                 stmt = stmt.where(StandardValue.is_active.is_(True))
@@ -67,11 +79,17 @@ class StandardValuesDAO(BaseDAO):
     async def get_for_company(
         cls, *, value_id: int, company_id: int
     ) -> StandardValue:
+        """Un valor de la experiencia normal. Uno borrado responde 404.
+
+        Es el mismo criterio que con otro tenant: no se confirma que exista algo
+        que el administrador ya no puede ver.
+        """
         async with db_session() as session:
             valor = await session.scalar(
                 select(StandardValue).where(
                     StandardValue.id == value_id,
                     StandardValue.company_id == company_id,
+                    StandardValue.deleted_at.is_(None),
                 )
             )
 
@@ -83,8 +101,49 @@ class StandardValuesDAO(BaseDAO):
         return valor
 
     @classmethod
+    async def get_including_deleted(
+        cls, *, value_id: int, company_id: int
+    ) -> StandardValue | None:
+        """La fila aunque tenga lápida, para resolver una referencia histórica.
+
+        No la usa ninguna pantalla de administración: si lo hiciera, el borrado
+        se estaría filtrando de vuelta a la experiencia normal, que es
+        exactamente lo que el addendum prohíbe.
+        """
+        async with db_session() as session:
+            return await session.scalar(
+                select(StandardValue).where(
+                    StandardValue.id == value_id,
+                    StandardValue.company_id == company_id,
+                )
+            )
+
+    @classmethod
+    async def seed_keys_present(cls, *, company_id: int) -> set[str]:
+        """Las huellas de siembra que ya existen, **incluidas las borradas**.
+
+        Deliberadamente ignora `deleted_at` e `is_active`: el aprovisionamiento
+        pregunta "¿ya sembré esto alguna vez?", no "¿sigue vivo?". Si mirara
+        sólo lo vivo, resucitaría en la siguiente ejecución todo lo que el
+        administrador hubiera borrado.
+        """
+        async with db_session() as session:
+            filas = await session.execute(
+                select(StandardValue.seed_key).where(
+                    StandardValue.company_id == company_id,
+                    StandardValue.seed_key.is_not(None),
+                )
+            )
+            return {clave for (clave,) in filas.all()}
+
+    @classmethod
     async def next_sort_order(cls, *, company_id: int, list_code: str) -> int:
-        """El siguiente hueco al final de la lista."""
+        """El siguiente hueco al final de la lista.
+
+        Cuenta también los borrados: reutilizar el orden de una fila con lápida
+        no rompe nada, pero dejar huecos es más barato que arriesgar un empate
+        con una fila que sigue en la tabla.
+        """
         async with db_session() as session:
             maximo = await session.scalar(
                 select(func.max(StandardValue.sort_order)).where(
@@ -103,6 +162,7 @@ class StandardValuesDAO(BaseDAO):
                 .where(
                     StandardValue.company_id == company_id,
                     StandardValue.is_active.is_(True),
+                    StandardValue.deleted_at.is_(None),
                 )
                 .group_by(StandardValue.list_code)
             )

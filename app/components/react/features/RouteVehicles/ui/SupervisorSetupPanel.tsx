@@ -14,9 +14,11 @@ import {
     TableHeader,
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
+import { ConfirmDestructiveDialog, LifecycleRowActions } from '@/features/Common';
 import { fetchVehicles, type Vehicle } from '@/entities/RouteVehicles';
 import {
     assignVehicle,
+    deleteSupervisorProfile,
     designateSupervisor,
     endAssignment,
     fetchAssignmentHistory,
@@ -63,6 +65,11 @@ export function SupervisorSetupPanel() {
     const [history, setHistory] = useState<VehicleAssignment[]>([]);
     const [seleccion, setSeleccion] = useState<Record<number, string>>({});
     const [busy, setBusy] = useState(false);
+    // La designación cuyo borrado espera confirmación.
+    const [porBorrar, setPorBorrar] = useState<SupervisorCandidate | null>(null);
+    const [borrando, setBorrando] = useState(false);
+    // Motivo por el que el servidor rechazó el borrado.
+    const [bloqueo, setBloqueo] = useState<string | null>(null);
 
     const cargar = useCallback(async () => {
         try {
@@ -115,6 +122,42 @@ export function SupervisorSetupPanel() {
             setError(detalleDeError(err, 'The designation could not be changed.'));
         } finally {
             setBusy(false);
+        }
+    };
+
+    /**
+     * Confirma el borrado de la designación. Un 409 significa que todavía
+     * conduce un vehículo: se explica en el propio diálogo en vez de como un
+     * error suelto, porque el administrador puede resolverlo ahí mismo.
+     */
+    const confirmarBorrado = async () => {
+        if (!porBorrar?.supervisor_profile_id) return;
+        setError(null);
+        setBorrando(true);
+        try {
+            await deleteSupervisorProfile(
+                porBorrar.supervisor_profile_id,
+                porBorrar.supervisor_version ?? undefined,
+            );
+            setPorBorrar(null);
+            await cargar();
+        } catch (err) {
+            const estado = (err as { response?: { status?: number } })?.response?.status;
+            if (estado === 409) {
+                setBloqueo(detalleDeError(err, 'This designation cannot be deleted right now.'));
+            } else {
+                setPorBorrar(null);
+                setError(detalleDeError(err, 'The designation could not be deleted.'));
+            }
+        } finally {
+            setBorrando(false);
+        }
+    };
+
+    const cerrarBorrado = (abierto: boolean) => {
+        if (!abierto) {
+            setPorBorrar(null);
+            setBloqueo(null);
         }
     };
 
@@ -298,14 +341,28 @@ export function SupervisorSetupPanel() {
                                                 >
                                                     History
                                                 </Button>
-                                                <Button
-                                                    variant="ghost"
-                                                    size="sm"
+                                                {/* Sin `onEdit`: el perfil de
+                                                    Route no tiene campos que
+                                                    editar todavía. Lo que se
+                                                    edita es la persona, y eso
+                                                    vive en la pantalla de
+                                                    usuarios, que es su dueña. */}
+                                                <LifecycleRowActions
+                                                    isActive={activo === true}
                                                     disabled={busy}
-                                                    onClick={() => cambiarDesignacion(candidato, !activo)}
-                                                >
-                                                    {activo ? 'Remove' : 'Restore'}
-                                                </Button>
+                                                    labels={{
+                                                        deactivate: 'Remove designation',
+                                                        reactivate: 'Restore designation',
+                                                        delete: 'Delete designation',
+                                                    }}
+                                                    onDeactivate={
+                                                        () => cambiarDesignacion(candidato, false)
+                                                    }
+                                                    onReactivate={
+                                                        () => cambiarDesignacion(candidato, true)
+                                                    }
+                                                    onDelete={() => setPorBorrar(candidato)}
+                                                />
                                             </>
                                         )}
                                     </TableCell>
@@ -373,6 +430,22 @@ export function SupervisorSetupPanel() {
                     )}
                 </section>
             )}
+            <ConfirmDestructiveDialog
+                open={porBorrar !== null}
+                onOpenChange={cerrarBorrado}
+                title="Delete this Route designation?"
+                description={(
+                    <>
+                        The person stays in this company with their role and access
+                        untouched — only their Route supervisor designation is
+                        removed. Past vehicle assignments stay readable, and they can
+                        be designated again later.
+                    </>
+                )}
+                blockedReason={bloqueo}
+                busy={borrando}
+                onConfirm={confirmarBorrado}
+            />
         </div>
     );
 }

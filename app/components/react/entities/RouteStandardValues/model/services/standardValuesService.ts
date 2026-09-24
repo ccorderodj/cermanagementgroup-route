@@ -51,6 +51,21 @@ export async function updateStandardValue(
     return parseApi(standardValueSchema, response.data, 'updateStandardValue');
 }
 
+/**
+ * Saca el valor de la administración. **No** es `updateStandardValue({is_active:
+ * false})`: eso lo retira del uso dejándolo visible entre los inactivos, y esto
+ * lo quita también de ahí. La fila permanece en el servidor para que la
+ * historia siga siendo interpretable.
+ */
+export async function deleteStandardValue(
+    valueId: number,
+    version?: number,
+): Promise<void> {
+    await $api.delete(`/standard-values/${valueId}`, {
+        params: version === undefined ? undefined : { version },
+    });
+}
+
 export async function reorderStandardValues(
     listCode: string,
     valueIds: number[],

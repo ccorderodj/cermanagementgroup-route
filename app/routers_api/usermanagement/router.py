@@ -16,7 +16,7 @@ Dos límites que este módulo no puede cruzar:
   compañía; la identidad global es administración de plataforma (D7).
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core import schema
 from app.core.audit.service import diff, record_event
@@ -179,3 +179,50 @@ async def set_user_access(
         changes={"is_active": {"old": not payload.is_active, "new": payload.is_active}},
     )
     return UserManagementRead.model_validate(updated)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_user_from_company(
+    user_id: int,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["users.delete"])),
+    company: TenantContext = Depends(get_company_required),
+) -> None:
+    """Retira a la persona de **esta** compañía. No borra su identidad.
+
+    Distinto de suspender: suspender deja al usuario en la administración, con
+    su acceso cortado y reversible; retirar lo saca de la experiencia normal
+    del tenant. La identidad de plataforma no se toca, así que quien pertenezca
+    a otras compañías sigue entrando en ellas con normalidad.
+
+    Nadie puede retirarse a sí mismo: dejaría al administrador fuera de la
+    pantalla desde la que acaba de actuar, y si era el último con la capacidad,
+    a la compañía sin nadie que pueda administrarla.
+    """
+    if user_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="You cannot remove your own access to this company.",
+        )
+
+    retirado = await UserManagementDAO.delete_membership(
+        user_id=user_id, company_id=company.id
+    )
+
+    await record_event(
+        company_id=company.id,
+        entity_type="user",
+        entity_id=user_id,
+        action="delete",
+        actor_user_id=current_user.id,
+        summary=(
+            f"{retirado.get('email') or retirado['username']} removed from this company"
+        ),
+        # Queda en la traza quién era y con qué rol: la pantalla ya no lo
+        # muestra, y sin esto no habría forma de reconstruirlo después.
+        changes={
+            "membership": {"old": "active", "new": None},
+            "role_id": {"old": retirado.get("role_id"), "new": None},
+            "email": {"old": retirado.get("email"), "new": None},
+        },
+    )

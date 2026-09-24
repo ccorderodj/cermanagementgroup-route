@@ -88,3 +88,18 @@ export async function setSupervisorDesignation(
     });
     return parseApi(supervisorProfileSchema, response.data, 'setSupervisorDesignation');
 }
+
+/**
+ * Saca la designación de Route de la administración. **No borra al usuario**:
+ * la identidad es del núcleo y la persona sigue en el tenant.
+ *
+ * Responde 409 si el supervisor todavía tiene un vehículo asignado.
+ */
+export async function deleteSupervisorProfile(
+    supervisorProfileId: number,
+    version?: number,
+): Promise<void> {
+    await $api.delete(`/supervisors/${supervisorProfileId}`, {
+        params: version === undefined ? undefined : { version },
+    });
+}

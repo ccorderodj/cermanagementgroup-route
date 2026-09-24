@@ -3,6 +3,7 @@ import {
     Badge,
     Button,
     Input,
+    Checkbox,
     Label,
     Select,
     SelectContent,
@@ -16,9 +17,11 @@ import {
     TableHeader,
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
+import { ConfirmDestructiveDialog, LifecycleRowActions } from '@/features/Common';
 import {
     createVehicle,
-    fetchVehicles,
+    deleteVehicle,
+    fetchVehiclesForAdmin,
     setVehicleActive,
     updateVehicle,
     FUEL_GRADES,
@@ -65,18 +68,24 @@ export function VehiclesPanel() {
     const [form, setForm] = useState<FormState>(FORM_VACIO);
     const [editing, setEditing] = useState<Vehicle | null>(null);
     const [saving, setSaving] = useState(false);
+    const [includeInactive, setIncludeInactive] = useState(false);
+    // El vehículo cuyo borrado espera confirmación. `null` = diálogo cerrado.
+    const [porBorrar, setPorBorrar] = useState<Vehicle | null>(null);
+    const [borrando, setBorrando] = useState(false);
+    // Motivo por el que el servidor rechazó el borrado, para explicarlo.
+    const [bloqueo, setBloqueo] = useState<string | null>(null);
 
     const cargar = useCallback(async () => {
         setLoading(true);
         try {
-            setVehicles(await fetchVehicles());
+            setVehicles(await fetchVehiclesForAdmin(includeInactive));
             setError(null);
         } catch {
             setError('Vehicles could not be loaded.');
         } finally {
             setLoading(false);
         }
-    }, []);
+    }, [includeInactive]);
 
     useEffect(() => {
         cargar();
@@ -128,6 +137,41 @@ export function VehiclesPanel() {
             const detalle = (err as { response?: { data?: { detail?: string } } })
                 ?.response?.data?.detail;
             setError(detalle ?? 'The vehicle status could not be changed.');
+        }
+    };
+
+    /**
+     * Confirma el borrado. Un 409 no es un fallo: es el servidor diciendo que
+     * hay una asignación vigente, y su explicación se enseña tal cual en el
+     * mismo diálogo en vez de como un error suelto.
+     */
+    const confirmarBorrado = async () => {
+        if (!porBorrar) return;
+        setError(null);
+        setBorrando(true);
+        try {
+            await deleteVehicle(porBorrar.id, porBorrar.version);
+            setPorBorrar(null);
+            await cargar();
+        } catch (err) {
+            const estado = (err as { response?: { status?: number } })?.response?.status;
+            const detalle = (err as { response?: { data?: { detail?: string } } })
+                ?.response?.data?.detail;
+            if (estado === 409) {
+                setBloqueo(detalle ?? 'This vehicle cannot be deleted right now.');
+            } else {
+                setPorBorrar(null);
+                setError(detalle ?? 'The vehicle could not be deleted.');
+            }
+        } finally {
+            setBorrando(false);
+        }
+    };
+
+    const cerrarBorrado = (abierto: boolean) => {
+        if (!abierto) {
+            setPorBorrar(null);
+            setBloqueo(null);
         }
     };
 
@@ -233,6 +277,20 @@ export function VehiclesPanel() {
                 {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
             </section>
 
+            <div className="flex items-center gap-2">
+                <Checkbox
+                    id="show-inactive-vehicles"
+                    checked={includeInactive}
+                    onCheckedChange={(v) => setIncludeInactive(v === true)}
+                />
+                <Label
+                    htmlFor="show-inactive-vehicles"
+                    className="text-sm text-muted-foreground"
+                >
+                    Show inactive vehicles
+                </Label>
+            </div>
+
             <section className="rounded-lg border border-border bg-card">
                 {loading && (
                     <p className="p-4 text-sm text-muted-foreground">Loading…</p>
@@ -274,24 +332,17 @@ export function VehiclesPanel() {
                                     <TableCell>{vehicle.operational_mpg}</TableCell>
                                     <TableCell>
                                         <Badge variant={vehicle.is_active ? 'default' : 'secondary'}>
-                                            {vehicle.is_active ? 'Active' : 'Retired'}
+                                            {vehicle.is_active ? 'Active' : 'Inactive'}
                                         </Badge>
                                     </TableCell>
                                     <TableCell className="text-right">
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => editar(vehicle)}
-                                        >
-                                            Edit
-                                        </Button>
-                                        <Button
-                                            variant="ghost"
-                                            size="sm"
-                                            onClick={() => alternarEstado(vehicle)}
-                                        >
-                                            {vehicle.is_active ? 'Retire' : 'Restore'}
-                                        </Button>
+                                        <LifecycleRowActions
+                                            isActive={vehicle.is_active}
+                                            onEdit={() => editar(vehicle)}
+                                            onDeactivate={() => alternarEstado(vehicle)}
+                                            onReactivate={() => alternarEstado(vehicle)}
+                                            onDelete={() => setPorBorrar(vehicle)}
+                                        />
                                     </TableCell>
                                 </TableRow>
                             ))}
@@ -299,6 +350,24 @@ export function VehiclesPanel() {
                     </Table>
                 )}
             </section>
+
+            <ConfirmDestructiveDialog
+                open={porBorrar !== null}
+                onOpenChange={cerrarBorrado}
+                title={`Delete ${porBorrar?.unit ?? ''}?`}
+                description={(
+                    <>
+                        It will no longer appear in this list or when assigning a
+                        vehicle. Past assignments and work sessions that used it stay
+                        readable.
+                        {' '}
+                        To take it out of use but keep it here, deactivate it instead.
+                    </>
+                )}
+                blockedReason={bloqueo}
+                busy={borrando}
+                onConfirm={confirmarBorrado}
+            />
         </div>
     );
 }
