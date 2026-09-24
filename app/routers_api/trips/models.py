@@ -85,6 +85,21 @@ class TripStatus(BusinessEnum):
 TERMINAL_STATUSES = (TripStatus.CLOSED.value, TripStatus.INTERRUPTED.value)
 
 
+#: Qué lista estandarizada acompaña a cada contexto **antes de salir**.
+#:
+#: Sólo tres. Lo fijó CER en la resolución 002, y la frontera es si el dato se
+#: conoce al planificar o sólo al llegar: se sabe por qué se viaja a ver a un
+#: empleado, qué se lleva a entregar y a qué se va a la oficina; no se sabe
+#: quién firmará la entrega ni qué actividades acabarán ejecutándose.
+#:
+#: Un contexto que no está aquí **no acepta** valor estandarizado en RTE04.
+PRETRIP_STANDARD_LIST: dict[str, str] = {
+    TripPurpose.EMPLOYEE_VISIT.value: "employee_visit_reasons",
+    TripPurpose.CHECK_DELIVERY.value: "delivery_types",
+    TripPurpose.OFFICE.value: "office_purposes",
+}
+
+
 class Trip(TimeStampedModel, VersionedMixin):
     """Un desplazamiento real, dentro de una jornada `ACTIVE`.
 
@@ -118,10 +133,22 @@ class Trip(TimeStampedModel, VersionedMixin):
     empleado, oficina, área de "Other". No se convierte en catálogo — eso sería
     reintroducir justo lo que CER quitó.
 
-    El valor estandarizado de cada contexto **no está aquí**, y es deliberado:
-    el baseline no determina si se elige antes de salir o al llegar, así que
-    ubicarlo habría sido inventar el flujo. Queda reportado como decisión
-    pendiente de CER (ver el informe de entrega de RTE04).
+    El valor estandarizado de pre-viaje
+    ------------------------------------
+    Sólo tres contextos traen un valor de lista **antes de salir**, y CER lo
+    fijó en la resolución 002: `employee_visit` (Reason), `check_delivery`
+    (Delivery Type) y `office` (Office Purpose). Los tres califican el plan con
+    algo que se sabe antes de arrancar — por qué se viaja, qué se lleva, a qué
+    se va a la oficina.
+
+    Los demás valores de lista describen **lo que se ejecutó al llegar** y son
+    de RTE05: las Activities de Client Visit, Recruiting y Other, y el
+    `Received By` de una entrega, que sólo se conoce cuando alguien firma.
+
+    `PRETRIP_STANDARD_LIST` es esa correspondencia, y el servicio la usa para
+    rechazar un valor que no pertenece a la lista del contexto: ofrecer un
+    Delivery Type en una visita a oficina sería cruzar contextos, que el
+    baseline prohíbe explícitamente.
     """
 
     __tablename__ = "trip"
@@ -137,6 +164,22 @@ class Trip(TimeStampedModel, VersionedMixin):
             ["work_session.id", "work_session.company_id"],
             name="fk_trip_work_session_same_company",
             ondelete="CASCADE",
+        ),
+        # `RESTRICT` y no `CASCADE`: un valor de lista borrado por el
+        # administrador no puede llevarse por delante el viaje que lo eligió.
+        # RTE02-A01 ya dejó esos borrados como lápida, así que la fila sigue
+        # existiendo y el histórico se resuelve.
+        ForeignKeyConstraint(
+            ["original_standard_value_id", "company_id"],
+            ["standard_value.id", "standard_value.company_id"],
+            name="fk_trip_original_standard_value_same_company",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["current_standard_value_id", "company_id"],
+            ["standard_value.id", "standard_value.company_id"],
+            name="fk_trip_current_standard_value_same_company",
+            ondelete="RESTRICT",
         ),
         # Un solo viaje vivo por jornada. Parcial a propósito: los terminados
         # pueden repetirse cuantas veces haga falta en el mismo día.
@@ -186,6 +229,13 @@ class Trip(TimeStampedModel, VersionedMixin):
     #: Lo que vale ahora, tras los cambios de plan que haya habido.
     current_purpose = Column(String(30), nullable=False)
     current_context_reference = Column(Text, nullable=True)
+
+    #: El valor de lista elegido antes de salir, si el contexto lo lleva.
+    #: `NULL` en los cuatro contextos que no lo tienen, y también cuando el
+    #: supervisor no lo rellenó. La FK es compuesta para que no se pueda
+    #: referenciar un valor de otro tenant aunque el servicio falle.
+    original_standard_value_id = Column(Integer, nullable=True)
+    current_standard_value_id = Column(Integer, nullable=True)
 
     #: Ocurrencia y recepción de cada transición (semántica de RTE03).
     started_at = Column(DateTime(timezone=True), nullable=True)
@@ -245,8 +295,10 @@ class TripPurposeChange(TimeStampedModel):
 
     from_purpose = Column(String(30), nullable=False)
     from_context_reference = Column(Text, nullable=True)
+    from_standard_value_id = Column(Integer, nullable=True)
     to_purpose = Column(String(30), nullable=False)
     to_context_reference = Column(Text, nullable=True)
+    to_standard_value_id = Column(Integer, nullable=True)
 
     #: Cuándo lo cambió el supervisor, con la semántica de ocurrencia de RTE03.
     changed_at = Column(DateTime(timezone=True), nullable=False)
