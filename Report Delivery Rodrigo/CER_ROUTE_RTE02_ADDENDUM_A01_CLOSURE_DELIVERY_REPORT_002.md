@@ -8,8 +8,8 @@
 | **Baseline delivery** | `Report Delivery Rodrigo/CER_ROUTE_RTE02_ADDENDUM_A01_DELIVERY_REPORT_001.md` |
 | **Source branch** | `feature/rte02-a01-closure-002` |
 | **Base commit** | `58c1b92` (tip of `dev`) |
-| **Candidate commit** | `[[CANDIDATE]]` |
-| **Push / MR status** | `[[MR]]` |
+| **Candidate commit** | `9ceb9dc` (plus this metadata follow-up) |
+| **Push / MR status** | Pushed. [merge_requests/9](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/9) **open, not merged** — awaiting CER certification |
 | **Date** | 2026-09-24 |
 | **Proposed status** | **RTE02-A01 — Completed / Ready for CER Certification** |
 
