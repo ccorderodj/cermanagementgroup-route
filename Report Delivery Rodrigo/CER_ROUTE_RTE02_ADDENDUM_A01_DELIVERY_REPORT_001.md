@@ -7,8 +7,8 @@
 | **Instruction** | `_cer_delivery/CER_ROUTE_RTE02_ADDENDUM_A01_DEVELOPMENT_INSTRUCTIONS_004.md` |
 | **Source branch** | `feature/rte02-a01-admin-lifecycle` |
 | **Base commit** | `30f875f` (tip of `dev`) |
-| **Candidate commit** | `[[CANDIDATE]]` |
-| **Push / MR status** | `[[MR]]` |
+| **Candidate commit** | `1237556` (plus this metadata follow-up) |
+| **Push / MR status** | Pushed. [merge_requests/8](https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/8) **open, not merged** — awaiting CER validation |
 | **Date** | 2026-09-24 |
 | **Proposed status** | **RTE02-A01 — Completed / Ready for CER Validation** |
 
