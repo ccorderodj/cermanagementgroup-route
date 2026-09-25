@@ -22,7 +22,7 @@ Lo que este archivo demuestra, y por qué cada bloque existe
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.database import async_session_maker
 from app.routers_api.odometer.models import OdometerEvidence
@@ -727,3 +727,166 @@ async def test_the_audit_never_stores_photo_bytes(seeded, alpha_client):
     for (cambios,) in filas.all():
         assert "PNG" not in cambios
         assert "storage_key" not in cambios
+
+
+# ── Concurrencia e idempotencia (§10 de las instrucciones 003) ────────────────
+
+
+async def test_two_admins_deciding_at_once_produce_one_decision(
+    seeded, alpha_client,
+):
+    """Aprobar y rechazar a la vez no puede dejar la solicitud en los dos sitios.
+
+    Dos administradores mirando la misma cola es lo normal, no un caso raro. El
+    guardián es el estado: sólo una solicitud `requested` se puede decidir, así
+    que la segunda llamada recibe 409 y la autorización de un solo uso sigue
+    siendo de un solo uso.
+    """
+    import asyncio
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    solicitud = (
+        await alpha_client.post(
+            f"/api/odometer/sessions/{jornada['id']}/start/exception",
+            json={"reason": "camera_unavailable"},
+        )
+    ).json()
+
+    async with TenantClient("alpha") as uno, TenantClient("alpha") as otro:
+        await uno.login(seeded.alpha.users["route_admin"].email)
+        await otro.login(seeded.alpha.users["route_admin"].email)
+
+        primera, segunda = await asyncio.gather(
+            uno.post(f"/api/odometer/exceptions/{solicitud['id']}/approve"),
+            otro.post(f"/api/odometer/exceptions/{solicitud['id']}/reject"),
+            return_exceptions=True,
+        )
+
+    codigos = sorted(
+        r.status_code for r in (primera, segunda) if not isinstance(r, Exception)
+    )
+    assert codigos == [200, 409], f"una decide y la otra se rechaza: {codigos}"
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    async with async_session_maker() as session:
+        estados = (
+            await session.execute(
+                text(
+                    "SELECT status FROM odometer_exception_request "
+                    "WHERE company_id = :c"
+                ),
+                {"c": seeded.alpha.id},
+            )
+        ).scalars().all()
+    assert len(estados) == 1
+    assert estados[0] in ("approved", "rejected")
+
+
+async def test_requesting_the_exception_concurrently_opens_one_door(
+    seeded, alpha_client,
+):
+    """El índice parcial es el que aguanta, no el orden de las peticiones."""
+    import asyncio
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+
+    async with TenantClient("alpha") as uno, TenantClient("alpha") as otro:
+        await uno.login(seeded.alpha.users["supervisor"].email)
+        await otro.login(seeded.alpha.users["supervisor"].email)
+
+        await asyncio.gather(
+            uno.post(
+                f"/api/odometer/sessions/{jornada['id']}/start/exception",
+                json={"reason": "other"},
+            ),
+            otro.post(
+                f"/api/odometer/sessions/{jornada['id']}/start/exception",
+                json={"reason": "other"},
+            ),
+            return_exceptions=True,
+        )
+
+    async with async_session_maker() as session:
+        cuantas = await session.scalar(
+            text(
+                "SELECT count(*) FROM odometer_exception_request "
+                "WHERE company_id = :c AND status IN ('requested','approved')"
+            ),
+            {"c": seeded.alpha.id},
+        )
+    assert cuantas == 1, "dos peticiones simultáneas no abren dos puertas"
+
+
+async def test_replaying_the_same_confirmation_writes_one_reading(
+    seeded, alpha_client,
+):
+    """Reenviar con la misma clave de idempotencia no duplica ni contradice.
+
+    La cola durable reintenta, así que una confirmación puede llegar dos veces.
+    """
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    await _subir_foto(alpha_client, jornada["id"])
+
+    clave = "odo-confirm-replay-1"
+    primera = await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "4321.0"},
+        headers={"Idempotency-Key": clave},
+    )
+    segunda = await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "4321.0"},
+        headers={"Idempotency-Key": clave},
+    )
+
+    assert primera.status_code == 200
+    assert segunda.status_code == 200
+    assert Decimal(segunda.json()["confirmed_reading"]) == Decimal("4321.0")
+
+    async with async_session_maker() as session:
+        filas = await session.scalar(
+            text(
+                "SELECT count(*) FROM odometer_evidence "
+                "WHERE company_id = :c AND evidence_type = 'start'"
+            ),
+            {"c": seeded.alpha.id},
+        )
+    assert filas == 1, "una sola fila de evidencia por extremo"
+
+
+async def test_concurrent_state_reads_do_not_create_two_evidence_rows(
+    seeded, alpha_client,
+):
+    """`ensure_row` compite consigo mismo y la base decide.
+
+    La pantalla del supervisor consulta el estado en cada reconciliación, y dos
+    pestañas o dos dispositivos pueden hacerlo a la vez. El índice único por
+    (jornada, extremo) es lo que impide dos filas; el servicio sólo tiene que no
+    romperse cuando lo pierde.
+    """
+    import asyncio
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+
+    async with TenantClient("alpha") as uno, TenantClient("alpha") as otro:
+        await uno.login(seeded.alpha.users["supervisor"].email)
+        await otro.login(seeded.alpha.users["supervisor"].email)
+
+        respuestas = await asyncio.gather(
+            uno.get(f"/api/odometer/sessions/{jornada['id']}"),
+            otro.get(f"/api/odometer/sessions/{jornada['id']}"),
+            return_exceptions=True,
+        )
+
+    for r in respuestas:
+        if not isinstance(r, Exception):
+            assert r.status_code == 200
+
+    async with async_session_maker() as session:
+        filas = await session.scalar(
+            text(
+                "SELECT count(*) FROM odometer_evidence WHERE company_id = :c"
+            ),
+            {"c": seeded.alpha.id},
+        )
+    assert filas == 1

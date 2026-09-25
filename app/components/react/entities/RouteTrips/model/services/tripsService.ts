@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { $api, parseApi } from '@/shared/api';
 import { enqueueAction, type PendingAction } from '@/shared/lib/offlineQueue';
+import { captureTimeEvidence } from '@/shared/lib/utils/utils';
 import {
     tripPurposeChangeSchema,
     tripSchema,
@@ -24,15 +25,22 @@ import {
  */
 
 export async function queuePlanTrip(input: TripPlanInput): Promise<PendingAction> {
-    return enqueueAction('trip.plan', '/trips', { ...input });
+    return enqueueAction('trip.plan', '/trips', {
+        ...input,
+        ...captureTimeEvidence(),
+    });
 }
 
 export async function queueStartTrip(tripId: number): Promise<PendingAction> {
-    return enqueueAction('trip.start', `/trips/${tripId}/start`, {});
+    return enqueueAction('trip.start', `/trips/${tripId}/start`, {
+        ...captureTimeEvidence(),
+    });
 }
 
 export async function queueArrive(tripId: number): Promise<PendingAction> {
-    return enqueueAction('trip.arrive', `/trips/${tripId}/arrive`, {});
+    return enqueueAction('trip.arrive', `/trips/${tripId}/arrive`, {
+        ...captureTimeEvidence(),
+    });
 }
 
 /**

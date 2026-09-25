@@ -25,7 +25,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 from fastapi import HTTPException, status
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.audit.service import record_event
@@ -69,28 +69,36 @@ class OdometerService:
         if existente is not None:
             return existente
 
-        async with transaction() as session:
-            jornada = await session.scalar(
-                select(WorkSession).where(WorkSession.id == work_session_id)
-            )
-            vehicle_id = jornada.vehicle_id if jornada else None
-            inicial = (
-                OdometerStatus.PENDING.value
-                if vehicle_id is not None
-                else OdometerStatus.NOT_REQUIRED.value
-            )
-            fila = OdometerEvidence(
-                company_id=company_id,
-                work_session_id=work_session_id,
-                vehicle_id=vehicle_id,
-                evidence_type=evidence_type,
-                status=inicial,
-            )
-            session.add(fila)
-            try:
+        # El `try` envuelve **todo** el `async with`, no sólo el `flush`.
+        # Capturarlo dentro dejaba la sesión con su transacción ya deshecha, y
+        # entonces el `commit()` del gestor de contexto lanzaba
+        # `PendingRollbackError`: un 500 en la cara del supervisor cada vez que
+        # dos pestañas o dos dispositivos leían el estado a la vez, que es lo
+        # normal y no un caso raro.
+        try:
+            async with transaction() as session:
+                jornada = await session.scalar(
+                    select(WorkSession).where(WorkSession.id == work_session_id)
+                )
+                vehicle_id = jornada.vehicle_id if jornada else None
+                inicial = (
+                    OdometerStatus.PENDING.value
+                    if vehicle_id is not None
+                    else OdometerStatus.NOT_REQUIRED.value
+                )
+                fila = OdometerEvidence(
+                    company_id=company_id,
+                    work_session_id=work_session_id,
+                    vehicle_id=vehicle_id,
+                    evidence_type=evidence_type,
+                    status=inicial,
+                )
+                session.add(fila)
                 await session.flush()
-            except IntegrityError:
-                pass
+        except IntegrityError:
+            # Otra petición la creó primero. El índice único hizo su trabajo y
+            # aquí no hay nada que arreglar: se devuelve la fila que ya existe.
+            pass
 
         return await OdometerEvidenceDAO.find(
             company_id=company_id,
@@ -525,15 +533,32 @@ class OdometerService:
         )
 
         async with transaction() as session:
-            fila = await session.scalar(
-                select(OdometerExceptionRequest).where(
-                    OdometerExceptionRequest.id == request_id
+            # La comprobación de arriba no basta: dos administradores mirando la
+            # misma cola es lo normal, y entre leer el estado y escribirlo cabe
+            # la decisión del otro. Sin esta condición en el `UPDATE`, los dos
+            # recibían 200 y la auditoría se quedaba con una aprobación **y** un
+            # rechazo de la misma solicitud, mientras el estado final era el del
+            # último en escribir. Ahora la base decide quién llegó primero.
+            aplicado = await session.execute(
+                update(OdometerExceptionRequest)
+                .where(
+                    OdometerExceptionRequest.id == request_id,
+                    OdometerExceptionRequest.company_id == company_id,
+                    OdometerExceptionRequest.status
+                    == OdometerExceptionStatus.REQUESTED.value,
+                )
+                .values(
+                    status=nuevo,
+                    decided_by=actor_user_id,
+                    decided_at=ahora,
+                    version=OdometerExceptionRequest.version + 1,
                 )
             )
-            fila.status = nuevo
-            fila.decided_by = actor_user_id
-            fila.decided_at = ahora
-            fila.version = fila.version + 1
+            if aplicado.rowcount == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="This request has already been decided.",
+                )
 
             evidencia = await session.scalar(
                 select(OdometerEvidence).where(

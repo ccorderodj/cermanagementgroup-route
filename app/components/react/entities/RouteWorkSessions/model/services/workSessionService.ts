@@ -1,6 +1,7 @@
 import { $api, parseApi } from '@/shared/api';
 import { enqueueAction, flushQueue, type FlushResult, type PendingAction } from '@/shared/lib/offlineQueue';
-import { currentWorkSessionSchema, type CurrentWorkSessionResponse, type TimeEvidence } from '../types';
+import { captureTimeEvidence } from '@/shared/lib/utils/utils';
+import { currentWorkSessionSchema, type CurrentWorkSessionResponse } from '../types';
 
 /**
  * Servicio de la Jornada: lectura directa, escritura siempre por la cola.
@@ -13,15 +14,6 @@ import { currentWorkSessionSchema, type CurrentWorkSessionResponse, type TimeEvi
  * `syncPendingWorkSessionActions` la reintenta cuando vuelva la red o tras
  * reautenticarse (§14 de las instrucciones RTE03).
  */
-
-function captureTimeEvidence(): TimeEvidence {
-    return {
-        device_captured_at: new Date().toISOString(),
-        // `getTimezoneOffset()` devuelve minutos al OESTE de UTC; el backend
-        // espera minutos al ESTE (D-10), de ahí el signo invertido.
-        utc_offset_minutes: -new Date().getTimezoneOffset(),
-    };
-}
 
 export async function fetchCurrentWorkSession(): Promise<CurrentWorkSessionResponse> {
     const response = await $api.get('/worksessions/current');

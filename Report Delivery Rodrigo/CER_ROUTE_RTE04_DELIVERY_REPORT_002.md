@@ -25,7 +25,17 @@ The API tests never saw it, because they post `standard_value_id` directly. Only
 **2. One derived rule that CER did not state explicitly, and that we implemented rather than stopping on.**
 Option B lets the workday close with the END exception still unreviewed. Without an additional rule, a Supervisor could request the exception, end the day, then upload any photograph and self-confirm it as `PHOTO_CONFIRMED` — the Admin approval would be decorative and the manual path avoidable. So **a closed workday no longer accepts a new END photo**; the ending reading completes only through the approved manual entry, which is the path Option B itself names. We judged this a consequence of Option B rather than a new product decision, because it changes nothing for the Supervisor who genuinely has no photo. **If CER reads it differently, say so and we will change it** — it is one guard in one method.
 
-**3. `data-testid` does not exist in production builds.**
+**3. A final pass against the instruction found three more gaps — two of them defects that would have reached certification.**
+After the first draft of this report was written, we re-read instruction 003 clause by clause instead of trusting our own summary. Three things did not hold:
+
+- **§4 required queued actions to preserve occurrence time.** The backend accepted `device_captured_at` for every Trip action; **the client never sent it.** A trip started at 08:05 and synced at 10:00 would have been recorded at 10:00 — precisely the failure RTE03's occurrence/receipt semantics exist to prevent. The three queued Trip actions now send it, using one shared helper rather than a second copy of the Work Session's.
+- **§10 required concurrent/idempotent evidence.** The odometer had none. Writing it found two real defects, below.
+- **`ensure_row` returned HTTP 500 under concurrent reads.** It caught `IntegrityError` *inside* `async with transaction()`, so the context manager then committed a session whose transaction had already rolled back → `PendingRollbackError`. Two tabs or two devices reading the odometer state at the same time — ordinary, not rare — produced a 500.
+- **`decide_exception` let two Admins both succeed.** The status guard read outside the transaction, so both wrote: each got HTTP 200, the audit trail kept an approval *and* a rejection of the same request, and the final state was whoever committed last. The decision is now a conditional `UPDATE ... WHERE status = 'requested'`; the loser gets 409.
+
+All four are fixed and covered by tests. They are listed here rather than in §7 because two of them were defects in behavior CER is being asked to certify.
+
+**4. `data-testid` does not exist in production builds.**
 `configwebpack/build/loaders/buildBabelLoader.ts` strips it when `isProd`. This is pre-existing and deliberate, and no browser test in the repository relied on it — but it means any future browser validation must anchor on text, role or form `id`. Ours do. Noted so the next checkpoint does not lose half a day to it.
 
 ---
@@ -223,10 +233,10 @@ This is queue *retry policy*, not RTE03 lifecycle or time semantics, so §12 is 
 | Route configuration + admin lifecycle | 140 | `0` | 587s |
 | Data: constraints, pagination, tenant isolation | 47 | `0` | 117s |
 | Work Sessions + Trips | 102 | `0` | 496s |
-| Odometer (START + END) | 39 | `0` | 426s |
-| **Total** | **559** | **0 failures** | |
+| Odometer (START + END) | 43 | `0` | 431s |
+| **Total** | **565** | **0 failures** | |
 
-Plus the three authorization tests added for §0.1: `3/3 PASS`.
+Plus the three authorization tests added for §0.1 and the six added during the final review of §4 and §10 (see §0.4): `9/9 PASS`.
 
 ### Frontend
 
@@ -271,6 +281,8 @@ Reported because they happened, not because they survived.
 | 2 C4 tests | `CONFIRMED` — my own test bugs: `audit_event` uses `occurred_at`, not `created_at`; and a premise that cannot exist (an `arrived` Trip is still non-terminal, so a session cannot also hold a second `in_transit` Trip) | Fixed |
 | Browser flow 1, twice | `CONFIRMED` — the standardized-values defect in §0.1, then a test bug (Change Plan opens on the current plan, so the context list needs an explicit step back) | Both fixed |
 | `test_page_wiring` anchor test | `CONFIRMED` — new template not registered. The net exists to force this | Registered |
+| 2 of 4 new odometer concurrency tests | `CONFIRMED` — `ensure_row` caught `IntegrityError` inside `transaction()`, producing `PendingRollbackError` (HTTP 500) on concurrent state reads | Fixed: the `try` now wraps the whole `async with`. This is the second time this exact misuse appeared in the project; it is worth a lint rule |
+| 1 of 4 new odometer concurrency tests | `CONFIRMED` — `decide_exception` checked the request status outside the transaction, so two concurrent Admin decisions both returned 200 and the audit kept two contradictory decisions | Fixed: conditional `UPDATE ... WHERE status = 'requested'`; `rowcount == 0` → 409 |
 
 ---
 

@@ -24,7 +24,7 @@ Lo que este archivo demuestra, y por qué cada bloque existe
 import asyncio
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from app.database import async_session_maker
 from app.routers_api.trips.models import Trip
@@ -821,3 +821,92 @@ async def test_a_closed_home_trip_does_not_trigger_the_review(seeded, alpha_clie
         f"/api/worksessions/{jornada['id']}/end", json={}
     )
     assert respuesta.status_code == 200
+
+
+# ── La hora de ocurrencia sobrevive a la cola (§4 de las instrucciones 003) ───
+
+
+async def test_a_queued_trip_action_keeps_the_time_the_supervisor_pressed_it(
+    seeded, alpha_client,
+):
+    """Una acción que esperó en la cola se fecha cuando se pulsó, no al llegar.
+
+    Es la misma semántica certificada en RTE03 y aquí importa igual: un viaje
+    que arrancó a las 8:05 y se sincronizó a las 10:00 tiene que constar a las
+    8:05. `started_received_at` guarda la otra mitad del hecho, así que no se
+    pierde cuándo lo supo el servidor.
+
+    El cliente lo envía en las tres acciones encoladas (`queuePlanTrip`,
+    `queueStartTrip`, `queueArrive`); esto comprueba que el servidor lo honra.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    await alpha_client.post("/api/worksessions", json={})
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "client_visit"})
+    ).json()
+
+    pulsado = datetime.now(timezone.utc) - timedelta(minutes=90)
+    arrancado = (
+        await alpha_client.post(
+            f"/api/trips/{viaje['id']}/start",
+            json={
+                "device_captured_at": pulsado.isoformat(),
+                "utc_offset_minutes": -300,
+            },
+        )
+    ).json()
+
+    assert arrancado["status"] == "in_transit"
+
+    async with async_session_maker() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT started_at, started_received_at FROM trip WHERE id = :i"
+                ),
+                {"i": viaje["id"]},
+            )
+        ).one()
+
+    assert fila.started_at < fila.started_received_at, (
+        "la ocurrencia tiene que quedar antes que la recepción"
+    )
+    assert abs((fila.started_at - pulsado).total_seconds()) < 2, (
+        "se guarda la hora del dispositivo, no la del servidor"
+    )
+
+
+async def test_a_device_time_in_the_future_is_not_believed(seeded, alpha_client):
+    """Evidencia imposible: el servidor usa su reloj en vez de creerla.
+
+    Un teléfono con la hora mal puesta no puede fechar un viaje mañana.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    await alpha_client.post("/api/worksessions", json={})
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "client_visit"})
+    ).json()
+
+    futuro = datetime.now(timezone.utc) + timedelta(hours=6)
+    await alpha_client.post(
+        f"/api/trips/{viaje['id']}/start",
+        json={"device_captured_at": futuro.isoformat()},
+    )
+
+    async with async_session_maker() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT started_at, started_received_at FROM trip WHERE id = :i"
+                ),
+                {"i": viaje["id"]},
+            )
+        ).one()
+
+    assert fila.started_at <= fila.started_received_at, (
+        "no se acepta un viaje que arrancó en el futuro"
+    )

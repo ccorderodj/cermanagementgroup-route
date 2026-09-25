@@ -382,3 +382,33 @@ export function readPageNumberParam(name: string): number | null {
     const value = Number(raw);
     return Number.isFinite(value) && value > 0 ? value : null;
 }
+
+/**
+ * Evidencia de tiempo del dispositivo para una acción encolada.
+ *
+ * Por qué es genérica y no de la Jornada
+ * --------------------------------------
+ * Toda acción que pueda esperar en la cola durable necesita decir **cuándo la
+ * pulsó la persona**, no cuándo el servidor la recibió. Sin esto, una acción que
+ * pasó dos horas sin cobertura se registra con la hora de recepción, y la
+ * jornada o el viaje quedan fechados a una hora que no ocurrió. La Jornada
+ * (RTE03) y el Viaje (RTE04) lo necesitan igual, así que vive aquí y no en una
+ * de las dos: duplicarla sería dos formas de fechar el mismo día.
+ *
+ * El servidor no se fía de esto. Valida la evidencia contra la causalidad y el
+ * orden del ciclo de vida, y si no cuadra usa su propio reloj y lo deja marcado
+ * como `server_receipt`.
+ */
+export interface DeviceTimeEvidence {
+    device_captured_at: string;
+    utc_offset_minutes: number;
+}
+
+export function captureTimeEvidence(): DeviceTimeEvidence {
+    return {
+        device_captured_at: new Date().toISOString(),
+        // `getTimezoneOffset()` devuelve minutos al OESTE de UTC; el backend
+        // espera minutos al ESTE (D-10), de ahí el signo invertido.
+        utc_offset_minutes: -new Date().getTimezoneOffset(),
+    };
+}

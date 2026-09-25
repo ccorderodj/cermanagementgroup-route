@@ -44,9 +44,3 @@ export const currentWorkSessionSchema = z.object({
 });
 
 export type CurrentWorkSessionResponse = z.infer<typeof currentWorkSessionSchema>;
-
-/** Lo que el dispositivo aporta como evidencia de tiempo local (D-10). */
-export interface TimeEvidence {
-    device_captured_at?: string;
-    utc_offset_minutes?: number;
-}
