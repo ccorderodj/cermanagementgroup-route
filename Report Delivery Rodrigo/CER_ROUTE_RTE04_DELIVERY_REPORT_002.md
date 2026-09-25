@@ -35,7 +35,12 @@ After the first draft of this report was written, we re-read instruction 003 cla
 
 All four are fixed and covered by tests. They are listed here rather than in §7 because two of them were defects in behavior CER is being asked to certify.
 
-**4. `data-testid` does not exist in production builds.**
+**4. This report made a false claim, and it is corrected here.**
+An earlier draft stated that odometer uploads reused "the existing scanner boundary". They did not: **nothing in the repository called the scanner at all** — RTE04 is the first upload path, and `attach_photo` never invoked it. §8 lists malware scanning as required, so this was a missing requirement being reported as met, which is worse than a missing requirement.
+
+It is now implemented (see §6) and the claim in §6 describes what the code does. We found it by verifying our own report line by line rather than trusting it; that check is worth repeating on every delivery.
+
+**5. `data-testid` does not exist in production builds.**
 `configwebpack/build/loaders/buildBabelLoader.ts` strips it when `isProd`. This is pre-existing and deliberate, and no browser test in the repository relied on it — but it means any future browser validation must anchor on text, role or form `id`. Ours do. Noted so the next checkpoint does not lose half a day to it.
 
 ---
@@ -142,7 +147,9 @@ Two tables, both tenant-scoped, both with composite foreign keys so a cross-tena
 
 **Why the file metadata lives on the evidence row.** The repository has storage primitives — provider, media validation, scanner — but no file registry and no domain consuming one; RTE04 is the first. Creating a generic platform-wide file registry for a single consumer is what §8 of the instruction and the repository's own rules forbid. CER accepted this in delivery 001.
 
-Migration state: `alembic heads` → `0006_odometer_evidence` (single head). `alembic check` → *No new upgrade operations detected*. Upgrade, downgrade and round-trip verified.
+`odometer_evidence` also carries the malware verdict (`scan_status`, `scan_provider`, `scan_detail`) added by `0007_odometer_scan_verdict`. Three columns rather than a boolean, because "clean / not clean" cannot represent what happens: two of the four verdicts say nothing about the file, only that nobody could look at it.
+
+Migration state: `alembic heads` → `0007_odometer_scan_verdict` (single head). `alembic check` → *No new upgrade operations detected*. Upgrade, downgrade and round-trip verified for both `0006` and `0007`.
 
 ### API
 
@@ -213,7 +220,11 @@ This is queue *retry policy*, not RTE03 lifecycle or time semantics, so §12 is 
 
 - **`route.records.adjust`** activated now that endpoints enforce it; granted to `route_admin`, **not** to `supervisor`. A Supervisor cannot approve their own exception: `test_a_supervisor_cannot_approve_their_own_exception`, plus browser flow 13.
 - **Photos have no public or permanent URL.** Every download re-checks tenant and ownership by joining `work_session`. Another Supervisor in the same tenant gets **404, not 403** — existence is not confirmed.
-- **Storage keys are server-generated**, never derived from the uploaded filename. Content type is resolved from the bytes, not the declared header; size capped at 12 MB; the existing scanner boundary is reused.
+- **Storage keys are server-generated**, never derived from the uploaded filename. Content type is resolved from the bytes, not the declared header; size capped at 12 MB.
+- **Malware scanning is wired, and its verdict is stored honestly.** §8 requires it "where supported". The photo is scanned **before** it is stored:
+  - `REJECTED` → the upload is refused and **nothing is written**. There is a judgement about the file here, so it is not quarantined — the Supervisor takes another photo. Verified by a test with an injected rejecting scanner: zero rows with a `storage_key`, and Start Trip still blocked.
+  - `NOT_CONFIGURED` / `UNAVAILABLE` → the photo is stored and the verdict says exactly that. These say nothing about the file; they say nobody could look at it. Marking them clean would assert a control nobody ran, and refusing them would leave every deployment without a configured scanner unable to record its mileage at all.
+  The verdict, its provider and its detail are columns on the evidence row and appear in the audit trail, so no one can later claim a photo was reviewed when it was not. Migration `0007_odometer_scan_verdict`; existing rows default to `not_configured`, which is the truth about them.
 - **The audit trail never stores photo bytes or the storage key**: `test_the_audit_never_stores_photo_bytes`.
 - **Cross-tenant isolation**: another tenant's admin decides nothing — 404.
 - `Users.is_superuser` appears in no RTE04 input schema.
@@ -233,10 +244,10 @@ This is queue *retry policy*, not RTE03 lifecycle or time semantics, so §12 is 
 | Route configuration + admin lifecycle | 140 | `0` | 587s |
 | Data: constraints, pagination, tenant isolation | 47 | `0` | 117s |
 | Work Sessions + Trips | 102 | `0` | 496s |
-| Odometer (START + END) | 43 | `0` | 431s |
-| **Total** | **565** | **0 failures** | |
+| Odometer (START + END) | 48 | `0` | 604s |
+| **Total** | **570** | **0 failures** | |
 
-Plus the three authorization tests added for §0.1 and the six added during the final review of §4 and §10 (see §0.4): `9/9 PASS`.
+Plus the three authorization tests added for §0.1 and the eleven added during the final clause-by-clause review of §4, §8 and §10: `14/14 PASS`.
 
 ### Frontend
 
@@ -301,7 +312,7 @@ Carried forward explicitly. None of these authorizes bypassing any odometer inte
 
 | Action | Needed? |
 |---|---|
-| Migration `0006_odometer_evidence` on the target environment | **Yes** |
+| Migrations `0006_odometer_evidence` and `0007_odometer_scan_verdict` on the target environment | **Yes** |
 | `bootstrap` re-run to seed capabilities | **Yes** — `route.records.adjust` is new in the catalog and must be seeded before the Admin queue works |
 | Frontend production build on deploy | **Yes** |
 | Re-seed for the standardized-values fix | No — no capability was added |

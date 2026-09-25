@@ -156,6 +156,16 @@ async def download_photo(
         )
 
     from app.core.storage.base import get_storage
+    from app.core.storage.scanning import ScanVerdict
+
+    # Cinturón y tirantes. Una foto rechazada por el escáner no llega a
+    # guardarse, así que esta rama no debería alcanzarse nunca — y precisamente
+    # por eso se escribe: si algún día un camino nuevo guardara una, no se
+    # serviría. El control no depende de que nadie se equivoque más arriba.
+    if evidencia.scan_status == ScanVerdict.REJECTED.value:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found"
+        )
 
     contenido = get_storage().open(evidencia.storage_key)
     return Response(

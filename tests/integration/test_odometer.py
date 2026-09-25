@@ -890,3 +890,167 @@ async def test_concurrent_state_reads_do_not_create_two_evidence_rows(
             {"c": seeded.alpha.id},
         )
     assert filas == 1
+
+
+# ── Análisis de malware de la foto (§8 de las instrucciones 003) ──────────────
+
+
+class _EscanerQueRechaza:
+    """Un escáner que ve una amenaza. Lo que haría ClamAV con EICAR."""
+
+    name = "test-scanner"
+
+    def scan(self, *, data, content_type):  # noqa: ARG002 - firma del puerto
+        from app.core.storage.scanning import ScanOutcome, ScanVerdict
+
+        return ScanOutcome(ScanVerdict.REJECTED, self.name, "Threat found: EICAR-Test.")
+
+
+class _EscanerQueAprueba:
+    name = "test-scanner"
+
+    def scan(self, *, data, content_type):  # noqa: ARG002 - firma del puerto
+        from app.core.storage.scanning import ScanOutcome, ScanVerdict
+
+        return ScanOutcome(ScanVerdict.CLEAN, self.name)
+
+
+class _EscanerCaido:
+    """El escáner está configurado y no contesta. Ni limpia ni sucia."""
+
+    name = "test-scanner"
+
+    def scan(self, *, data, content_type):  # noqa: ARG002 - firma del puerto
+        from app.core.storage.scanning import ScannerUnavailable
+
+        raise ScannerUnavailable("connection refused")
+
+
+async def test_a_rejected_photo_is_never_stored(seeded, alpha_client, monkeypatch):
+    """Una amenaza no se guarda como evidencia: el supervisor hace otra foto.
+
+    Aquí sí hay un juicio sobre el archivo, así que no se pone en cuarentena —
+    se rechaza. Guardar malware bajo la etiqueta "evidencia" no serviría a nadie.
+    """
+    monkeypatch.setattr(
+        "app.core.storage.scanning.get_scanner", lambda: _EscanerQueRechaza()
+    )
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    respuesta = await _subir_foto(alpha_client, jornada["id"])
+
+    assert respuesta.status_code == 422
+    assert "scanner" in respuesta.json()["detail"].lower()
+
+    # Nada se guardó. La fila ni se crea, porque el rechazo ocurre antes de
+    # tocar el almacén: no hay clave, ni huella, ni fila a medio escribir.
+    async with async_session_maker() as session:
+        con_foto = await session.scalar(
+            text(
+                "SELECT count(*) FROM odometer_evidence "
+                "WHERE company_id = :c AND storage_key IS NOT NULL"
+            ),
+            {"c": seeded.alpha.id},
+        )
+    assert con_foto == 0, "la foto rechazada no llegó al almacén"
+
+    # Y el viaje sigue bloqueado: rechazar la foto no resuelve la lectura.
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "client_visit"})
+    ).json()
+    bloqueado = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    assert bloqueado.status_code == 409
+
+
+async def test_a_clean_verdict_is_recorded_with_its_provider(
+    seeded, alpha_client, monkeypatch,
+):
+    monkeypatch.setattr(
+        "app.core.storage.scanning.get_scanner", lambda: _EscanerQueAprueba()
+    )
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    subida = await _subir_foto(alpha_client, jornada["id"])
+
+    assert subida.status_code == 200
+    assert subida.json()["evidence"]["scan_status"] == "clean"
+
+    evidencia = await OdometerEvidenceDAO_find(seeded.alpha.id, jornada["id"], "start")
+    assert evidencia.scan_provider == "test-scanner"
+
+
+async def test_a_scanner_outage_is_not_reported_as_clean(
+    seeded, alpha_client, monkeypatch,
+):
+    """Una avería del escáner no se convierte en un visto bueno.
+
+    La foto se guarda —el supervisor ya la hizo y perderla sería peor— pero el
+    veredicto dice la verdad: nadie pudo mirarla. Nadie podrá afirmar después
+    que se revisó.
+    """
+    monkeypatch.setattr(
+        "app.core.storage.scanning.get_scanner", lambda: _EscanerCaido()
+    )
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    subida = await _subir_foto(alpha_client, jornada["id"])
+
+    assert subida.status_code == 200
+    assert subida.json()["evidence"]["scan_status"] == "unavailable"
+
+    evidencia = await OdometerEvidenceDAO_find(seeded.alpha.id, jornada["id"], "start")
+    assert evidencia.scan_detail is not None
+    assert "unavailable" in evidencia.scan_detail.lower()
+
+
+async def test_without_a_scanner_the_verdict_says_so(seeded, alpha_client):
+    """El despliegue por defecto: no hay escáner, y se dice.
+
+    `not_configured` **no** es `clean`. Marcarla limpia sería afirmar un control
+    que nadie ejecutó, que es exactamente lo que este campo existe para evitar.
+    """
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    subida = await _subir_foto(alpha_client, jornada["id"])
+
+    assert subida.status_code == 200
+    assert subida.json()["evidence"]["scan_status"] == "not_configured"
+
+    # Y el kilometraje se puede registrar igual: un despliegue sin escáner no
+    # deja a la flota sin poder trabajar.
+    confirmada = await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "1234.0"},
+    )
+    assert confirmada.status_code == 200
+    assert confirmada.json()["status"] == "photo_confirmed"
+
+
+async def test_the_database_rejects_an_invented_verdict(seeded, alpha_client):
+    """La lista cerrada la garantiza la base, no sólo Python."""
+    from sqlalchemy.exc import IntegrityError
+
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    await _subir_foto(alpha_client, jornada["id"])
+
+    with pytest.raises(IntegrityError):
+        async with async_session_maker() as session:
+            await session.execute(
+                text(
+                    "UPDATE odometer_evidence SET scan_status = 'probablemente_limpia' "
+                    "WHERE company_id = :c"
+                ),
+                {"c": seeded.alpha.id},
+            )
+            await session.commit()
+
+
+async def OdometerEvidenceDAO_find(company_id: int, session_id: int, tipo: str):
+    """Atajo de lectura para estos tests, contra la base y no contra la API."""
+    async with async_session_maker() as session:
+        return await session.scalar(
+            select(OdometerEvidence).where(
+                OdometerEvidence.company_id == company_id,
+                OdometerEvidence.work_session_id == session_id,
+                OdometerEvidence.evidence_type == tipo,
+            )
+        )

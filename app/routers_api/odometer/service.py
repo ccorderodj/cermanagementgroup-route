@@ -181,6 +181,7 @@ class OdometerService:
         """
         from app.core.storage.base import get_storage
         from app.core.storage.media import resolve_content_type
+        from app.core.storage.scanning import ScanVerdict, get_scanner, scan_safely
 
         await OdometerService._negar_foto_tardia(
             company_id=company_id,
@@ -193,6 +194,24 @@ class OdometerService:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail="The odometer evidence must be a photo.",
+            )
+
+        # El análisis va **antes** de guardar, y su veredicto se guarda tal cual.
+        #
+        # Una foto que el escáner rechaza no se almacena: el supervisor hace otra.
+        # Guardar una amenaza como "evidencia" no serviría a nadie, y aquí sí hay
+        # un juicio sobre el archivo, no una avería.
+        #
+        # `not_configured` y `unavailable` son otra cosa: no dicen nada de la
+        # foto, dicen que nadie pudo mirarla. Se guardan así, sin maquillar. Un
+        # despliegue sin escáner es el caso por defecto y no puede quedarse sin
+        # poder registrar su kilometraje; lo que no puede es que luego alguien
+        # afirme que la foto se revisó.
+        veredicto = scan_safely(get_scanner(), data=image, content_type=tipo)
+        if veredicto.verdict == ScanVerdict.REJECTED:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="That file was rejected by the malware scanner. Take a new photo.",
             )
 
         almacen = get_storage()
@@ -225,6 +244,9 @@ class OdometerService:
             fila.content_type = objeto.content_type
             fila.byte_size = objeto.byte_size
             fila.captured_at = ahora
+            fila.scan_status = veredicto.verdict.value
+            fila.scan_provider = veredicto.provider
+            fila.scan_detail = veredicto.detail
             fila.ocr_detected_reading = sugerencia
             fila.version = fila.version + 1
             await session.flush()
@@ -242,6 +264,10 @@ class OdometerService:
             changes={
                 "evidence_type": {"old": None, "new": evidence_type},
                 "ocr_suggested": {"old": None, "new": str(sugerencia) if sugerencia else None},
+                # Queda por escrito si alguien miró el archivo y con qué
+                # proveedor. Nadie podrá dar por revisada una foto que no lo fue.
+                "scan_status": {"old": None, "new": veredicto.verdict.value},
+                "scan_provider": {"old": None, "new": veredicto.provider},
             },
         )
 

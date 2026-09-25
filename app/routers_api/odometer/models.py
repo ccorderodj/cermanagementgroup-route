@@ -52,6 +52,7 @@ from sqlalchemy import (
 )
 
 from app.core.enums import BusinessEnum
+from app.core.storage.scanning import ScanVerdict
 from app.core.models.TimeStamped import TimeStampedModel
 from app.core.models.Versioned import VersionedMixin
 
@@ -158,6 +159,12 @@ class OdometerEvidence(TimeStampedModel, VersionedMixin):
             "confirmed_reading IS NULL OR confirmed_reading >= 0",
             name="ck_odometer_reading_not_negative",
         ),
+        # El veredicto es una lista cerrada, y lo garantiza la base: una
+        # comprobación en Python protege mientras nadie olvide llamarla.
+        CheckConstraint(
+            "scan_status IN ('clean', 'rejected', 'not_configured', 'unavailable')",
+            name="ck_odometer_scan_status",
+        ),
         Index(
             "ix_odometer_evidence_session",
             "company_id",
@@ -195,6 +202,19 @@ class OdometerEvidence(TimeStampedModel, VersionedMixin):
     content_hash = Column(String(64), nullable=True)
     content_type = Column(String(100), nullable=True)
     byte_size = Column(Integer, nullable=True)
+
+    #: Veredicto del análisis de malware sobre la foto (§8).
+    #:
+    #: Se guarda el resultado real, incluido "nadie pudo mirarla". Marcar una
+    #: foto como limpia sin escáner configurado sería afirmar un control que no
+    #: se ejecutó, y es justo lo que `app/core/storage/scanning.py` existe para
+    #: no hacer. Una foto que el escáner **rechaza** no llega a guardarse, así
+    #: que este campo nunca vale `rejected` en una fila con `storage_key`.
+    scan_status = Column(
+        String(20), nullable=False, server_default=ScanVerdict.NOT_CONFIGURED.value
+    )
+    scan_provider = Column(String(40), nullable=True)
+    scan_detail = Column(String(500), nullable=True)
 
     captured_at = Column(DateTime(timezone=True), nullable=True)
     confirmed_at = Column(DateTime(timezone=True), nullable=True)

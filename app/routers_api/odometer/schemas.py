@@ -63,6 +63,11 @@ class OdometerEvidenceRead(BaseModel):
     captured_at: Optional[datetime] = None
     confirmed_at: Optional[datetime] = None
     confirmed_by: Optional[int] = None
+
+    #: Qué dijo el análisis de malware. `not_configured` significa que este
+    #: despliegue no tiene escáner, no que la foto esté limpia: son cosas
+    #: distintas y el contrato no las confunde.
+    scan_status: str = "not_configured"
     version: int
 
 
