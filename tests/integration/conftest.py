@@ -234,6 +234,9 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     # `work_session` referencia a `vehicle` (RESTRICT), así que va antes.
     # RTE04: hijos antes que padres. `trip_purpose_change` referencia a
     # `trip`, y `trip` a `work_session` y a `standard_value`.
+    # RTE04: la evidencia de odometro referencia jornada y vehiculo.
+    "odometer_exception_request",
+    "odometer_evidence",
     "trip_purpose_change",
     "trip",
     "work_session",

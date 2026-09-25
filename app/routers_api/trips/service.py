@@ -235,13 +235,16 @@ class TripService:
     ) -> Trip:
         """`PLANNING → IN_TRANSIT`.
 
-        Dos condiciones antes de salir:
+        Tres condiciones antes de salir:
 
         * La jornada sigue abierta. Arrancar un viaje en una jornada cerrada
           dejaría un desplazamiento sin dueño.
         * El dato de planificación obligatorio de ese contexto está puesto. El
           viaje puede existir en `PLANNING` mientras el supervisor rellena el
           formulario; lo que no puede es **salir** sin él.
+        * La lectura inicial del odómetro está resuelta, si la jornada lleva
+          vehículo. La comprobación es del servidor: que la pantalla esconda el
+          botón es experiencia de usuario, no un control (invariante 8).
         """
         viaje = await TripService._propio(
             company_id=company_id, user_id=user_id, trip_id=trip_id
@@ -259,6 +262,14 @@ class TripService:
         _exigir_dato_de_planificacion(
             purpose=viaje.current_purpose,
             standard_value_id=viaje.current_standard_value_id,
+        )
+
+        # Importación diferida: el odómetro consulta viajes para decidir si hace
+        # falta lectura de cierre, así que importarlo arriba cerraría el ciclo.
+        from app.routers_api.odometer.service import OdometerService
+
+        await OdometerService.ensure_start_reading_resolved(
+            company_id=company_id, work_session_id=viaje.work_session_id
         )
 
         recibido, ocurrido = _momentos(device_captured_at)

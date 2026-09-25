@@ -85,8 +85,8 @@ CAPABILITIES: tuple[Capability, ...] = (
     #
     # Solo las capacidades que RTE02 **exige de verdad** en un endpoint. El
     # catálogo certificado de RTE01 contempla además `route.live.read`,
-    # `route.activity.read`, `route.reports.read`, `route.reports.export`,
-    # `route.fuelreference.manage` y `route.records.adjust`: entran con el
+    # `route.activity.read`, `route.reports.read`, `route.reports.export`
+    # y `route.fuelreference.manage`: entran con el
     # checkpoint que construya su superficie protegida, porque
     # `test_permission_catalog.py` rechaza —a propósito— una capacidad que
     # ningún endpoint pide. Declararlas antes concedería autoridad sobre algo
@@ -99,6 +99,12 @@ CAPABILITIES: tuple[Capability, ...] = (
     # sesión autenticada—, así que una sola capacidad basta para Start Work,
     # End Work y el estado actual.
     _cap("route", "worksession.execute", "Start and end the caller's own Work Session"),
+    # RTE04: aprobar o rechazar una entrada manual de odómetro cuando el
+    # supervisor no pudo obtener la foto. Es autoridad de administración, no de
+    # campo: dársela a quien ejecuta la jornada permitiría aprobar su propia
+    # excepción, y el control dejaría de serlo. Estaba en el catálogo
+    # certificado de RTE01 y se activa ahora que hay endpoints que la exigen.
+    _cap("route", "records.adjust", "Review and decide odometer manual-entry exceptions"),
 )
 
 CAPABILITY_NAMES: frozenset[str] = frozenset(c.name for c in CAPABILITIES)
@@ -209,6 +215,7 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             "route.vehicles.read",
             "route.vehicles.manage",
             "route.standardvalues.manage",
+            "route.records.adjust",
         ),
     ),
 )
