@@ -17,7 +17,7 @@ kilometraje real del vehículo.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile, status
 
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
@@ -29,6 +29,7 @@ from app.routers_api.odometer.models import OdometerEvidenceType
 from app.routers_api.odometer.schemas import (
     OdometerEvidenceRead,
     OdometerExceptionCreate,
+    OdometerExceptionQueueRead,
     OdometerExceptionRead,
     OdometerPhotoResult,
     OdometerReadingConfirm,
@@ -72,17 +73,7 @@ async def get_session_odometer(
         company_id=company.id, user_id=current_user.id, work_session_id=work_session_id
     )
 
-    inicio = await OdometerService.ensure_row(
-        company_id=company.id,
-        work_session_id=work_session_id,
-        evidence_type=OdometerEvidenceType.START.value,
-    )
-    fin = await OdometerEvidenceDAO.find(
-        company_id=company.id,
-        work_session_id=work_session_id,
-        evidence_type=OdometerEvidenceType.END.value,
-    )
-    distancia = await OdometerService.distance_for_session(
+    inicio, fin, distancia = await OdometerService.session_state(
         company_id=company.id, work_session_id=work_session_id
     )
 
@@ -234,10 +225,17 @@ async def request_exception(
 async def list_pending_exceptions(
     _authz: None = Depends(require_permissions(["route.records.adjust"])),
     company: TenantContext = Depends(get_company_required),
-) -> list[OdometerExceptionRead]:
+) -> list[OdometerExceptionQueueRead]:
     """La cola del administrador, lo más antiguo primero."""
     filas = await OdometerExceptionRequestsDAO.list_pending(company_id=company.id)
-    return [OdometerExceptionRead.model_validate(f) for f in filas]
+    return [
+        OdometerExceptionQueueRead(
+            **OdometerExceptionRead.model_validate(fila["request"]).model_dump(),
+            requested_by_name=fila["requested_by_name"],
+            vehicle_unit=fila["vehicle_unit"],
+        )
+        for fila in filas
+    ]
 
 
 @router.post("/exceptions/{request_id}/approve")

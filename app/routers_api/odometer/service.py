@@ -29,12 +29,13 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.audit.service import record_event
-from app.core.db.session import transaction
+from app.core.db.session import db_session, transaction
 from app.routers_api.odometer.dao import (
     OdometerEvidenceDAO,
     OdometerExceptionRequestsDAO,
 )
 from app.routers_api.odometer.models import (
+    END_WORK_UNBLOCKING_STATUSES,
     RESOLVED_STATUSES,
     OdometerEvidence,
     OdometerEvidenceMethod,
@@ -120,6 +121,34 @@ class OdometerService:
             detail="Capture the starting odometer reading before your first trip.",
         )
 
+    @staticmethod
+    async def ensure_end_work_not_blocked(
+        *, company_id: int, work_session_id: int
+    ) -> None:
+        """La guarda de `End Work`, que es **más blanda** que la de `Start Trip`.
+
+        Y lo es a propósito (Opción B de CER). Para salir a conducir hace falta
+        una lectura confirmada. Para terminar el día basta con haber pedido la
+        excepción: el supervisor ya no va a conducir más, y retenerle la jornada
+        abierta hasta que alguien revise su solicitud acabaría escribiendo un
+        `ended_at` que no ocurrió. La jornada se cierra a su hora real y la
+        evidencia queda explícitamente pendiente.
+
+        Lo que sí bloquea es `PENDING`: si la lectura de cierre hace falta y el
+        supervisor no ha hecho ni la foto ni la solicitud, todavía hay algo que
+        pedirle.
+        """
+        fila = await OdometerService.end_requirement(
+            company_id=company_id, work_session_id=work_session_id
+        )
+        if fila.status in END_WORK_UNBLOCKING_STATUSES:
+            return
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Capture the ending odometer reading before you end your day.",
+        )
+
     # ── Camino normal: foto + confirmación ──────────────────────────────────
 
     @staticmethod
@@ -144,6 +173,12 @@ class OdometerService:
         """
         from app.core.storage.base import get_storage
         from app.core.storage.media import resolve_content_type
+
+        await OdometerService._negar_foto_tardia(
+            company_id=company_id,
+            work_session_id=work_session_id,
+            evidence_type=evidence_type,
+        )
 
         tipo = resolve_content_type(data=image, declared=content_type)
         if not tipo.startswith("image/"):
@@ -208,6 +243,45 @@ class OdometerService:
             evidence_type=evidence_type,
         )
         return actualizada, sugerencia
+
+    @staticmethod
+    async def _negar_foto_tardia(
+        *, company_id: int, work_session_id: int, evidence_type: str
+    ) -> None:
+        """Una jornada cerrada ya no acepta una foto de cierre nueva.
+
+        Es lo que mantiene el control en pie. La Opción B deja terminar el día
+        con la excepción **pedida**, así que sin esta regla cualquiera podría
+        cerrar la jornada, subir después una fotografía cualquiera y
+        autoconfirmarla como `PHOTO_CONFIRMED`: la aprobación del administrador
+        pasaría a ser decorativa y la vía manual, evitable.
+
+        La Opción B ya dice cuál es el camino de cierre tardío —"el supervisor
+        completa la lectura manual **de un solo uso**"—, y esta regla lo hace
+        cumplir en vez de confiar en que nadie encuentre el atajo. El momento de
+        la foto de cierre es cuando se cierra el día; pasado eso, una foto
+        retrasada no es evidencia de la misma cosa.
+        """
+        if evidence_type != OdometerEvidenceType.END.value:
+            return
+
+        async with db_session() as session:
+            jornada = await session.scalar(
+                select(WorkSession).where(
+                    WorkSession.id == work_session_id,
+                    WorkSession.company_id == company_id,
+                )
+            )
+        if jornada is None or jornada.status != WorkSessionStatus.ENDED.value:
+            return
+
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Your workday is already closed. The ending reading can only be "
+                "completed through the approved manual entry."
+            ),
+        )
 
     @staticmethod
     async def confirm_reading(
@@ -498,15 +572,39 @@ class OdometerService:
     # ── Distancia derivada ──────────────────────────────────────────────────
 
     @staticmethod
-    async def distance_for_session(
-        *, company_id: int, work_session_id: int
+    def _distance(
+        inicio: OdometerEvidence | None, fin: OdometerEvidence | None
     ) -> Decimal | None:
         """`fin - inicio`, o `None` si falta alguna de las dos.
 
         **No es millaje de ruta** y nunca lo alimenta. `None` significa que
         todavía no se puede afirmar una distancia: no es cero.
+
+        Recibe las filas en vez de buscarlas porque quien la llama ya las tiene:
+        ver `session_state`.
         """
-        inicio = await OdometerEvidenceDAO.find(
+        if (
+            inicio is None
+            or fin is None
+            or inicio.confirmed_reading is None
+            or fin.confirmed_reading is None
+        ):
+            return None
+        return fin.confirmed_reading - inicio.confirmed_reading
+
+    @staticmethod
+    async def session_state(
+        *, company_id: int, work_session_id: int
+    ) -> tuple[OdometerEvidence, OdometerEvidence | None, Decimal | None]:
+        """Los dos extremos y su distancia, leyendo cada fila **una vez**.
+
+        Antes esto eran cinco consultas: la de inicio, la de fin, y otras dos
+        para volver a buscar las mismas filas dentro del cálculo de distancia.
+        La pantalla del supervisor lo llama en cada reconciliación, así que la
+        diferencia no es teórica — y en los tests, donde cada consulta abre su
+        propia conexión física, la repetición llegó a agotar el servidor.
+        """
+        inicio = await OdometerService.ensure_row(
             company_id=company_id,
             work_session_id=work_session_id,
             evidence_type=OdometerEvidenceType.START.value,
@@ -516,14 +614,7 @@ class OdometerService:
             work_session_id=work_session_id,
             evidence_type=OdometerEvidenceType.END.value,
         )
-        if (
-            inicio is None
-            or fin is None
-            or inicio.confirmed_reading is None
-            or fin.confirmed_reading is None
-        ):
-            return None
-        return fin.confirmed_reading - inicio.confirmed_reading
+        return inicio, fin, OdometerService._distance(inicio, fin)
 
     @staticmethod
     async def end_requirement(

@@ -33,6 +33,7 @@ import { RouteUsersPage } from '@/pages/RouteUsersPage';
 import { RouteSupervisorsPage } from '@/pages/RouteSupervisorsPage';
 import { RouteVehiclesPage } from '@/pages/RouteVehiclesPage';
 import { RouteStandardValuesPage } from '@/pages/RouteStandardValuesPage';
+import { RouteOdometerExceptionsPage } from '@/pages/RouteOdometerExceptionsPage';
 
 /**
  * Mapa clave de página -> componente.
@@ -68,4 +69,5 @@ export const RootComponents: Record<string, ReactNode> = {
     [ComponentRoot.ROUTESUPERVISORS]: <RouteSupervisorsPage />,
     [ComponentRoot.ROUTEVEHICLES]: <RouteVehiclesPage />,
     [ComponentRoot.ROUTESTANDARDVALUES]: <RouteStandardValuesPage />,
+    [ComponentRoot.ROUTEODOMETEREXCEPTIONS]: <RouteOdometerExceptionsPage />,
 };

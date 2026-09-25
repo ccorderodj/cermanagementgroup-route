@@ -142,11 +142,33 @@ class OdometerExceptionRequestsDAO(BaseDAO):
             )
 
     @classmethod
-    async def list_pending(cls, *, company_id: int) -> list[OdometerExceptionRequest]:
-        """La cola del administrador: lo que espera decisión, lo más viejo primero."""
+    async def list_pending(cls, *, company_id: int) -> list[dict]:
+        """La cola del administrador: lo que espera decisión, lo más viejo primero.
+
+        Devuelve quién lo pidió y en qué vehículo, no sólo sus identificadores.
+        Un administrador no puede decidir sobre "el usuario 47 en el vehículo
+        12": aprobar una excepción de odómetro es un juicio sobre una persona y
+        una situación concretas, y una pantalla que sólo enseñe números empuja a
+        aprobar por inercia.
+        """
+        from app.routers_api.users.models import Users
+        from app.routers_api.vehicles.models import Vehicle
+
         async with db_session() as session:
             filas = await session.execute(
-                select(OdometerExceptionRequest)
+                select(
+                    OdometerExceptionRequest,
+                    Users.first_name,
+                    Users.last_name,
+                    Users.username,
+                    Vehicle.unit,
+                )
+                .join(Users, Users.id == OdometerExceptionRequest.requested_by)
+                .outerjoin(
+                    Vehicle,
+                    (Vehicle.id == OdometerExceptionRequest.vehicle_id)
+                    & (Vehicle.company_id == OdometerExceptionRequest.company_id),
+                )
                 .where(
                     OdometerExceptionRequest.company_id == company_id,
                     OdometerExceptionRequest.status
@@ -154,4 +176,11 @@ class OdometerExceptionRequestsDAO(BaseDAO):
                 )
                 .order_by(OdometerExceptionRequest.requested_at.asc())
             )
-            return list(filas.scalars().all())
+            return [
+                {
+                    "request": solicitud,
+                    "requested_by_name": f"{nombre} {apellido}".strip() or usuario,
+                    "vehicle_unit": unidad,
+                }
+                for solicitud, nombre, apellido, usuario, unidad in filas.all()
+            ]

@@ -86,6 +86,18 @@ class OdometerExceptionRead(BaseModel):
     version: int
 
 
+class OdometerExceptionQueueRead(OdometerExceptionRead):
+    """Una fila de la cola del administrador.
+
+    Lleva el nombre de quien la pidió y la unidad del vehículo porque quien
+    decide necesita saber sobre quién decide. Es un schema aparte del que recibe
+    el supervisor: a él no se le devuelve su propio nombre, que ya conoce.
+    """
+
+    requested_by_name: str
+    vehicle_unit: Optional[str] = None
+
+
 class OdometerPhotoResult(BaseModel):
     """Lo que se devuelve tras subir la foto.
 

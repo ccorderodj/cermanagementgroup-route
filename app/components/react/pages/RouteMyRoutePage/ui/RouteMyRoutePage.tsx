@@ -4,6 +4,18 @@ import { ConfirmDestructiveDialog } from '@/features/Common';
 import { NotBuiltYet, RouteMobileShell } from '@/widgets/RouteShell';
 import { TripContextPicker } from '@/features/RouteTrip';
 import {
+    OdometerCapture,
+    OdometerDistance,
+    OdometerPendingBanner,
+} from '@/features/RouteOdometer';
+import {
+    fetchSessionOdometer,
+    isOdometerResolved,
+    readingAsNumber,
+    type OdometerEvidence,
+    type OdometerSessionState,
+} from '@/entities/RouteOdometer';
+import {
     changeTripPlan,
     queueArrive,
     queuePlanTrip,
@@ -36,6 +48,12 @@ import { listPendingActions } from '@/shared/lib/offlineQueue';
  * gana el servidor. Un segundo dispositivo resuelve el mismo viaje en vez de
  * crear otro.
  *
+ * Y cuando el servidor rechaza algo, la pantalla **vuelve a preguntarle en qué
+ * estado está** en vez de leer el texto del error. Un 409 al cerrar la jornada
+ * puede ser un viaje sin terminar o una lectura de odómetro sin hacer, y
+ * distinguirlos comparando cadenas rompería el día que alguien mejore una
+ * frase.
+ *
  * Lo que no hace, a propósito
  * ----------------------------
  * No cierra un viaje operativo al llegar ni ofrece actividades: eso es RTE05.
@@ -59,6 +77,7 @@ type Vista =
     | { phase: 'planning'; session: WorkSession; trip: Trip }
     | { phase: 'on-route'; session: WorkSession; trip: Trip }
     | { phase: 'arrived'; session: WorkSession; trip: Trip }
+    | { phase: 'ending'; session: WorkSession }
     | { phase: 'end-queued'; session: WorkSession }
     | { phase: 'error' };
 
@@ -109,11 +128,14 @@ function Destino({ trip }: { trip: Trip }) {
 
 export const RouteMyRoutePage = () => {
     const [view, setView] = useState<Vista>({ phase: 'loading' });
+    const [odometro, setOdometro] = useState<OdometerSessionState | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
     // Elegir contexto y cambiar de plan usan el mismo formulario.
     const [eligiendo, setEligiendo] = useState(false);
     const [cambiandoPlan, setCambiandoPlan] = useState(false);
+    // El odómetro de inicio, abierto desde el aviso antes de elegir destino.
+    const [capturandoInicio, setCapturandoInicio] = useState(false);
     // La revisión de End Work con un viaje en ruta (D-07).
     const [revisandoCierre, setRevisandoCierre] = useState(false);
     const ultimaJornada = useRef<WorkSession | null>(null);
@@ -139,11 +161,19 @@ export const RouteMyRoutePage = () => {
 
             if (!sesion) {
                 ultimaJornada.current = null;
+                setOdometro(null);
                 setView({ phase: 'no-session' });
                 return;
             }
 
             ultimaJornada.current = sesion;
+
+            // La evidencia de odómetro se lee junto a la jornada: de ella
+            // depende si se puede salir, y no tenerla a mano obligaría a la
+            // pantalla a adivinar.
+            setOdometro(
+                await fetchSessionOdometer(sesion.id).catch(() => null),
+            );
 
             if (!viaje) {
                 setView({ phase: 'working', session: sesion });
@@ -218,26 +248,60 @@ export const RouteMyRoutePage = () => {
     };
 
     /**
-     * Cerrar la jornada. Con un viaje en ruta el servidor responde 409 y aquí
-     * se abre la revisión en vez de enseñar un error: el supervisor decide
-     * seguir trabajando o terminar de todos modos.
+     * Cerrar la jornada.
+     *
+     * `End Work` pasa por la cola durable, así que su resultado real llega en
+     * el `FlushResult`: un rechazo del servidor sale de la cola —no se
+     * reintentará solo y no cerrará el día por su cuenta— y vuelve aquí. Con un
+     * 409 la pantalla **relee el estado** y decide por él: viaje sin terminar
+     * abre la revisión de D-07; lectura de cierre pendiente abre la captura.
      */
     const cerrarJornada = async (session: WorkSession, deTodosModos = false) => {
         setBusy(true);
         setError(null);
         try {
             await queueEndWork(session.id, deTodosModos);
-            setRevisandoCierre(false);
-            setView({ phase: 'end-queued', session });
+            const resultado = await syncPendingWorkSessionActions();
+            const rechazo = resultado.rejected?.kind === 'worksession.end'
+                ? resultado.rejectedError
+                : null;
+
+            if (!rechazo) {
+                setRevisandoCierre(false);
+                setView({ phase: 'end-queued', session });
+                await reconcile();
+                return;
+            }
+
+            const estado = (rechazo as { response?: { status?: number } })
+                ?.response?.status;
+            if (estado !== 409) {
+                setError(detalleDeError(rechazo, 'Your workday could not be ended.'));
+                await reconcile();
+                return;
+            }
+
+            // 409: el servidor dice que falta algo. Cuál, lo dice su estado.
+            const actual = await fetchCurrentWorkSession().catch(() => null);
+            const viaje = actual?.current_trip ?? null;
+            if (viaje?.status === 'in_transit' && !deTodosModos) {
+                setRevisandoCierre(true);
+                await reconcile();
+                return;
+            }
+
+            const cierre = await fetchSessionOdometer(session.id).catch(() => null);
+            setOdometro(cierre);
+            if (cierre?.end && !isOdometerResolved(cierre.end.status)) {
+                setRevisandoCierre(false);
+                setView({ phase: 'ending', session });
+                return;
+            }
+
+            setError(detalleDeError(rechazo, 'Your workday could not be ended.'));
             await reconcile();
         } catch (err) {
-            const estado = (err as { response?: { status?: number } })
-                ?.response?.status;
-            if (estado === 409 && !deTodosModos) {
-                setRevisandoCierre(true);
-            } else {
-                setError(detalleDeError(err, 'Your workday could not be ended.'));
-            }
+            setError(detalleDeError(err, 'Your workday could not be ended.'));
             await reconcile();
         } finally {
             setBusy(false);
@@ -249,6 +313,17 @@ export const RouteMyRoutePage = () => {
         context_reference: trip.current_context_reference ?? null,
         standard_value_id: trip.current_standard_value_id ?? null,
     });
+
+    const inicio: OdometerEvidence | null = odometro?.start ?? null;
+    const faltaInicio = inicio !== null && !isOdometerResolved(inicio.status);
+    const capturandoOdometro = capturandoInicio && inicio !== null;
+    const distancia = readingAsNumber(odometro?.odometer_distance);
+
+    /** Vuelve al flujo que estaba en marcha, sin volver a elegir destino. */
+    const odometroResuelto = async () => {
+        setCapturandoInicio(false);
+        await reconcile();
+    };
 
     return (
         <RouteMobileShell title="My Route" active="my-route">
@@ -306,14 +381,39 @@ export const RouteMyRoutePage = () => {
                 {view.phase === 'working' && (
                     <div className="flex flex-col gap-6">
                         <Cabecera session={view.session} />
-                        {eligiendo ? (
+
+                        {/* El aviso, no un diálogo forzado: `Start Work` no es
+                            `Start Driving`, y quien empieza el día con trabajo
+                            de oficina no tiene por qué fotografiar nada. */}
+                        {faltaInicio && !capturandoInicio && !eligiendo && inicio && (
+                            <OdometerPendingBanner
+                                status={inicio.status}
+                                disabled={busy}
+                                onCapture={() => setCapturandoInicio(true)}
+                            />
+                        )}
+
+                        {capturandoOdometro && inicio && (
+                            <OdometerCapture
+                                sessionId={view.session.id}
+                                end="start"
+                                evidence={inicio}
+                                onResolved={odometroResuelto}
+                                onChanged={reconcile}
+                                onCancel={() => setCapturandoInicio(false)}
+                            />
+                        )}
+
+                        {!capturandoOdometro && eligiendo && (
                             <TripContextPicker
                                 busy={busy}
                                 confirmLabel="Prepare trip"
                                 onCancel={() => setEligiendo(false)}
                                 onConfirm={planificar}
                             />
-                        ) : (
+                        )}
+
+                        {!capturandoOdometro && !eligiendo && (
                             <>
                                 <Button
                                     size="lg"
@@ -340,15 +440,29 @@ export const RouteMyRoutePage = () => {
                 {view.phase === 'planning' && (
                     <div className="flex flex-col gap-6">
                         <Cabecera session={view.session} />
+                        {/* El plan se queda a la vista mientras se resuelve la
+                            lectura, y al confirmarla se vuelve exactamente a
+                            este mismo viaje: no se pierde lo ya elegido. */}
                         <Destino trip={view.trip} />
-                        <Button
-                            size="lg"
-                            className="h-16 w-full text-lg"
-                            disabled={busy}
-                            onClick={() => arrancarViaje(view.trip)}
-                        >
-                            Start Trip
-                        </Button>
+
+                        {faltaInicio && inicio ? (
+                            <OdometerCapture
+                                sessionId={view.session.id}
+                                end="start"
+                                evidence={inicio}
+                                onResolved={odometroResuelto}
+                                onChanged={reconcile}
+                            />
+                        ) : (
+                            <Button
+                                size="lg"
+                                className="h-16 w-full text-lg"
+                                disabled={busy}
+                                onClick={() => arrancarViaje(view.trip)}
+                            >
+                                Start Trip
+                            </Button>
+                        )}
                     </div>
                 )}
 
@@ -420,11 +534,45 @@ export const RouteMyRoutePage = () => {
                     </div>
                 )}
 
+                {view.phase === 'ending' && (
+                    <div className="flex flex-col gap-6">
+                        <Cabecera session={view.session} />
+                        <p className="text-center text-sm text-muted-foreground">
+                            One last thing before you finish.
+                        </p>
+                        {odometro?.end && (
+                            <OdometerCapture
+                                sessionId={view.session.id}
+                                end="end"
+                                evidence={odometro.end}
+                                onResolved={() => cerrarJornada(view.session, true)}
+                                onChanged={async () => {
+                                    // Pedida la excepción, el día ya puede
+                                    // cerrarse: la evidencia queda pendiente y
+                                    // `ended_at` se escribe a su hora real.
+                                    await cerrarJornada(view.session, true);
+                                }}
+                            />
+                        )}
+                        <Button
+                            variant="ghost"
+                            className="h-12 w-full"
+                            disabled={busy}
+                            onClick={() => reconcile()}
+                        >
+                            Keep working
+                        </Button>
+                    </div>
+                )}
+
                 {view.phase === 'end-queued' && (
-                    <p className="py-16 text-center text-sm text-muted-foreground">
-                        Ending your day… this will sync as soon as you have a
-                        connection.
-                    </p>
+                    <div className="flex flex-col gap-3 py-16">
+                        <p className="text-center text-sm text-muted-foreground">
+                            Ending your day… this will sync as soon as you have a
+                            connection.
+                        </p>
+                        <OdometerDistance distance={distancia} />
+                    </div>
                 )}
             </div>
 

@@ -578,7 +578,7 @@ async def test_the_end_reading_is_not_required_without_any_vehicle_trip(
     )
     assert fin.status == "not_required"
 
-    distancia = await OdometerService.distance_for_session(
+    _, _, distancia = await OdometerService.session_state(
         company_id=seeded.alpha.id, work_session_id=jornada["id"]
     )
     assert distancia is None, "no se fabrica una distancia cero"

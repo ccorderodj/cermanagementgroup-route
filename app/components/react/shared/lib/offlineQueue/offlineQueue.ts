@@ -161,6 +161,35 @@ export interface FlushResult {
     synced: string[];
     stoppedAt: string | null;
     stoppedReason: string | null;
+    /** La acción que el servidor rechazó por sus méritos, si la hubo. */
+    rejected: PendingAction | null;
+    /** El error tal cual, para que quien llamó pueda leer su código. */
+    rejectedError: unknown;
+}
+
+/**
+ * Un rechazo del servidor no es un fallo de red.
+ *
+ * Reintentar tiene sentido cuando la acción **podría** salir bien más tarde:
+ * sin cobertura, con un 5xx, o con un 408/429 que piden esperar. No lo tiene
+ * cuando el servidor la evaluó y dijo que no: un 409 de "sigues en ruta" o un
+ * 422 de "falta el dato" van a decir exactamente lo mismo dentro de una hora.
+ *
+ * Dejar esas en la cola era peor que inútil. `enviarEnOrden` se detiene en el
+ * primer fallo para preservar el orden, así que una acción rechazada para
+ * siempre **bloquea todo lo que venga detrás**: la jornada siguiente no se
+ * abriría nunca. Y si algún día dejara de bloquear, sería peor aún — un
+ * `End Work` que el supervisor descartó al elegir "seguir trabajando" se
+ * reenviaría solo y le cerraría el día sin que nadie lo pidiera.
+ *
+ * Así que se retira de la cola y se devuelve a quien llamó, que es el único
+ * que sabe qué hacer con un 409 concreto.
+ */
+function esRechazoDefinitivo(error: unknown): boolean {
+    const estado = (error as { response?: { status?: number } })?.response?.status;
+    if (typeof estado !== 'number') return false;
+    if (estado === 408 || estado === 429) return false;
+    return estado >= 400 && estado < 500;
 }
 
 /**
@@ -177,7 +206,13 @@ async function enviarEnOrden(
     sincronizadas: string[],
 ): Promise<FlushResult> {
     if (indice >= pendientes.length) {
-        return { synced: sincronizadas, stoppedAt: null, stoppedReason: null };
+        return {
+            synced: sincronizadas,
+            stoppedAt: null,
+            stoppedReason: null,
+            rejected: null,
+            rejectedError: null,
+        };
     }
 
     const accion = pendientes[indice];
@@ -187,8 +222,24 @@ async function enviarEnOrden(
         await removeAction(accion.id);
     } catch (error) {
         const mensaje = error instanceof Error ? error.message : String(error);
+        if (esRechazoDefinitivo(error)) {
+            await removeAction(accion.id);
+            return {
+                synced: sincronizadas,
+                stoppedAt: accion.id,
+                stoppedReason: mensaje,
+                rejected: accion,
+                rejectedError: error,
+            };
+        }
         await markFailed(accion.id, mensaje);
-        return { synced: sincronizadas, stoppedAt: accion.id, stoppedReason: mensaje };
+        return {
+            synced: sincronizadas,
+            stoppedAt: accion.id,
+            stoppedReason: mensaje,
+            rejected: null,
+            rejectedError: null,
+        };
     }
 
     return enviarEnOrden(pendientes, indice + 1, sendAction, [...sincronizadas, accion.id]);

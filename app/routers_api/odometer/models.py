@@ -82,6 +82,21 @@ RESOLVED_STATUSES = (
 )
 
 
+#: Estados que **no** impiden cerrar la jornada (Opción B de CER, C4).
+#:
+#: La diferencia con `RESOLVED_STATUSES` es deliberada y es el corazón de la
+#: Opción B: para *salir a conducir* hace falta una lectura de verdad, así que
+#: una excepción pedida o aprobada no vale. Para *terminar el día* sí basta con
+#: haberla pedido — el supervisor ya acabó, ya no va a conducir más, y
+#: retenerle la jornada abierta hasta que alguien revise su solicitud movería
+#: `ended_at` a una hora que no ocurrió. La jornada se cierra con su hora real
+#: y la evidencia queda explícitamente pendiente.
+END_WORK_UNBLOCKING_STATUSES = RESOLVED_STATUSES + (
+    OdometerStatus.EXCEPTION_REQUESTED.value,
+    OdometerStatus.EXCEPTION_APPROVED.value,
+)
+
+
 class OdometerEvidenceMethod(BusinessEnum):
     """Cómo se obtuvo la lectura. **Nunca se disfraza una de la otra.**
 

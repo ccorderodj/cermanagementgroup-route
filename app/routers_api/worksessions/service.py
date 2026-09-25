@@ -310,6 +310,20 @@ class WorkSessionService:
                 device_captured_at=device_captured_at,
             )
 
+        # Los bloqueos del viaje **primero**, la evidencia de cierre después: es
+        # el orden que pide C4. Un viaje en tránsito hay que resolverlo antes de
+        # pedir una lectura final, porque el kilometraje todavía puede cambiar.
+        #
+        # Esta guarda es más blanda que la de `Start Trip` a propósito: deja
+        # cerrar el día con la excepción pedida aunque nadie la haya aprobado
+        # todavía (Opción B). Quien termina ya no va a conducir, y retenerle la
+        # jornada abierta escribiría un `ended_at` que no ocurrió.
+        from app.routers_api.odometer.service import OdometerService
+
+        await OdometerService.ensure_end_work_not_blocked(
+            company_id=company_id, work_session_id=session_id
+        )
+
         recibido_en = datetime.now(timezone.utc)
         # `not_before` es el `started_at` de esta misma jornada: un `End Work`
         # anterior a su propio `Start Work` es evidencia imposible, no un dato

@@ -1,10 +1,11 @@
 """
 Configuración de CER Route en el shell de administración.
 
-Las dos pantallas que RTE02 entrega funcionando: vehículos (con sus
-asignaciones) y listas estandarizadas. Cada una exige en el servidor la misma
-capacidad que exige su API, para que el enlace no lleve a una pantalla que
-después devuelve 403 (AUD-FE-013).
+Las pantallas de configuración y revisión que Route entrega funcionando:
+vehículos (con sus asignaciones), listas estandarizadas y —desde RTE04— la cola
+de excepciones de odómetro. Cada una exige en el servidor la misma capacidad que
+exige su API, para que el enlace no lleve a una pantalla que después devuelve 403
+(AUD-FE-013).
 
 Today/Live, Activity y Reports **no se registran aquí**. Son de checkpoints
 posteriores, y una ruta registrada con una pantalla vacía sería exactamente lo
@@ -65,6 +66,23 @@ async def get_route_vehicles_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="admin/route/vehicles.html",
+        context={},
+    )
+
+
+@router.get(
+    "/odometer-exceptions",
+    name="RouteOdometerExceptionsPage",
+    # La misma capacidad que exigen los endpoints de decisión. Pedir aquí una
+    # distinta llevaría a una pantalla que después devuelve 403 (AUD-FE-013), y
+    # `route.records.adjust` es autoridad de administración a propósito: quien
+    # ejecuta la jornada no puede aprobar su propia excepción.
+    dependencies=[Depends(require_page_permissions(["route.records.adjust"]))],
+)
+async def get_route_odometer_exceptions_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/odometer-exceptions.html",
         context={},
     )
 
