@@ -150,6 +150,7 @@ async def end_work(
         session_id=session_id,
         device_captured_at=payload.device_captured_at if payload else None,
         utc_offset_minutes=payload.utc_offset_minutes if payload else None,
+        end_anyway=payload.end_anyway if payload else False,
     )
     resultado = WorkSessionRead.model_validate(jornada)
 

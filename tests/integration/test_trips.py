@@ -709,3 +709,115 @@ async def test_current_does_not_leak_another_tenants_trip(seeded, alpha_client):
     assert actual["current_trip"] is None, (
         "cada tenant ve su propio estado, nunca el del otro"
     )
+
+
+# ── Revisión de End Work con viaje en curso (D-07, §7 de la resolución 003) ──
+
+
+async def test_ending_work_in_transit_is_a_review_not_a_silent_close(
+    seeded, alpha_client,
+):
+    """Con un viaje en ruta, cerrar no cierra: pide confirmación."""
+    jornada = await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    respuesta = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+
+    assert respuesta.status_code == 409
+    assert "still on route" in respuesta.json()["detail"].lower()
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["work_session"]["status"] == "active", "la jornada sigue abierta"
+    assert actual["current_trip"]["status"] == "in_transit", "y el viaje también"
+
+
+async def test_continue_working_restores_the_same_trip(seeded, alpha_client):
+    """"Continue Working" es no confirmar: nada cambia, ni se crea otro viaje."""
+    jornada = await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["current_trip"]["id"] == viaje["id"]
+    assert actual["current_trip"]["status"] == "in_transit"
+
+    async with async_session_maker() as session:
+        filas = await session.execute(
+            select(Trip).where(Trip.work_session_id == jornada["id"])
+        )
+    assert len(filas.scalars().all()) == 1, "la revisión no crea un segundo viaje"
+
+
+async def test_end_work_anyway_interrupts_without_faking_an_arrival(
+    seeded, alpha_client,
+):
+    """El viaje se corta a medias y así queda escrito: nunca como llegada."""
+    jornada = await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    respuesta = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={"end_anyway": True}
+    )
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["status"] == "ended"
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(select(Trip).where(Trip.id == viaje["id"]))
+
+    assert fila.status == "interrupted"
+    assert fila.arrived_at is None, "no se fabrica una llegada que no ocurrió"
+    assert fila.ended_at is not None
+
+
+async def test_an_arrived_operational_trip_does_not_block_end_work(
+    seeded, alpha_client,
+):
+    """Llegar no bloquea cerrar, y cerrar no cierra el viaje.
+
+    Completar un viaje operativo es de RTE05. Ni se inventa su cierre ni se
+    inventa un bloqueo: ninguna de las dos cosas está definida en el baseline.
+    """
+    jornada = await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    respuesta = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert respuesta.status_code == 200, respuesta.text
+
+    async with async_session_maker() as session:
+        fila = await session.scalar(select(Trip).where(Trip.id == viaje["id"]))
+    assert fila.status == "arrived", "el viaje operativo sigue esperando a RTE05"
+
+
+async def test_ending_work_without_any_trip_still_works(seeded, alpha_client):
+    """A-1 intacto: una jornada sin viajes cierra sin ceremonia."""
+    jornada = await _abrir_jornada(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert respuesta.status_code == 200
+    assert respuesta.json()["status"] == "ended"
+
+
+async def test_a_closed_home_trip_does_not_trigger_the_review(seeded, alpha_client):
+    """Un viaje ya terminado no está en ruta, así que no hay nada que revisar."""
+    jornada = await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client, purpose="home")
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    respuesta = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert respuesta.status_code == 200

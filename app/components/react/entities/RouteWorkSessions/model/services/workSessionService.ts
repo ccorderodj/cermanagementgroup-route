@@ -32,11 +32,22 @@ export async function queueStartWork(): Promise<PendingAction> {
     return enqueueAction('worksession.start', '/worksessions', { ...captureTimeEvidence() });
 }
 
-export async function queueEndWork(sessionId: number): Promise<PendingAction> {
+/**
+ * Cierra la jornada.
+ *
+ * `endAnyway` es la confirmación explícita del supervisor tras ver que todavía
+ * está en ruta. Sin ella el servidor responde 409 y la pantalla ofrece seguir
+ * trabajando o terminar de todos modos (D-07): no se cierra por descuido lo
+ * que alguien dejó a medias.
+ */
+export async function queueEndWork(
+    sessionId: number,
+    endAnyway = false,
+): Promise<PendingAction> {
     return enqueueAction(
         'worksession.end',
         `/worksessions/${sessionId}/end`,
-        { ...captureTimeEvidence() },
+        { ...captureTimeEvidence(), end_anyway: endAnyway },
     );
 }
 

@@ -35,10 +35,19 @@ class WorkSessionStart(BaseModel):
 
 
 class WorkSessionEnd(BaseModel):
+    """Cerrar la jornada. Con un viaje en curso, es una revisión.
+
+    `end_anyway` es la confirmación **explícita** del supervisor tras ver que
+    todavía está en ruta. Sin ella, el servidor rechaza el cierre y devuelve el
+    viaje vivo para que la pantalla pueda ofrecer "Continue Working" o "End
+    Work Anyway" (D-07). No se cierra por descuido lo que alguien dejó a medias.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     device_captured_at: Optional[datetime] = None
     utc_offset_minutes: Optional[int] = Field(default=None, ge=-720, le=840)
+    end_anyway: bool = False
 
 
 class WorkSessionVehicleSnapshot(BaseModel):
