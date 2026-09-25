@@ -1,6 +1,7 @@
 import { $api, parseApi } from '@/shared/api';
 import { enqueueAction, flushQueue, type FlushResult, type PendingAction } from '@/shared/lib/offlineQueue';
-import { currentWorkSessionSchema, type CurrentWorkSessionResponse, type TimeEvidence } from '../types';
+import { captureTimeEvidence } from '@/shared/lib/utils/utils';
+import { currentWorkSessionSchema, type CurrentWorkSessionResponse } from '../types';
 
 /**
  * Servicio de la Jornada: lectura directa, escritura siempre por la cola.
@@ -14,15 +15,6 @@ import { currentWorkSessionSchema, type CurrentWorkSessionResponse, type TimeEvi
  * reautenticarse (§14 de las instrucciones RTE03).
  */
 
-function captureTimeEvidence(): TimeEvidence {
-    return {
-        device_captured_at: new Date().toISOString(),
-        // `getTimezoneOffset()` devuelve minutos al OESTE de UTC; el backend
-        // espera minutos al ESTE (D-10), de ahí el signo invertido.
-        utc_offset_minutes: -new Date().getTimezoneOffset(),
-    };
-}
-
 export async function fetchCurrentWorkSession(): Promise<CurrentWorkSessionResponse> {
     const response = await $api.get('/worksessions/current');
     return parseApi(currentWorkSessionSchema, response.data, 'fetchCurrentWorkSession');
@@ -32,11 +24,22 @@ export async function queueStartWork(): Promise<PendingAction> {
     return enqueueAction('worksession.start', '/worksessions', { ...captureTimeEvidence() });
 }
 
-export async function queueEndWork(sessionId: number): Promise<PendingAction> {
+/**
+ * Cierra la jornada.
+ *
+ * `endAnyway` es la confirmación explícita del supervisor tras ver que todavía
+ * está en ruta. Sin ella el servidor responde 409 y la pantalla ofrece seguir
+ * trabajando o terminar de todos modos (D-07): no se cierra por descuido lo
+ * que alguien dejó a medias.
+ */
+export async function queueEndWork(
+    sessionId: number,
+    endAnyway = false,
+): Promise<PendingAction> {
     return enqueueAction(
         'worksession.end',
         `/worksessions/${sessionId}/end`,
-        { ...captureTimeEvidence() },
+        { ...captureTimeEvidence(), end_anyway: endAnyway },
     );
 }
 

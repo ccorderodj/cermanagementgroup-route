@@ -6,7 +6,7 @@ no llega al DAO, la rechaza FastAPI con 422. Las ocho son producto; los valores
 de dentro, del tenant.
 """
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
@@ -22,7 +22,25 @@ from app.routers_api.standardvalues.schemas import (
 from app.routers_api.standardvalues.service import LIST_LABELS, StandardValueService
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
-from app.routers_api.users.permissions import require_permissions
+from app.routers_api.users.permissions import (
+    get_user_permissions,
+    require_permissions,
+)
+
+
+async def _exigir_administracion_de_listas(*, user_id: int, company_id: int) -> None:
+    """403 si quien llama no administra las listas.
+
+    Se comprueba aquí y no en una dependencia porque sólo aplica a **una**
+    variante de la petición: pedir los valores retirados. El caso operativo lo
+    resuelve la autorización declarativa del endpoint.
+    """
+    concedidas = await get_user_permissions(user_id=user_id, company_id=company_id)
+    if "route.standardvalues.manage" not in concedidas:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing permissions: route.standardvalues.manage",
+        )
 
 
 router = APIRouter(prefix="/standard-values", tags=["Route · Standard values"])
@@ -56,9 +74,31 @@ async def get_values(
             "operativo, no."
         ),
     ),
-    _authz: None = Depends(require_permissions(["route.standardvalues.manage"])),
+    # Dos audiencias, una lectura. El administrador configura estas listas; el
+    # supervisor **tiene que poder leerlas** para elegir el valor que su viaje
+    # exige antes de salir. Sin esto, Employee Visit, Check Delivery y Office
+    # eran imposibles de arrancar desde el móvil: el formulario pedía un valor
+    # obligatorio y recibía 403 al buscar las opciones (RTE04-C5).
+    #
+    # Se resuelve con "cualquiera de las dos" y **no** concediendo
+    # `standardvalues.manage` al supervisor, que le dejaría crear y borrar las
+    # listas del tenant. Leer para elegir no es administrar.
+    _authz: None = Depends(
+        require_permissions(
+            ["route.standardvalues.manage", "route.worksession.execute"],
+            require_all=False,
+        )
+    ),
+    current_user: Users = Depends(get_current_user),
     company: TenantContext = Depends(get_company_required),
 ) -> list[StandardValueRead]:
+    if include_inactive:
+        # Los valores retirados son cosa de administración: un formulario
+        # operativo que los ofreciera dejaría elegir algo que ya se retiró.
+        await _exigir_administracion_de_listas(
+            user_id=current_user.id, company_id=company.id
+        )
+
     filas = await StandardValuesDAO.list_for_code(
         company_id=company.id,
         list_code=list_code.value,

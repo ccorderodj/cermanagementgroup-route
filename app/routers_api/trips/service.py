@@ -43,7 +43,7 @@ from app.routers_api.trips.models import (
     TripPurposeChange,
     TripStatus,
 )
-from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
+from app.routers_api.worksessions.models import WorkSession
 from app.routers_api.worksessions.service import _resolve_occurrence
 
 
@@ -61,8 +61,12 @@ async def _validar_valor_de_contexto(
       un Delivery Type en una visita a oficina sería cruzar contextos, que el
       baseline prohíbe de forma explícita.
 
-    El valor es opcional: un supervisor puede no rellenarlo. Lo que no puede es
-    rellenarlo con algo de otra lista.
+    En el momento de **elegirlo** el valor puede omitirse —el viaje se queda en
+    `PLANNING` hasta que el supervisor lo complete—, pero no puede ser de otra
+    lista ni de otro tenant, ni uno que el administrador haya borrado: un valor
+    retirado de la administración no vuelve a ofrecerse. Los viajes antiguos que
+    ya lo eligieron lo conservan, porque RTE02-A01 dejó esos borrados como
+    lápida y la fila sigue resolviendo.
     """
     if standard_value_id is None:
         return
@@ -76,14 +80,48 @@ async def _validar_valor_de_contexto(
 
     from app.routers_api.standardvalues.dao import StandardValuesDAO
 
-    valor = await StandardValuesDAO.get_including_deleted(
-        value_id=standard_value_id, company_id=company_id
+    valor = await StandardValuesDAO.find_selectable(
+        value_id=standard_value_id, company_id=company_id, list_code=lista
     )
-    if valor is None or valor.list_code != lista:
+    if valor is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="That value does not belong to this trip context.",
         )
+
+
+#: Cómo se llama en pantalla el dato que falta, por contexto. El mensaje de
+#: error acaba delante del supervisor, así que dice qué tiene que hacer —no qué
+#: restricción interna se incumplió.
+_NOMBRE_DEL_DATO: dict[str, str] = {
+    TripPurpose.EMPLOYEE_VISIT.value: "a reason for this employee visit",
+    TripPurpose.CHECK_DELIVERY.value: "a delivery type",
+    TripPurpose.OFFICE.value: "a purpose for this office visit",
+}
+
+
+def _exigir_dato_de_planificacion(
+    *, purpose: str, standard_value_id: int | None
+) -> None:
+    """Los tres contextos de pre-viaje no salen sin su dato.
+
+    CER lo fijó en la resolución 003: el viaje puede quedarse en `PLANNING`
+    mientras el supervisor completa el formulario, pero `Start Trip` se rechaza
+    hasta que el valor aplicable esté puesto. Los otros cuatro contextos no
+    tienen dato de pre-viaje que exigir — lo suyo se elige al llegar, y eso es
+    RTE05.
+
+    Nada se infiere: un valor que falta se pide, no se rellena solo.
+    """
+    if purpose not in PRETRIP_STANDARD_LIST:
+        return
+    if standard_value_id is not None:
+        return
+
+    raise HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail=f"Choose {_NOMBRE_DEL_DATO[purpose]} before starting the trip.",
+    )
 
 
 async def _jornada_activa(*, company_id: int, user_id: int) -> WorkSession:
@@ -197,8 +235,16 @@ class TripService:
     ) -> Trip:
         """`PLANNING → IN_TRANSIT`.
 
-        Exige que la jornada siga abierta: arrancar un viaje en una jornada ya
-        cerrada dejaría un desplazamiento sin dueño.
+        Tres condiciones antes de salir:
+
+        * La jornada sigue abierta. Arrancar un viaje en una jornada cerrada
+          dejaría un desplazamiento sin dueño.
+        * El dato de planificación obligatorio de ese contexto está puesto. El
+          viaje puede existir en `PLANNING` mientras el supervisor rellena el
+          formulario; lo que no puede es **salir** sin él.
+        * La lectura inicial del odómetro está resuelta, si la jornada lleva
+          vehículo. La comprobación es del servidor: que la pantalla esconda el
+          botón es experiencia de usuario, no un control (invariante 8).
         """
         viaje = await TripService._propio(
             company_id=company_id, user_id=user_id, trip_id=trip_id
@@ -213,6 +259,18 @@ class TripService:
             )
 
         await _jornada_activa(company_id=company_id, user_id=user_id)
+        _exigir_dato_de_planificacion(
+            purpose=viaje.current_purpose,
+            standard_value_id=viaje.current_standard_value_id,
+        )
+
+        # Importación diferida: el odómetro consulta viajes para decidir si hace
+        # falta lectura de cierre, así que importarlo arriba cerraría el ciclo.
+        from app.routers_api.odometer.service import OdometerService
+
+        await OdometerService.ensure_start_reading_resolved(
+            company_id=company_id, work_session_id=viaje.work_session_id
+        )
 
         recibido, ocurrido = _momentos(device_captured_at)
 

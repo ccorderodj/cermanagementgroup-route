@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { tripSchema } from '@/entities/RouteTrips';
 
 /**
  * La Jornada, tal y como la sirve `GET /worksessions/current`.
@@ -31,17 +32,15 @@ export type WorkSession = z.infer<typeof workSessionSchema>;
 /**
  * El sobre de `GET /worksessions/current`.
  *
- * Diseñado para crecer: RTE04 añadirá `current_trip` a este mismo tipo, no un
- * segundo endpoint de estado. Aquí solo se declara lo que RTE03 entrega.
+ * Crece, no se duplica: RTE04 añadió `current_trip` a este mismo tipo y RTE05
+ * añadirá `current_activity` igual. Nunca un segundo endpoint de estado — dos
+ * fuentes de verdad para la misma pregunta acaban discrepando.
  */
 export const currentWorkSessionSchema = z.object({
     work_session: workSessionSchema.nullable(),
+    // El viaje **vivo**, si lo hay. Un viaje operativo en `arrived` sigue
+    // siéndolo —espera a RTE05—; uno cerrado o interrumpido ya no.
+    current_trip: tripSchema.nullable().optional(),
 });
 
 export type CurrentWorkSessionResponse = z.infer<typeof currentWorkSessionSchema>;
-
-/** Lo que el dispositivo aporta como evidencia de tiempo local (D-10). */
-export interface TimeEvidence {
-    device_captured_at?: string;
-    utc_offset_minutes?: number;
-}

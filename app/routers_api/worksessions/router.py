@@ -33,6 +33,8 @@ from app.routers_api.worksessions.schemas import (
     WorkSessionRead,
     WorkSessionStart,
 )
+from app.routers_api.trips.schemas import TripRead
+from app.routers_api.trips.service import TripService
 from app.routers_api.worksessions.service import WorkSessionService
 
 
@@ -49,13 +51,29 @@ async def get_current_work_session(
     company: TenantContext = Depends(get_company_required),
 ) -> CurrentWorkSessionResponse:
     """El estado del que arranca cualquier reapertura, reconexión o segundo
-    dispositivo (§12). Nunca inventa un Trip o una Activity que no existen
-    todavía en este checkpoint."""
+    dispositivo.
+
+    Devuelve la jornada abierta y, si lo hay, su viaje **vivo**. Un segundo
+    dispositivo resuelve exactamente el mismo viaje en vez de crear otro, y una
+    recarga o una reautenticación recuperan el mismo estado: esta respuesta es
+    la única autoridad, y el cliente nunca se fía de lo que tenga guardado.
+
+    Sin viaje vivo, `current_trip` es `null`. No se inventa un marcador de
+    posición, y no se devuelve una Activity: ese dominio es de RTE05 y no
+    existe todavía.
+    """
     jornada = await WorkSessionService.current(
         company_id=company.id, user_id=current_user.id
     )
+    if jornada is None:
+        return CurrentWorkSessionResponse()
+
+    viaje = await TripService.current(
+        company_id=company.id, work_session_id=jornada.id
+    )
     return CurrentWorkSessionResponse(
-        work_session=WorkSessionRead.model_validate(jornada) if jornada else None
+        work_session=WorkSessionRead.model_validate(jornada),
+        current_trip=TripRead.model_validate(viaje) if viaje else None,
     )
 
 
@@ -132,6 +150,7 @@ async def end_work(
         session_id=session_id,
         device_captured_at=payload.device_captured_at if payload else None,
         utc_offset_minutes=payload.utc_offset_minutes if payload else None,
+        end_anyway=payload.end_anyway if payload else False,
     )
     resultado = WorkSessionRead.model_validate(jornada)
 
