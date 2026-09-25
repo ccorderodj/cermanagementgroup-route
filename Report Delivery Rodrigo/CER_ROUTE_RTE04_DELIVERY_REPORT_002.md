@@ -76,6 +76,8 @@ bcce308  RTE04-C1 closure: current trip in the state envelope, required pre-trip
 | No current Trip returns `null`, not a placeholder | `Optional[TripRead] = None` | `test_trips.py` | none |
 | CLOSED / INTERRUPTED not returned as current | `TERMINAL_STATUSES` excludes them; `ARRIVED` deliberately stays current | `test_trips.py` | none |
 | Second device resolves the same Trip | Server-side resolution; screen holds no authority | browser flow 6 — trip count unchanged in PostgreSQL | none |
+| Tenant **and Supervisor** ownership server-enforced | State resolves from the authenticated session, never from the request | `test_current_does_not_leak_another_tenants_trip` and `test_current_does_not_leak_another_supervisors_trip` — isolation inside one tenant, not only between tenants | none |
+| Reload / reconnect / **reauthentication** resolve the same Trip | Same envelope, re-read after losing the session | `test_reauthenticating_resolves_the_same_current_trip`; browser flows 5 and 6 | none |
 | Employee Visit / Check Delivery / Office cannot Start Trip without their value | `_exigir_dato_de_planificacion` in `trips/service.py` | `test_trips.py` (9 discriminating tests) | none |
 | Wrong-list value rejected; other tenant's value rejected; tombstoned value not selectable | `StandardValuesDAO.find_selectable` | `test_trips.py` | none |
 | Post-arrival fields absent from the pre-trip contract | Not present in any RTE04 schema | `test_trips.py` | none |
@@ -243,9 +245,9 @@ This is queue *retry policy*, not RTE03 lifecycle or time semantics, so §12 is 
 | Platform + integration primitives + maker-checker | 49 | `0` | 128s |
 | Route configuration + admin lifecycle | 140 | `0` | 587s |
 | Data: constraints, pagination, tenant isolation | 47 | `0` | 117s |
-| Work Sessions + Trips | 102 | `0` | 496s |
+| Work Sessions + Trips | 106 | `0` | 512s |
 | Odometer (START + END) | 48 | `0` | 604s |
-| **Total** | **570** | **0 failures** | |
+| **Total** | **574** | **0 failures** | |
 
 Plus the three authorization tests added for §0.1 and the eleven added during the final clause-by-clause review of §4, §8 and §10: `14/14 PASS`.
 

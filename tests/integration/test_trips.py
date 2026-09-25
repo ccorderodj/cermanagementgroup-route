@@ -910,3 +910,90 @@ async def test_a_device_time_in_the_future_is_not_believed(seeded, alpha_client)
     assert fila.started_at <= fila.started_received_at, (
         "no se acepta un viaje que arrancó en el futuro"
     )
+
+
+# ── Recuperación tras reautenticarse (§2.1 y §3 de las instrucciones 003) ─────
+
+
+async def test_reauthenticating_resolves_the_same_current_trip(
+    seeded, alpha_client,
+):
+    """Perder la sesión y volver a entrar devuelve **el mismo** viaje.
+
+    Es el caso que de verdad ocurre en campo: la cookie caduca mientras el
+    supervisor conduce, o cierra la aplicación y vuelve. Recargar y un segundo
+    dispositivo ya estaban cubiertos; esto cubre la tercera forma que nombra la
+    resolución, y es la que más se parece a un incidente real.
+
+    Lo que se comprueba no es sólo que devuelva algo: que devuelva el mismo
+    identificador y que **no haya creado otro viaje** por el camino.
+    """
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    # Se pierde la sesión, igual que una cookie que expira.
+    await alpha_client.post("/api/public/auth/logout")
+    sin_sesion = await alpha_client.get("/api/worksessions/current")
+    assert sin_sesion.status_code == 401, "sin sesión no se sirve estado"
+
+    # Cerrar sesión borra también el testigo CSRF; un navegador vuelve a cargar
+    # `/login` y recibe uno nuevo.
+    await alpha_client.reload_login_page()
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["current_trip"] is not None
+    assert actual["current_trip"]["id"] == viaje["id"]
+    assert actual["current_trip"]["status"] == "in_transit"
+
+    async with async_session_maker() as session:
+        filas = await session.execute(
+            select(Trip).where(Trip.work_session_id == viaje["work_session_id"])
+        )
+    assert len(filas.scalars().all()) == 1, (
+        "reautenticarse no puede fabricar un segundo viaje"
+    )
+
+
+async def test_current_does_not_leak_another_supervisors_trip(
+    seeded, alpha_client,
+):
+    """El aislamiento no es sólo entre tenants: también dentro de uno.
+
+    Dos supervisores de la misma compañía trabajan a la vez. El estado se
+    resuelve por la sesión autenticada, nunca por algo que llegue en la
+    petición, así que el viaje de uno no puede aparecer en la pantalla del otro.
+    """
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+
+    # Un segundo supervisor del **mismo** tenant, con su propia jornada.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    otro = (
+        await alpha_client.post(
+            "/api/users",
+            json={
+                "username": "supdos",
+                "email": "supdos@alpha.example.com",
+                "first_name": "Sup", "last_name": "Dos",
+                "password": TEST_PASSWORD,
+                "role_id": seeded.alpha.roles["supervisor"],
+            },
+        )
+    ).json()
+
+    async with TenantClient("alpha") as segundo:
+        await segundo.login(otro["email"])
+        await segundo.post("/api/worksessions", json={})
+        actual = (await segundo.get("/api/worksessions/current")).json()
+
+    assert actual["work_session"] is not None, "tiene su propia jornada"
+    assert actual["current_trip"] is None, (
+        "el viaje del otro supervisor no aparece aquí"
+    )
+
+    # Y el dueño sigue viendo el suyo, intacto.
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    propio = (await alpha_client.get("/api/worksessions/current")).json()
+    assert propio["current_trip"]["id"] == viaje["id"]
