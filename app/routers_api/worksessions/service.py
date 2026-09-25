@@ -254,6 +254,7 @@ class WorkSessionService:
         session_id: int,
         device_captured_at: datetime | None,
         utc_offset_minutes: int | None,
+        end_anyway: bool = False,
     ) -> WorkSession:
         """Cierra la jornada del supervisor que llama. Nunca otra.
 
@@ -261,6 +262,18 @@ class WorkSessionService:
         las dos sea, la respuesta no distingue — es el mismo principio que
         "un recurso de otro tenant no se confirma que existe", aplicado aquí a
         la propiedad de la jornada dentro del mismo tenant.
+
+        Revisión con viaje en curso (D-07)
+        -----------------------------------
+        Si queda un viaje **en tránsito**, cerrar no es una acción destructiva
+        automática: es una revisión. Sin `end_anyway` el servidor responde 409
+        y la pantalla ofrece seguir trabajando o terminar de todos modos. Con
+        `end_anyway`, el viaje queda **interrumpido** — no se fabrica una
+        llegada que no ocurrió — y después se cierra la jornada.
+
+        Un viaje operativo en `ARRIVED` **no** bloquea el cierre y **no se
+        cierra**: completarlo es de RTE05, y ni inventar su cierre ni inventar
+        un bloqueo serían comportamientos que el baseline defina.
         """
         existente = await WorkSessionsDAO.get_for_company_and_owner(
             session_id=session_id, company_id=company_id, user_id=user_id
@@ -275,6 +288,41 @@ class WorkSessionService:
             # Replay seguro: la acción ya se aplicó, y reenviarla no debe
             # fallar ni volver a aplicarse.
             return existente
+
+        # Importación diferida: `trips` depende de este módulo para la
+        # semántica de tiempo, así que importarlo arriba cerraría el ciclo.
+        from app.routers_api.trips.models import TripStatus
+        from app.routers_api.trips.service import TripService
+
+        en_ruta = await TripService.current(
+            company_id=company_id, work_session_id=session_id
+        )
+        if en_ruta is not None and en_ruta.status == TripStatus.IN_TRANSIT.value:
+            if not end_anyway:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="You are still on route. Continue working, or end anyway.",
+                )
+            await TripService.interrupt(
+                company_id=company_id,
+                user_id=user_id,
+                trip_id=en_ruta.id,
+                device_captured_at=device_captured_at,
+            )
+
+        # Los bloqueos del viaje **primero**, la evidencia de cierre después: es
+        # el orden que pide C4. Un viaje en tránsito hay que resolverlo antes de
+        # pedir una lectura final, porque el kilometraje todavía puede cambiar.
+        #
+        # Esta guarda es más blanda que la de `Start Trip` a propósito: deja
+        # cerrar el día con la excepción pedida aunque nadie la haya aprobado
+        # todavía (Opción B). Quien termina ya no va a conducir, y retenerle la
+        # jornada abierta escribiría un `ended_at` que no ocurrió.
+        from app.routers_api.odometer.service import OdometerService
+
+        await OdometerService.ensure_end_work_not_blocked(
+            company_id=company_id, work_session_id=session_id
+        )
 
         recibido_en = datetime.now(timezone.utc)
         # `not_before` es el `started_at` de esta misma jornada: un `End Work`

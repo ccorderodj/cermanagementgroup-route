@@ -65,6 +65,14 @@ export const businessNavigation: INavMainItem[] = [
                 url: '/admin/route/standard-values',
                 requiredPermission: 'route.standardvalues.manage',
             },
+            {
+                title: 'Odometer Exceptions',
+                url: '/admin/route/odometer-exceptions',
+                // La misma capacidad que exige la pagina en el servidor y que
+                // exigen los endpoints de decision. No `route.vehicles.read`:
+                // ver la flota no autoriza a decidir sobre su evidencia.
+                requiredPermission: 'route.records.adjust',
+            },
         ],
     },
 ];

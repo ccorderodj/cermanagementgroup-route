@@ -518,3 +518,59 @@ async def test_user_administration_is_audited_by_core(seeded, alpha_client):
         "registrarla; si no lo hace, es un hallazgo que hay que reportar, no "
         "algo que Route deba resolver con un mecanismo paralelo."
     )
+
+
+# ── Quién puede leer las listas, y con qué alcance (RTE04-C5) ────────────────
+
+
+async def test_a_supervisor_can_read_the_values_their_trip_requires(
+    seeded, alpha_client,
+):
+    """Sin esto, tres contextos de viaje eran imposibles de arrancar.
+
+    Employee Visit, Check Delivery y Office exigen un valor de lista **antes**
+    de salir. El formulario del supervisor tiene que poder leer las opciones; si
+    recibe 403, la regla obligatoria es imposible de satisfacer y el viaje no
+    arranca nunca. Se descubrió validando el flujo en un navegador real: los
+    tests de API no lo veían porque mandan el identificador directamente.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    creado = await alpha_client.post(
+        "/api/standard-values",
+        json={"list_code": "employee_visit_reasons", "label": "Payroll question"},
+    )
+    assert creado.status_code == 200
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    respuesta = await alpha_client.get("/api/standard-values/employee_visit_reasons")
+
+    assert respuesta.status_code == 200
+    assert [v["label"] for v in respuesta.json()] == ["Payroll question"]
+
+
+async def test_a_supervisor_cannot_see_retired_values(seeded, alpha_client):
+    """Leer para elegir no es administrar.
+
+    Un valor retirado no se puede volver a elegir, así que ofrecerlo en un
+    formulario operativo sería enseñar una opción que el servidor rechazaría.
+    """
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    respuesta = await alpha_client.get(
+        "/api/standard-values/employee_visit_reasons?include_inactive=true"
+    )
+
+    assert respuesta.status_code == 403
+    assert "route.standardvalues.manage" in respuesta.json()["detail"]
+
+
+async def test_a_supervisor_still_cannot_change_the_lists(seeded, alpha_client):
+    """El límite de privilegio: se concedió lectura, no administración."""
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    creacion = await alpha_client.post(
+        "/api/standard-values",
+        json={"list_code": "office_purposes", "label": "Invented by a supervisor"},
+    )
+
+    assert creacion.status_code == 403

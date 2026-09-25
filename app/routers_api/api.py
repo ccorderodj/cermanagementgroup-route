@@ -33,6 +33,7 @@ from app.routers_api.regions.router import router as router_regions
 from app.routers_api.standardvalues.router import router as router_standard_values
 from app.routers_api.vehicles.router import router as router_vehicles
 from app.routers_api.vehicles.router import supervisors_router as router_supervisors
+from app.routers_api.odometer.router import router as router_odometer
 from app.routers_api.trips.router import router as router_trips
 from app.routers_api.worksessions.router import router as router_worksessions
 
@@ -74,6 +75,7 @@ api_router.include_router(router_supervisors)
 api_router.include_router(router_standard_values)
 api_router.include_router(router_worksessions)
 api_router.include_router(router_trips)
+api_router.include_router(router_odometer)
 
 api_router.include_router(router_platform_settings)
 api_router.include_router(router_platform_diagnostics)
