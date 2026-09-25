@@ -1,3 +1,32 @@
+# CI deshabilitada a propósito.
+#
+# El proyecto no usa integración continua por ahora. El archivo se conserva —en
+# vez de borrarlo— para que el día que se active no haya que reconstruirlo
+# desde cero.
+#
+# Por qué NO está todo comentado
+# ------------------------------
+# Un `.gitlab-ci.yml` vacío o compuesto solo de comentarios es configuración
+# **inválida** para GitLab: falla con "jobs config should contain at least one
+# visible job". Eso cambia un fallo por otro y sigue bloqueando los merge
+# requests. Por eso el job se declara, es sintácticamente válido, y lo que se
+# desactiva es su **regla de ejecución**: `when: never` sin ninguna condición
+# previa hace que no se cree ningún pipeline, ni en push ni en merge request.
+#
+# Cómo volver a activarla
+# -----------------------
+# Sustituir el bloque `rules` por la condición que corresponda. Para ejecutar
+# solo en merge requests, que era el comportamiento anterior:
+#
+#     rules:
+#       - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+#         when: always
+#       - when: never
+#
+# Y si algún día la CI va a servir para algo, el `script` debería correr lo que
+# hoy se ejecuta a mano en cada entrega —`uv run pytest` y `npm run check`— en
+# vez de imprimir un saludo.
+
 stages:
   - hello
 
@@ -6,8 +35,4 @@ hello_world:
   script:
     - echo "Hello, World!"
   rules:
-    # - if: '$CI_PIPELINE_SOURCE == "merge_request_event" && $CI_MERGE_REQUEST_TARGET_BRANCH_NAME == "dev"'
-    # Run only for merge request pipelines (no pushes, no schedules)
-    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-      when: always
     - when: never
