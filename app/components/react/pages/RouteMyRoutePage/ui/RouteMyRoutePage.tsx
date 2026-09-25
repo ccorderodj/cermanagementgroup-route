@@ -463,6 +463,20 @@ export const RouteMyRoutePage = () => {
                                 Start Trip
                             </Button>
                         )}
+
+                        {/* Un viaje preparado no es un viaje empezado: desde
+                            aquí también se puede terminar el día. Sin esto,
+                            quien eligiera destino y no pudiera resolver el
+                            odómetro se quedaba sin salida en la pantalla. */}
+                        <Button
+                            variant="ghost"
+                            size="lg"
+                            className="h-12 w-full"
+                            disabled={busy}
+                            onClick={() => cerrarJornada(view.session)}
+                        >
+                            End Work
+                        </Button>
                     </div>
                 )}
 
