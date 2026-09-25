@@ -3,9 +3,10 @@
 Reglas para trabajar en este repositorio. Complementa `docs/ARCHITECTURE.md`
 (que explica *cómo está armado*), `docs/DEVELOPMENT_WORKFLOW.md` (cómo se trabaja),
 `_cer_delivery/recomendaciones_eficientes_y_ejecutables.md` (cómo debe responder,
-recomendar y decidir el agente) y
+recomendar y decidir el agente),
 `_cer_delivery/progreso_y_reporte_de_ejecucion.md` (cómo debe reportar mientras
-ejecuta); esto dice *qué hacer y qué no*.
+ejecuta) y `_cer_delivery/estimacion_de_tiempo_y_esfuerzo.md` (cómo debe
+estimar el esfuerzo restante); esto dice *qué hacer y qué no*.
 
 ---
 
@@ -380,3 +381,55 @@ con plantillas y ejemplos, es
     emite el reporte final, se señalan la acción operativa pendiente y el
     siguiente paso natural, y se **para**. No se empieza otra cosa por
     iniciativa propia.
+
+---
+
+## Reporte de iteración y estimación
+
+Estas dos cosas se hacen **en cada iteración**, no solo al cerrar un
+checkpoint. El protocolo completo de estimación, con sus coeficientes y
+ejemplos, está en `_cer_delivery/estimacion_de_tiempo_y_esfuerzo.md`.
+
+### El análisis de cierre, siempre
+
+Toda iteración en la que se haya **ejecutado** algo termina con el reporte
+consolidado. No es opcional ni depende de que lo pidan:
+
+1. **Status** — `COMPLETED` / `COMPLETED WITH PENDING ITEMS` / `BLOCKED`, y el
+   alcance al que se refiere.
+2. **Implementación** — qué cambió y *por qué*, no solo qué archivo se tocó.
+3. **Validación técnica** — migraciones, tests, typecheck, lint, build, cada
+   uno con su resultado real. Lo no ejecutado se marca `NOT RUN`,
+   `NOT APPLICABLE` o `PENDING`; **la evidencia ausente nunca se convierte en
+   PASS**.
+4. **Hallazgos** — incluidos los errores propios, con causa etiquetada
+   `CONFIRMED` / `LIKELY` / `UNVERIFIED`. Un fallo que ocurrió se reporta
+   aunque después se corrigiera.
+5. **Estimación de lo que falta** — en la tabla de la sección siguiente.
+6. **Git** — rama, commits, push, estado del árbol, número y URL del MR, y si
+   está fusionado o no.
+7. **Trabajo restante y acción operativa** — lo que debe ocurrir en otro sitio
+   (bootstrap, migración, despliegue) y que el trabajo local **no** hace.
+8. **Siguiente paso**, sin empezarlo.
+
+Entregar es commit + push + MR **y su reporte** en `Report Delivery Rodrigo/`.
+Un hito verde sin documento es media entrega: quien decide no lee el código.
+
+### La estimación va en horas
+
+**Está prohibido negarse a estimar.** No tener reloj de pared no es excusa: se
+estima con telemetría y métricas proxy, y el método se enseña para que se
+pueda discutir el coeficiente en vez de la cifra.
+
+1. **Medir el baseline**, no recordarlo: LoC por componente (`git show --stat`,
+   `wc -l`), iteraciones, y coste si está disponible.
+2. **Convertir a horas-agente** calibrando con el tramo ya completado. Sin dato
+   real del usuario, usar los coeficientes estándar: backend/dominio/migraciones
+   **150-200 LoC/h**, integración/OCR/flujos complejos **80-100 LoC/h**,
+   UI/navegador/E2E **50-70 LoC/h**.
+3. **Presentarlo en horas**, en la tabla del protocolo: tarea · estado ·
+   volumen · complejidad · horas-agente. Los días dependen de una jornada
+   supuesta y esconden el dato real; si se piden, se **añaden** declarando el
+   supuesto, nunca sustituyen a las horas.
+4. **Aplicar el margen de riesgo y declararlo**: deterministas **+10%**,
+   integraciones de terceros **+30%**, automatización de navegador **+50%**.
