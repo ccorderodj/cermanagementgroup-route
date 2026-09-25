@@ -518,3 +518,194 @@ async def test_trip_transitions_are_audited(seeded, alpha_client):
     acciones = {a for (a,) in filas.all()}
 
     assert {"create", "start", "arrive_home"} <= acciones
+
+
+# ── Cierre de C1 (resolución CER 003) ───────────────────────────────────────
+#
+# Dos huecos que CER pidió cerrar: el estado actual tenía que devolver el viaje
+# vivo, y los tres datos de planificación tenían que dejar de ser opcionales.
+# Un viaje puede quedarse en PLANNING mientras el supervisor rellena el
+# formulario; lo que no puede es SALIR sin el dato.
+
+
+@pytest.mark.parametrize(
+    "purpose,texto_error",
+    [
+        ("employee_visit", "reason"),
+        ("check_delivery", "delivery type"),
+        ("office", "purpose"),
+    ],
+)
+async def test_the_three_pretrip_contexts_cannot_start_without_their_value(
+    seeded, alpha_client, purpose, texto_error,
+):
+    """Sin el dato obligatorio no se sale, y el mensaje dice qué falta."""
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client, purpose=purpose)
+
+    respuesta = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    assert respuesta.status_code == 422, respuesta.text
+    assert texto_error in respuesta.json()["detail"].lower()
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["current_trip"]["status"] == "planning", (
+        "el rechazo deja el viaje donde estaba, no lo rompe"
+    )
+
+
+@pytest.mark.parametrize(
+    "purpose,list_code",
+    [
+        ("employee_visit", "employee_visit_reasons"),
+        ("check_delivery", "delivery_types"),
+        ("office", "office_purposes"),
+    ],
+)
+async def test_the_three_pretrip_contexts_start_once_the_value_is_present(
+    seeded, alpha_client, purpose, list_code,
+):
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    valor_id = await _valor_de_lista(alpha_client, list_code)
+
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(
+        alpha_client, purpose=purpose, standard_value_id=valor_id
+    )
+
+    respuesta = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["status"] == "in_transit"
+
+
+@pytest.mark.parametrize("purpose", ["client_visit", "recruiting", "other", "home"])
+async def test_post_arrival_contexts_start_without_any_pretrip_value(
+    seeded, alpha_client, purpose,
+):
+    """Lo que se elige al llegar no puede exigirse antes de salir."""
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client, purpose=purpose)
+
+    respuesta = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    assert respuesta.status_code == 200, respuesta.text
+
+
+async def test_a_deleted_value_cannot_be_newly_selected(seeded, alpha_client):
+    """Un valor retirado de la administración no vuelve a ofrecerse."""
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    valor_id = await _valor_de_lista(alpha_client, "office_purposes")
+    await alpha_client.delete(f"/api/standard-values/{valor_id}")
+
+    await _abrir_jornada(alpha_client, seeded)
+    respuesta = await alpha_client.post(
+        "/api/trips", json={"purpose": "office", "standard_value_id": valor_id}
+    )
+
+    assert respuesta.status_code == 422
+
+
+async def test_changing_plan_into_a_pretrip_context_does_not_invent_its_value(
+    seeded, alpha_client,
+):
+    """Cambiar de plan no rellena solo el dato del contexto nuevo."""
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client, purpose="client_visit")
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    cambiado = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/change-plan", json={"purpose": "office"}
+    )
+
+    assert cambiado.status_code == 200, cambiado.text
+    assert cambiado.json()["current_purpose"] == "office"
+    assert cambiado.json()["current_standard_value_id"] is None, (
+        "no se inventa un valor para el contexto nuevo"
+    )
+
+
+# ── Estado actual con el viaje vivo ─────────────────────────────────────────
+
+
+async def test_current_returns_null_trip_when_there_is_none(seeded, alpha_client):
+    """Sin viaje vivo la clave es `null`, no un marcador inventado."""
+    await _abrir_jornada(alpha_client, seeded)
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+
+    assert actual["work_session"] is not None
+    assert actual["current_trip"] is None
+
+
+async def test_current_returns_nothing_without_a_work_session(seeded, alpha_client):
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+
+    assert actual["work_session"] is None
+    assert actual["current_trip"] is None
+
+
+@pytest.mark.parametrize("estado", ["planning", "in_transit", "arrived"])
+async def test_current_returns_the_live_trip_in_every_non_terminal_state(
+    seeded, alpha_client, estado,
+):
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+
+    if estado in ("in_transit", "arrived"):
+        await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    if estado == "arrived":
+        await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+
+    assert actual["current_trip"] is not None
+    assert actual["current_trip"]["id"] == viaje["id"]
+    assert actual["current_trip"]["status"] == estado
+
+
+async def test_current_stops_returning_a_closed_trip(seeded, alpha_client):
+    """Un viaje HOME cerrado deja de ser el actual; la jornada sigue abierta."""
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client, purpose="home")
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+
+    assert actual["current_trip"] is None
+    assert actual["work_session"]["status"] == "active"
+
+
+async def test_a_second_device_reads_the_same_current_trip(seeded, alpha_client):
+    """Recuperar el estado no crea un viaje nuevo, lo resuelve."""
+    await _abrir_jornada(alpha_client, seeded)
+    viaje = await _planificar(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    async with TenantClient("alpha") as segundo:
+        await segundo.login(seeded.alpha.users["supervisor"].email)
+        actual = (await segundo.get("/api/worksessions/current")).json()
+
+    assert actual["current_trip"]["id"] == viaje["id"]
+    assert actual["current_trip"]["status"] == "in_transit"
+
+    async with async_session_maker() as session:
+        filas = await session.execute(
+            select(Trip).where(Trip.work_session_id == viaje["work_session_id"])
+        )
+    assert len(filas.scalars().all()) == 1, "leer el estado no duplica el viaje"
+
+
+async def test_current_does_not_leak_another_tenants_trip(seeded, alpha_client):
+    await _abrir_jornada(alpha_client, seeded)
+    await _planificar(alpha_client)
+
+    async with TenantClient("beta") as beta:
+        await beta.login(seeded.beta.users["supervisor"].email)
+        await beta.post("/api/worksessions", json={})
+        actual = (await beta.get("/api/worksessions/current")).json()
+
+    assert actual["current_trip"] is None, (
+        "cada tenant ve su propio estado, nunca el del otro"
+    )

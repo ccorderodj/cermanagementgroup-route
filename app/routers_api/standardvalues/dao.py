@@ -101,6 +101,31 @@ class StandardValuesDAO(BaseDAO):
         return valor
 
     @classmethod
+    async def find_selectable(
+        cls, *, value_id: int, company_id: int, list_code: str
+    ) -> StandardValue | None:
+        """El valor **elegible ahora** para esa lista, o `None`.
+
+        Devuelve `None` por las tres razones a la vez —no existe, es de otro
+        tenant, está borrado, o pertenece a otra lista— porque quien pregunta
+        sólo necesita saber si puede ofrecerlo, y distinguir los casos daría
+        información sobre filas que el llamante no puede ver.
+
+        No sirve para resolver una referencia histórica: un viaje que eligió un
+        valor antes de que lo borraran lo conserva, y eso se lee con
+        `get_including_deleted`.
+        """
+        async with db_session() as session:
+            return await session.scalar(
+                select(StandardValue).where(
+                    StandardValue.id == value_id,
+                    StandardValue.company_id == company_id,
+                    StandardValue.list_code == list_code,
+                    StandardValue.deleted_at.is_(None),
+                )
+            )
+
+    @classmethod
     async def get_including_deleted(
         cls, *, value_id: int, company_id: int
     ) -> StandardValue | None:

@@ -8,6 +8,8 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.routers_api.trips.schemas import TripRead
+
 
 class WorkSessionStart(BaseModel):
     """Lo único que el cliente puede aportar: evidencia de tiempo local.
@@ -86,13 +88,20 @@ class WorkSessionRead(BaseModel):
 class CurrentWorkSessionResponse(BaseModel):
     """El estado autoritativo de `GET /worksessions/current`.
 
-    Diseñado para crecer: RTE04 añadirá una clave `current_trip` y RTE05
-    `current_activity` a este mismo cuerpo, nunca un segundo endpoint de
-    "estado actual" compitiendo con este. En RTE03 solo existe la jornada, así
-    que solo se declara esa clave — añadir claves `null` para dominios que
-    todavía no existen sería simular algo que no está construido.
+    El sobre crece, no se duplica. RTE03 traía sólo la jornada; RTE04 añade
+    `current_trip` aquí mismo, y RTE05 añadirá `current_activity` de la misma
+    forma. Nunca un segundo endpoint de "estado actual" compitiendo con este:
+    dos fuentes de verdad para la misma pregunta acaban respondiendo cosas
+    distintas.
+
+    `current_trip` es el viaje **no terminal** de la jornada, si lo hay. Un
+    viaje operativo en `ARRIVED` sigue siendo el actual —espera a RTE05—,
+    mientras que uno `CLOSED` o `INTERRUPTED` ya no lo es. Sin viaje vivo la
+    clave vale `null`, no un marcador de posición: fabricar uno sería fingir un
+    estado que no existe.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     work_session: Optional[WorkSessionRead] = None
+    current_trip: Optional[TripRead] = None
