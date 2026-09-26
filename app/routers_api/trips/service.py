@@ -100,8 +100,8 @@ _NOMBRE_DEL_DATO: dict[str, str] = {
 }
 
 
-def _exigir_dato_de_planificacion(
-    *, purpose: str, standard_value_id: int | None
+async def _exigir_dato_de_planificacion(
+    *, company_id: int, purpose: str, standard_value_id: int | None
 ) -> None:
     """Los tres contextos de pre-viaje no salen sin su dato.
 
@@ -112,11 +112,36 @@ def _exigir_dato_de_planificacion(
     RTE05.
 
     Nada se infiere: un valor que falta se pide, no se rellena solo.
+
+    Dos motivos distintos, dos mensajes distintos
+    ----------------------------------------------
+    "Falta que elijas" y "no hay nada que elegir" no son lo mismo, y decirle lo
+    primero a quien tiene la lista vacía es mandarle a un callejón sin salida:
+    un administrador puede retirar **todos** los valores de la lista, y entonces
+    el supervisor no puede arrancar ese tipo de viaje por mucho que lo intente.
+    El viaje sigue bloqueado igual —la guarda no se toca— pero el mensaje dice
+    la verdad y señala quién puede arreglarlo.
     """
     if purpose not in PRETRIP_STANDARD_LIST:
         return
     if standard_value_id is not None:
         return
+
+    from app.routers_api.standardvalues.dao import StandardValuesDAO
+
+    disponibles = await StandardValuesDAO.list_for_code(
+        company_id=company_id,
+        list_code=PRETRIP_STANDARD_LIST[purpose],
+        include_inactive=False,
+    )
+    if not disponibles:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"There are no values configured for {_NOMBRE_DEL_DATO[purpose]}. "
+                "Ask an administrator to add one before this trip can start."
+            ),
+        )
 
     raise HTTPException(
         status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -259,7 +284,8 @@ class TripService:
             )
 
         await _jornada_activa(company_id=company_id, user_id=user_id)
-        _exigir_dato_de_planificacion(
+        await _exigir_dato_de_planificacion(
+            company_id=company_id,
             purpose=viaje.current_purpose,
             standard_value_id=viaje.current_standard_value_id,
         )
