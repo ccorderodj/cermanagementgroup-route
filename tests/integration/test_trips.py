@@ -997,3 +997,77 @@ async def test_current_does_not_leak_another_supervisors_trip(
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
     propio = (await alpha_client.get("/api/worksessions/current")).json()
     assert propio["current_trip"]["id"] == viaje["id"]
+
+
+# ── Una lista obligatoria vacía (hallazgo de la validación de catálogos) ──────
+
+
+async def test_an_empty_required_list_blocks_the_trip_and_says_why(
+    seeded, alpha_client,
+):
+    """Nada se inventa cuando el catálogo se queda sin valores.
+
+    Un administrador puede retirar **todos** los valores de una lista: no hay
+    restricción que lo impida, y RTE04 no cambia el comportamiento de
+    configuración que CER ya certificó. Lo que sí importa es qué pasa entonces.
+
+    El viaje sigue bloqueado —la guarda no se debilita— y el mensaje distingue
+    los dos casos: "elige uno" cuando hay de dónde elegir, y "no hay ninguno
+    configurado, pídeselo a un administrador" cuando no. Decir lo primero con la
+    lista vacía manda al supervisor a un callejón sin salida.
+    """
+    from app.routers_api.standardvalues.provisioning import provision_standard_values
+
+    async with async_session_maker() as session:
+        await provision_standard_values(session, company_id=seeded.alpha.id)
+        await session.commit()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    valores = (
+        await alpha_client.get("/api/standard-values/employee_visit_reasons")
+    ).json()
+    assert len(valores) == 4, "los cuatro motivos aprobados"
+
+    for valor in valores:
+        borrado = await alpha_client.delete(f"/api/standard-values/{valor['id']}")
+        assert borrado.status_code == 204
+
+    vacia = (
+        await alpha_client.get("/api/standard-values/employee_visit_reasons")
+    ).json()
+    assert vacia == [], "la lista se puede quedar sin valores seleccionables"
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    await alpha_client.post("/api/worksessions", json={})
+    viaje = await _planificar(alpha_client, purpose="employee_visit")
+    arranque = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    assert arranque.status_code == 422, "la guarda no se debilita"
+    detalle = arranque.json()["detail"]
+    assert "no values configured" in detalle, (
+        f"el mensaje tiene que decir que no hay nada que elegir: {detalle}"
+    )
+    assert "administrator" in detalle, "y a quién pedírselo"
+
+    # Y el viaje se queda donde estaba: ni arrancado ni inventado.
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["current_trip"]["status"] == "planning"
+
+
+async def test_with_values_available_the_message_asks_to_choose(
+    seeded, alpha_client,
+):
+    """El otro lado de la moneda: si hay de dónde elegir, se pide elegir."""
+    from app.routers_api.standardvalues.provisioning import provision_standard_values
+
+    async with async_session_maker() as session:
+        await provision_standard_values(session, company_id=seeded.alpha.id)
+        await session.commit()
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    await alpha_client.post("/api/worksessions", json={})
+    viaje = await _planificar(alpha_client, purpose="employee_visit")
+    arranque = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+
+    assert arranque.status_code == 422
+    assert "Choose" in arranque.json()["detail"]
