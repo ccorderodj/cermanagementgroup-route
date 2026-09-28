@@ -22,6 +22,11 @@ from fastapi import APIRouter, Depends, Header, Request, status
 from fastapi.responses import JSONResponse
 
 from app.core.integration import idempotency
+from app.routers_api.activities.schemas import (
+    ActivityExecutionRead,
+    SelectedActivityRead,
+)
+from app.routers_api.activities.service import ActivityService
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.users.dependencies import get_current_user
@@ -59,8 +64,12 @@ async def get_current_work_session(
     la única autoridad, y el cliente nunca se fía de lo que tenga guardado.
 
     Sin viaje vivo, `current_trip` es `null`. No se inventa un marcador de
-    posición, y no se devuelve una Activity: ese dominio es de RTE05 y no
-    existe todavía.
+    posición.
+
+    Desde RTE05 la respuesta dice además **a qué pantalla volver**: si hay un
+    bloque de parada y si queda trabajo de llegada sin resolver. Esa última
+    pregunta se responde aquí y no en el cliente, para que la pantalla no tenga
+    que deducirla cruzando propósito, estado del viaje y estado del bloque.
     """
     jornada = await WorkSessionService.current(
         company_id=company.id, user_id=current_user.id
@@ -71,9 +80,28 @@ async def get_current_work_session(
     viaje = await TripService.current(
         company_id=company.id, work_session_id=jornada.id
     )
+
+    bloque_leido = None
+    if viaje is not None:
+        bloque = await ActivityService.current_for_trip(
+            company_id=company.id, trip_id=viaje.id
+        )
+        if bloque is not None:
+            bloque_leido = ActivityExecutionRead.model_validate(bloque)
+            bloque_leido.activities = [
+                SelectedActivityRead.model_validate(a)
+                for a in await ActivityService.activities_of(
+                    company_id=company.id, execution_id=bloque.id
+                )
+            ]
+
     return CurrentWorkSessionResponse(
         work_session=WorkSessionRead.model_validate(jornada),
         current_trip=TripRead.model_validate(viaje) if viaje else None,
+        current_activity=bloque_leido,
+        post_arrival_pending=await ActivityService.has_unresolved_work(
+            company_id=company.id, work_session_id=jornada.id
+        ),
     )
 
 

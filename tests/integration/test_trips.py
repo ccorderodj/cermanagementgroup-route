@@ -28,6 +28,7 @@ from sqlalchemy import select, text
 
 from app.database import async_session_maker
 from app.routers_api.trips.models import Trip
+from app.routers_api.worksessions.models import WorkSession
 from tests.integration.conftest import TEST_PASSWORD, TenantClient
 
 
@@ -791,13 +792,18 @@ async def test_end_work_anyway_interrupts_without_faking_an_arrival(
     assert fila.ended_at is not None
 
 
-async def test_an_arrived_operational_trip_does_not_block_end_work(
-    seeded, alpha_client,
-):
-    """Llegar no bloquea cerrar, y cerrar no cierra el viaje.
+async def test_an_arrived_operational_trip_blocks_end_work(seeded, alpha_client):
+    """Llegar **sí** bloquea cerrar, y cerrar sigue sin cerrar el viaje.
 
-    Completar un viaje operativo es de RTE05. Ni se inventa su cierre ni se
-    inventa un bloqueo: ninguna de las dos cosas está definida en el baseline.
+    Este test decía lo contrario, y era correcto cuando se escribió: RTE04
+    aceptaba que un viaje operativo en `ARRIVED` sobreviviera a la jornada
+    **sólo porque la ejecución de actividad no existía todavía**. PD-04 de RTE05
+    deroga eso expresamente —"that is no longer the target normal behavior"—, así
+    que la aserción se invierte por decisión de producto, no por un descuido.
+
+    Lo que **no** cambia es la otra mitad, y por eso se sigue comprobando: el
+    viaje se queda en `arrived`. Pedir el fin de jornada no cierra nada por
+    detrás ni fabrica un resultado; resolver la parada es del supervisor.
     """
     jornada = await _abrir_jornada(alpha_client, seeded)
     viaje = await _planificar(alpha_client)
@@ -807,11 +813,15 @@ async def test_an_arrived_operational_trip_does_not_block_end_work(
     respuesta = await alpha_client.post(
         f"/api/worksessions/{jornada['id']}/end", json={}
     )
-    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.status_code == 409, respuesta.text
 
     async with async_session_maker() as session:
         fila = await session.scalar(select(Trip).where(Trip.id == viaje["id"]))
-    assert fila.status == "arrived", "el viaje operativo sigue esperando a RTE05"
+        jornada_fila = await session.scalar(
+            select(WorkSession).where(WorkSession.id == jornada["id"])
+        )
+    assert fila.status == "arrived", "no se cierra el viaje por detrás"
+    assert jornada_fila.status == "active", "ni se cierra la jornada"
 
 
 async def test_ending_work_without_any_trip_still_works(seeded, alpha_client):

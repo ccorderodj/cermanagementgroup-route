@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { tripSchema } from '@/entities/RouteTrips';
+import { activityExecutionSchema } from '@/entities/RouteActivities';
 
 /**
  * La Jornada, tal y como la sirve `GET /worksessions/current`.
@@ -33,14 +34,21 @@ export type WorkSession = z.infer<typeof workSessionSchema>;
  * El sobre de `GET /worksessions/current`.
  *
  * Crece, no se duplica: RTE04 añadió `current_trip` a este mismo tipo y RTE05
- * añadirá `current_activity` igual. Nunca un segundo endpoint de estado — dos
+ * añade `current_activity` igual. Nunca un segundo endpoint de estado — dos
  * fuentes de verdad para la misma pregunta acaban discrepando.
+ *
+ * `post_arrival_pending` es la pregunta que decide la navegación: si queda
+ * trabajo de llegada sin resolver. La responde el servidor para que la pantalla
+ * no tenga que deducirla cruzando propósito, estado del viaje y estado del
+ * bloque — y para que las dos no puedan discrepar.
  */
 export const currentWorkSessionSchema = z.object({
     work_session: workSessionSchema.nullable(),
     // El viaje **vivo**, si lo hay. Un viaje operativo en `arrived` sigue
     // siéndolo —espera a RTE05—; uno cerrado o interrumpido ya no.
     current_trip: tripSchema.nullable().optional(),
+    current_activity: activityExecutionSchema.nullable().optional(),
+    post_arrival_pending: z.boolean().default(false),
 });
 
 export type CurrentWorkSessionResponse = z.infer<typeof currentWorkSessionSchema>;

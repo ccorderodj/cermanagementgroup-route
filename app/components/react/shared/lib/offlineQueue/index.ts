@@ -5,3 +5,4 @@ export {
     flushQueue,
 } from './offlineQueue';
 export type { PendingAction, PendingActionStatus, FlushResult } from './offlineQueue';
+export { flushPendingActions, submitAction } from './sync';

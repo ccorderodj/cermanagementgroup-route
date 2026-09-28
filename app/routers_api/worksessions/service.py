@@ -310,6 +310,26 @@ class WorkSessionService:
                 device_captured_at=device_captured_at,
             )
 
+        # RTE05: un viaje operativo que llegó y no tiene su bloque terminal deja
+        # trabajo sin resolver, y terminar la jornada no lo resuelve. Va **antes**
+        # que el odómetro porque es lo que el supervisor tiene que hacer ahora:
+        # pedirle la lectura de cierre para después mandarle de vuelta a la
+        # parada sería llevarle por el camino largo.
+        #
+        # No se cierra el viaje ni se inventa un resultado. Se le devuelve a la
+        # pantalla de la parada, que es donde está el trabajo (FR-13, FR-14).
+        from app.routers_api.activities.service import ActivityService
+
+        if await ActivityService.has_unresolved_work(
+            company_id=company_id, work_session_id=session_id
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    "Finish the work at your current stop before ending your day."
+                ),
+            )
+
         # Los bloqueos del viaje **primero**, la evidencia de cierre después: es
         # el orden que pide C4. Un viaje en tránsito hay que resolverlo antes de
         # pedir una lectura final, porque el kilometraje todavía puede cambiar.

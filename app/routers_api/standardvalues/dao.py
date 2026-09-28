@@ -106,13 +106,22 @@ class StandardValuesDAO(BaseDAO):
     ) -> StandardValue | None:
         """El valor **elegible ahora** para esa lista, o `None`.
 
-        Devuelve `None` por las tres razones a la vez —no existe, es de otro
-        tenant, está borrado, o pertenece a otra lista— porque quien pregunta
-        sólo necesita saber si puede ofrecerlo, y distinguir los casos daría
-        información sobre filas que el llamante no puede ver.
+        Devuelve `None` por todas las razones a la vez —no existe, es de otro
+        tenant, está borrado, está desactivado, o pertenece a otra lista— porque
+        quien pregunta sólo necesita saber si puede ofrecerlo, y distinguir los
+        casos daría información sobre filas que el llamante no puede ver.
+
+        Lo desactivado tampoco cuenta
+        ------------------------------
+        Al escribirse en RTE04 sólo filtraba lápidas, porque la resolución de
+        entonces hablaba de valores borrados. Pero desactivar **es** retirar del
+        uso operativo —lo fijó así RTE02-A01— y un valor retirado que seguía
+        pudiéndose elegir contradecía esa semántica: la pantalla dejaba de
+        ofrecerlo y la API lo seguía aceptando. RTE05 lo pide explícitamente
+        (FR-02) y lo corrige también para los datos de pre-viaje.
 
         No sirve para resolver una referencia histórica: un viaje que eligió un
-        valor antes de que lo borraran lo conserva, y eso se lee con
+        valor antes de que lo retiraran lo conserva, y eso se lee con
         `get_including_deleted`.
         """
         async with db_session() as session:
@@ -122,6 +131,7 @@ class StandardValuesDAO(BaseDAO):
                     StandardValue.company_id == company_id,
                     StandardValue.list_code == list_code,
                     StandardValue.deleted_at.is_(None),
+                    StandardValue.is_active.is_(True),
                 )
             )
 
