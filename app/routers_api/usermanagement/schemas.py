@@ -89,6 +89,23 @@ class UserManagementRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AssignableRoleRead(BaseModel):
+    """Un rol que quien administra usuarios **puede** conceder aquí.
+
+    Lleva la etiqueta de producto, no el código técnico: la pantalla nunca
+    muestra `route_admin`. Y lleva sólo lo que hace falta para rellenar un
+    selector — nada de capacidades ni categorías, que no son asunto del
+    formulario y exponerlas filtraría la taxonomía del núcleo a un cliente que no
+    la necesita.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    code: str
+    label: str
+
+
 class UsersPaginationParams(schema.CommonQueryParams):
     def __init__(
         self,

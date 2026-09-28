@@ -93,11 +93,29 @@ CAPABILITIES: tuple[Capability, ...] = (
     # que todavía no existe.
     _cap("route", "vehicles.read", "View Route vehicles and their assignments"),
     _cap("route", "vehicles.manage", "Create and edit Route vehicles and assign them to supervisors"),
+    # Leer para elegir y administrar la lista son dos autorizaciones, no una
+    # (BR-03 de la resolución A02). Quien ejecuta la jornada necesita leer los
+    # valores que su viaje exige antes de salir; no necesita —ni debe— poder
+    # crearlos, renombrarlos, reordenarlos ni retirarlos.
+    #
+    # Esto reemplaza un atajo que introduje en RTE04-C5: entonces la lectura se
+    # autorizó con `standardvalues.manage` **o** `worksession.execute`, que hacía
+    # de "ejecutar" un permiso de lectura genérico. Funcionaba, y era exactamente
+    # lo que A02 prohíbe: la separación Read / Execute / Manage dejaba de ser
+    # legible en el catálogo.
+    _cap("route", "standardvalues.read", "Read the Route operational value lists"),
     _cap("route", "standardvalues.manage", "Manage the Route admin-configurable value lists"),
-    # RTE03: la Jornada. Un supervisor solo puede ejecutar la suya —el
+    # RTE03: la Jornada. Quien la ejecuta solo puede ejecutar **la suya** —el
     # endpoint nunca acepta la identidad de otro usuario, siempre la de la
     # sesión autenticada—, así que una sola capacidad basta para Start Work,
     # End Work y el estado actual.
+    #
+    # La tienen los **dos** roles de producto de CER Route. RTE03 se la negó al
+    # Administrador razonando que "acceder a Admin" y "ejecutar trabajo de campo"
+    # son autorizaciones distintas; sigue siendo verdad que son distintas, pero
+    # CER decidió en A02 que su Administrador también sale a ruta. Un CEO o un
+    # COO usan ese rol y conducen. La separación que importa no es quién puede
+    # ejecutar: es que ejecutar no conceda administrar (BR-02, BR-03).
     _cap("route", "worksession.execute", "Start and end the caller's own Work Session"),
     # RTE04: aprobar o rechazar una entrada manual de odómetro cuando el
     # supervisor no pudo obtener la foto. Es autoridad de administración, no de
@@ -177,13 +195,15 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
         name="supervisor",
         description="CER Route field supervisor; mobile-only workday experience",
         category="operative",
-        # RTE03: la primera capacidad real del rol. Un Route Admin no la
-        # recibe por administrar la compañía —"acceder a Admin" y "ejecutar
-        # trabajo de campo" son autorizaciones distintas (§9 de las
-        # instrucciones RTE03)—; si algún día alguien necesita las dos, se
-        # resuelve con un rol compuesto desde la pantalla de Roles existente,
-        # no concediéndosela aquí por defecto.
-        capabilities=("route.worksession.execute",),
+        # **Read + Execute, nunca Manage** (FR-03). Ejecuta su propia jornada y
+        # lee los valores que sus viajes exigen antes de salir; no administra
+        # usuarios, ni roles, ni vehículos, ni las listas, ni aprueba
+        # excepciones. La lectura es una capacidad aparte justamente para que
+        # esto se pueda decir en una línea y comprobarse en un test.
+        capabilities=(
+            "route.worksession.execute",
+            "route.standardvalues.read",
+        ),
     ),
     RoleTemplate(
         name="route_admin",
@@ -211,14 +231,43 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             # ya no trabaja aquí, sin pedírselo a nadie más. Sigue siendo
             # pertenencia, no identidad: la persona no se destruye.
             "users.delete",
-            "roles.read",
+            # `roles.read` **ya no** se concede aquí. El formulario de usuarios
+            # de Route ya no ofrece el catálogo de roles del tenant: ofrece los
+            # dos roles de producto, y el servidor sólo acepta esos dos (FR-01,
+            # FR-05). Leer los roles del núcleo dejó de tener uso, y la
+            # capacidad que no hace falta no se concede.
             "route.vehicles.read",
             "route.vehicles.manage",
+            # Read **y** manage: administra las listas y también las lee para
+            # sus propios viajes.
+            "route.standardvalues.read",
             "route.standardvalues.manage",
             "route.records.adjust",
+            # A02/BR-02: el Administrador también sale a ruta. Usa la misma
+            # experiencia móvil que el Supervisor, con la misma capacidad.
+            "route.worksession.execute",
         ),
     ),
 )
+
+
+#: Los dos roles de producto de CER Route, por su código técnico interno.
+#:
+#: Son los **únicos** que el flujo de usuarios de CER Route puede asignar
+#: (FR-01, FR-05). Los del núcleo —`owner`, `admin`, `manager`, `viewer`— siguen
+#: existiendo y no se tocan: simplemente no son personas de este producto, y
+#: concederlos desde aquí era la escalada que encontró el diagnóstico A01.
+#:
+#: Se conservan los códigos técnicos existentes a propósito: renombrarlos sólo
+#: para cambiar la etiqueta visible obligaría a una migración destructiva de
+#: `role.name` en cada tenant, y la resolución lo prohíbe explícitamente.
+ROUTE_PRODUCT_ROLES: frozenset[str] = frozenset({"route_admin", "supervisor"})
+
+#: Cómo se llaman en pantalla. El código técnico no se muestra nunca.
+ROUTE_PRODUCT_ROLE_LABELS: dict[str, str] = {
+    "route_admin": "Administrador",
+    "supervisor": "Supervisor",
+}
 
 
 def capabilities_for(template: RoleTemplate) -> tuple[str, ...]:

@@ -74,21 +74,17 @@ async def get_values(
             "operativo, no."
         ),
     ),
-    # Dos audiencias, una lectura. El administrador configura estas listas; el
-    # supervisor **tiene que poder leerlas** para elegir el valor que su viaje
-    # exige antes de salir. Sin esto, Employee Visit, Check Delivery y Office
-    # eran imposibles de arrancar desde el móvil: el formulario pedía un valor
-    # obligatorio y recibía 403 al buscar las opciones (RTE04-C5).
+    # Un contrato de lectura explícito (A02/BR-03). Los dos roles de producto lo
+    # tienen: el supervisor necesita leer el valor que su viaje exige antes de
+    # salir, y el administrador lo lee además de administrarlo.
     #
-    # Se resuelve con "cualquiera de las dos" y **no** concediendo
-    # `standardvalues.manage` al supervisor, que le dejaría crear y borrar las
-    # listas del tenant. Leer para elegir no es administrar.
-    _authz: None = Depends(
-        require_permissions(
-            ["route.standardvalues.manage", "route.worksession.execute"],
-            require_all=False,
-        )
-    ),
+    # Esto reemplaza el atajo de RTE04-C5, donde la lectura se autorizaba con
+    # `standardvalues.manage` **o** `worksession.execute`. Cerraba el 403 que
+    # hacía imposible arrancar tres contextos de viaje, pero convertía "ejecutar"
+    # en un permiso de lectura genérico, y entonces la separación Read / Execute
+    # / Manage dejaba de poder leerse en el catálogo. Ahora la lectura tiene su
+    # propia capacidad y se puede conceder sin conceder nada más.
+    _authz: None = Depends(require_permissions(["route.standardvalues.read"])),
     current_user: Users = Depends(get_current_user),
     company: TenantContext = Depends(get_company_required),
 ) -> list[StandardValueRead]:

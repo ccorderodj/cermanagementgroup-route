@@ -17,17 +17,18 @@ Se comprueba también el otro lado, porque un diagnóstico que sólo enseñe lo 
 da una idea falsa de dónde está el problema: el supervisor no administra nada, el
 rol de otro tenant se rechaza, y `is_superuser` no entra por el cuerpo.
 
-Sobre los `xfail`
------------------
-Los cuatro casos de escalada se marcan `xfail(strict=True)`. Es deliberado y no
-es un adorno:
+Cerrado en A02
+--------------
+Los cuatro casos de escalada nacieron marcados `xfail(strict=True)`: afirmaban el
+comportamiento correcto mientras el arreglo esperaba una decisión de CER. La
+resolución A02 la tomó, `ensure_assignable_role` cierra el hueco, y las marcas se
+quitaron **porque los tests empezaron a fallar** — que es lo que hace un
+`xfail` estricto cuando lo que esperaba deja de ocurrir. Un `xfail` que se hubiera
+quedado en verde para siempre habría sido una forma elegante de olvidarlo.
 
-* dicen en el propio código lo que **debería** ocurrir, no lo que ocurre;
-* mantienen la suite en verde, porque el hueco está reportado y su arreglo es
-  una decisión de CER, no una omisión de ingeniería;
-* con `strict=True`, el día que alguien lo arregle **este test falla** y obliga a
-  quitar la marca. Un `xfail` que se queda en verde para siempre sería una forma
-  elegante de olvidar el problema.
+Estos tests se quedan aquí, ya sin marca, como red permanente: el detalle de la
+política de asignación vive en `test_route_access_model.py`, y esto comprueba que
+la secuencia concreta que se midió en producción no vuelve.
 """
 
 from __future__ import annotations
@@ -39,16 +40,6 @@ from tests.integration.conftest import TEST_PASSWORD, TenantClient
 
 
 pytestmark = pytest.mark.integration
-
-
-#: La razón que llevan los cuatro `xfail`, para que quien la lea sepa a qué
-#: espera el arreglo.
-PENDIENTE_DE_CER = (
-    "SECURITY GAP reportado en CER_ROUTE_RTE02_A01_VALUES_AND_ROLES_DIAGNOSTIC_001: "
-    "un route_admin puede conceder un rol del núcleo más poderoso que el suyo. "
-    "El arreglo cambia el contrato de administración de usuarios compartido, así "
-    "que espera decisión de CER (§11 del diagnóstico 006)."
-)
 
 
 async def _crear_usuario_con_rol(cliente, *, sufijo: str, role_id: int):
@@ -83,7 +74,6 @@ async def test_a_route_admin_can_assign_the_two_route_roles(
 # ── Lo que no debería poder, y sí puede ──────────────────────────────────────
 
 
-@pytest.mark.xfail(strict=True, reason=PENDIENTE_DE_CER)
 @pytest.mark.parametrize("rol", ["owner", "admin"])
 async def test_a_route_admin_cannot_create_a_user_with_a_core_management_role(
     seeded, alpha_client, rol,
@@ -102,7 +92,6 @@ async def test_a_route_admin_cannot_create_a_user_with_a_core_management_role(
     )
 
 
-@pytest.mark.xfail(strict=True, reason=PENDIENTE_DE_CER)
 @pytest.mark.parametrize("rol", ["owner", "admin"])
 async def test_a_route_admin_cannot_promote_a_supervisor_to_a_core_role(
     seeded, alpha_client, rol,
@@ -120,7 +109,6 @@ async def test_a_route_admin_cannot_promote_a_supervisor_to_a_core_role(
     )
 
 
-@pytest.mark.xfail(strict=True, reason=PENDIENTE_DE_CER)
 async def test_the_granted_account_cannot_exceed_the_granters_authority(
     seeded, alpha_client,
 ):
@@ -155,7 +143,9 @@ async def test_a_supervisor_administers_nothing(seeded, alpha_client):
     concedidas = await get_user_permissions(
         user_id=supervisor.id, company_id=seeded.alpha.id
     )
-    assert concedidas == {"route.worksession.execute"}
+    # Read + Execute desde A02: la lectura de los valores operativos es una
+    # capacidad propia, y sigue sin haber nada de administración.
+    assert concedidas == {"route.worksession.execute", "route.standardvalues.read"}
 
     await alpha_client.login(supervisor.email)
     assert (await alpha_client.get("/api/users/pagination")).status_code == 403

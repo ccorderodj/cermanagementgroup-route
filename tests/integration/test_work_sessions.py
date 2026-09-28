@@ -875,13 +875,22 @@ async def test_supervisor_with_capability_can_execute_own_session(
     assert (await alpha_client.post("/api/worksessions", json={})).status_code == 200
 
 
-async def test_a_route_admin_without_the_capability_cannot_start_work(
-    seeded, alpha_client,
-):
-    """`route_admin` no recibe `worksession.execute` por administrar la
-    compañía: son autorizaciones distintas (§9)."""
+async def test_the_route_administrator_can_also_start_work(seeded, alpha_client):
+    """Desde A02, el Administrador de CER Route también sale a ruta (BR-02).
+
+    RTE03 se lo negaba razonando que "acceder a Admin" y "ejecutar trabajo de
+    campo" son autorizaciones distintas. Siguen siendo distintas —la separación
+    que importa es que ejecutar no conceda administrar—, pero CER decidió que su
+    Administrador conduce: un CEO o un COO usan ese rol y salen a ruta.
+
+    Lo que **no** cambia es la semántica de la jornada: ejecuta la suya, con la
+    identidad de la sesión, igual que cualquier otro.
+    """
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    assert (await alpha_client.post("/api/worksessions", json={})).status_code == 403
+    respuesta = await alpha_client.post("/api/worksessions", json={})
+
+    assert respuesta.status_code == 200, respuesta.text
+    assert respuesta.json()["status"] == "active"
 
 
 async def test_a_viewer_cannot_execute_work_session_actions(seeded, alpha_client):
