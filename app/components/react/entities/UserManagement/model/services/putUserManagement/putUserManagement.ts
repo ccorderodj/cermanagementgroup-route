@@ -1,6 +1,7 @@
 import { AxiosError } from 'axios';
 import { createAsyncThunk } from '@reduxjs/toolkit';
 import { ThunkConfig } from '@/app/providers/StoreProvider';
+import { contractBasePath, type UserManagementContract } from '../contract';
 import { cleanPayload, handleAsyncError } from '@/shared/lib/utils/utils';
 import type { UserManagementEntity } from '../../types';
 
@@ -15,6 +16,11 @@ interface IPutUserManagementPayload {
         gender?: boolean;
         /** Rol en la compañía activa; el backend actualiza user_company. */
         role_id?: number;
+        /**
+         * Desde qué producto se administra. No viaja en el cuerpo: decide **a qué
+         * ruta** se envía, y con ello qué roles acepta el servidor.
+         */
+        contract?: UserManagementContract;
     };
 }
 
@@ -30,7 +36,11 @@ export const updateUserManagement = createAsyncThunk<UserManagementEntity, IPutU
     async ({ userId, data }, thunkApi) => {
         const { extra, rejectWithValue } = thunkApi;
         try {
-            const response = await extra.api.put<UserManagementEntity>(`/users/${userId}`, cleanPayload(data));
+            const { contract, ...datos } = data;
+            const response = await extra.api.put<UserManagementEntity>(
+                `${contractBasePath(contract)}/${userId}`,
+                cleanPayload(datos),
+            );
             if (!response.data) throw new Error();
             return response.data;
         } catch (error) {

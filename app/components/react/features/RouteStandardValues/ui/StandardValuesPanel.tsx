@@ -3,6 +3,12 @@ import {
     Badge,
     Button,
     Checkbox,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
     Input,
     Label,
     Table,
@@ -40,6 +46,17 @@ import {
  * En los dos casos la fila sobrevive en el servidor: una actividad de marzo
  * guardó su identificador y tiene que poder resolverlo. Lo que cambia es dónde
  * se ofrece, no si existe.
+ *
+ * Crear en contexto (A02-FC4)
+ * ----------------------------
+ * El alta era un campo permanente encima de la tabla. Ocupaba sitio en la
+ * pantalla de las ocho listas cuando lo habitual es venir a mirar o a reordenar,
+ * y obligaba a recordar cuál estaba seleccionada mientras se escribía.
+ *
+ * Ahora `Add Value` abre un diálogo que **ya sabe** a qué lista se está
+ * añadiendo y lo dice en su cabecera. Al guardar se cierra, se recarga esa lista
+ * y su contador, y la selección no se mueve: quien añade tres valores seguidos no
+ * vuelve a elegir la lista tres veces.
  */
 export function StandardValuesPanel() {
     const [lists, setLists] = useState<StandardValueListSummary[]>([]);
@@ -47,6 +64,8 @@ export function StandardValuesPanel() {
     const [values, setValues] = useState<StandardValue[]>([]);
     const [includeInactive, setIncludeInactive] = useState(false);
     const [nuevo, setNuevo] = useState('');
+    // El diálogo de alta. Sabe a qué lista añade porque `selected` no cambia.
+    const [altaAbierta, setAltaAbierta] = useState(false);
     const [editing, setEditing] = useState<StandardValue | null>(null);
     const [editLabel, setEditLabel] = useState('');
     const [error, setError] = useState<string | null>(null);
@@ -91,6 +110,9 @@ export function StandardValuesPanel() {
         try {
             await createStandardValue(selected, nuevo.trim());
             setNuevo('');
+            setAltaAbierta(false);
+            // Los dos: la tabla de la lista y el contador del grupo. La selección
+            // se queda donde estaba.
             await Promise.all([cargarValores(), cargarListas()]);
         } catch (err) {
             const detalle = (err as { response?: { data?: { detail?: string } } })
@@ -195,7 +217,10 @@ export function StandardValuesPanel() {
 
     return (
         <div className="flex flex-col gap-6 lg:flex-row" data-testid="StandardValuesPanel">
-            <nav className="flex shrink-0 flex-col gap-1 lg:w-64" aria-label="Value lists">
+            <nav
+                className="flex shrink-0 flex-col gap-1 self-start rounded-lg border border-border bg-card p-2 lg:w-64"
+                aria-label="Value lists"
+            >
                 {lists.map((list) => (
                     <button
                         key={list.code}
@@ -215,30 +240,79 @@ export function StandardValuesPanel() {
             </nav>
 
             <div className="flex flex-1 flex-col gap-4">
-                <section className="rounded-lg border border-border bg-card p-4">
-                    <Label htmlFor="new-value">Add a value</Label>
-                    <div className="mt-1.5 flex gap-2">
-                        <Input
-                            id="new-value"
-                            value={nuevo}
-                            onChange={(e) => setNuevo(e.target.value)}
-                            placeholder="New value"
+                <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                        <Checkbox
+                            id="show-retired"
+                            checked={includeInactive}
+                            onCheckedChange={(v) => setIncludeInactive(v === true)}
                         />
-                        <Button onClick={anadir} disabled={!nuevo.trim()}>Add</Button>
+                        <Label
+                            htmlFor="show-retired"
+                            className="text-sm text-muted-foreground"
+                        >
+                            Show inactive values
+                        </Label>
                     </div>
-                    {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
-                </section>
-
-                <div className="flex items-center gap-2">
-                    <Checkbox
-                        id="show-retired"
-                        checked={includeInactive}
-                        onCheckedChange={(v) => setIncludeInactive(v === true)}
-                    />
-                    <Label htmlFor="show-retired" className="text-sm text-muted-foreground">
-                        Show inactive values
-                    </Label>
+                    <Button
+                        disabled={!selected}
+                        onClick={() => { setNuevo(''); setError(null); setAltaAbierta(true); }}
+                    >
+                        Add Value
+                    </Button>
                 </div>
+
+                {error && !altaAbierta && (
+                    <p className="text-sm text-destructive">{error}</p>
+                )}
+
+                <Dialog
+                    open={altaAbierta}
+                    onOpenChange={(abierto) => {
+                        setAltaAbierta(abierto);
+                        if (!abierto) { setNuevo(''); setError(null); }
+                    }}
+                >
+                    <DialogContent className="sm:max-w-[520px]">
+                        <DialogHeader>
+                            {/* La lista seleccionada, en la cabecera: el diálogo ya
+                                sabe dónde añade y no lo vuelve a preguntar. */}
+                            <DialogTitle>
+                                Add value to
+                                {' '}
+                                {lists.find((l) => l.code === selected)?.label ?? ''}
+                            </DialogTitle>
+                            <DialogDescription>
+                                It becomes selectable for supervisors as soon as you
+                                save it.
+                            </DialogDescription>
+                        </DialogHeader>
+
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="new-value">Label</Label>
+                            <Input
+                                id="new-value"
+                                value={nuevo}
+                                onChange={(e) => setNuevo(e.target.value)}
+                                placeholder="New value"
+                            />
+                        </div>
+
+                        {error && <p className="text-sm text-destructive">{error}</p>}
+
+                        <DialogFooter>
+                            <Button
+                                variant="outline"
+                                onClick={() => setAltaAbierta(false)}
+                            >
+                                Cancel
+                            </Button>
+                            <Button onClick={anadir} disabled={!nuevo.trim()}>
+                                Add
+                            </Button>
+                        </DialogFooter>
+                    </DialogContent>
+                </Dialog>
 
                 <section className="rounded-lg border border-border bg-card">
                     {values.length === 0 ? (
@@ -249,17 +323,49 @@ export function StandardValuesPanel() {
                         <Table>
                             <TableHeader>
                                 <TableRow>
-                                    <TableHead className="w-16">Order</TableHead>
+                                    <TableHead className="w-28">Order</TableHead>
                                     <TableHead>Label</TableHead>
                                     <TableHead>Status</TableHead>
-                                    <TableHead className="text-right">Actions</TableHead>
+                                    {/* Sin cabecera: la columna sólo lleva el menú
+                                        contextual de la fila, y titularla
+                                        "Actions" nombra un control que ya se
+                                        explica solo. */}
+                                    <TableHead className="w-12" />
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {values.map((valor, indice) => (
                                     <TableRow key={valor.id}>
-                                        <TableCell className="text-muted-foreground">
-                                            {valor.sort_order}
+                                        <TableCell>
+                                            {/* Las flechas viven **con** el orden,
+                                                no junto al menú de ciclo de vida:
+                                                mover una fila es posición, no una
+                                                decisión sobre el valor. */}
+                                            <div className="flex items-center gap-1">
+                                                <span className="w-4 text-muted-foreground">
+                                                    {valor.sort_order}
+                                                </span>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 w-7 p-0"
+                                                    disabled={indice === 0}
+                                                    onClick={() => mover(indice, -1)}
+                                                    aria-label={`Move ${valor.label} up`}
+                                                >
+                                                    ↑
+                                                </Button>
+                                                <Button
+                                                    variant="ghost"
+                                                    size="sm"
+                                                    className="h-7 w-7 p-0"
+                                                    disabled={indice === values.length - 1}
+                                                    onClick={() => mover(indice, 1)}
+                                                    aria-label={`Move ${valor.label} down`}
+                                                >
+                                                    ↓
+                                                </Button>
+                                            </div>
                                         </TableCell>
                                         <TableCell className="font-medium">
                                             {editing?.id === valor.id ? (
@@ -298,28 +404,6 @@ export function StandardValuesPanel() {
                                             </Badge>
                                         </TableCell>
                                         <TableCell className="text-right">
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                disabled={indice === 0}
-                                                onClick={() => mover(indice, -1)}
-                                                aria-label={`Move ${valor.label} up`}
-                                            >
-                                                ↑
-                                            </Button>
-                                            <Button
-                                                variant="ghost"
-                                                size="sm"
-                                                disabled={indice === values.length - 1}
-                                                onClick={() => mover(indice, 1)}
-                                                aria-label={`Move ${valor.label} down`}
-                                            >
-                                                ↓
-                                            </Button>
-                                            {/* Las flechas son posición, no
-                                                ciclo de vida; el ciclo de vida
-                                                va al menú contextual, que es lo
-                                                que pide el addendum. */}
                                             <LifecycleRowActions
                                                 isActive={valor.is_active}
                                                 onEdit={() => empezarEdicion(valor)}

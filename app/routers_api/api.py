@@ -22,6 +22,7 @@ from app.routers_api.rolepermissionsapprovals.router import (
     router as router_rolepermissionsapprovals,
 )
 from app.routers_api.roles.router import router as router_roles
+from app.routers_api.usermanagement.product_context import marcar_contexto_de_route
 from app.routers_api.usermanagement.router import router as router_usermanagement
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.router import router as router_users
@@ -66,6 +67,22 @@ api_router.include_router(router_rolepermissions)
 api_router.include_router(router_rolepermissionsapprovals)
 api_router.include_router(router_users)
 api_router.include_router(router_usermanagement)
+# El **mismo** router, montado otra vez bajo el contrato de CER Route.
+#
+# No es una segunda administración de usuarios: son los mismos handlers, el mismo
+# DAO y la misma auditoría. Lo único que añade la dependencia es marcar que la
+# petición llegó por una pantalla de CER Route, y eso acota los roles asignables
+# a los dos del producto — para cualquiera que use este contrato, Superadmin
+# incluido (PD-02).
+#
+# La frontera la decide la ruta y no una cabecera: confiar en que el cliente
+# declare su propio contexto sería confiar en el cliente para decidir una
+# frontera. `/api/users` no cambia.
+api_router.include_router(
+    router_usermanagement,
+    prefix="/route",
+    dependencies=[Depends(marcar_contexto_de_route)],
+)
 api_router.include_router(router_companies)
 api_router.include_router(router_regions)
 api_router.include_router(router_integrations)

@@ -12,6 +12,10 @@ import { SecurityUsersPanel } from '@/features/SecurityUsers';
  *
  * Lo propio de Route —la designación de supervisor— no está aquí: es un
  * concepto distinto de la identidad y vive en Supervisors.
+ *
+ * Lo único que esta página añade al panel compartido es **desde qué producto**
+ * administra. Con eso el panel habla al contrato de CER Route, que ofrece los
+ * dos roles de producto y rechaza cualquier otro — venga de quien venga.
  */
 const RouteUsersPage = () => (
     <div className="flex flex-1 flex-col" data-testid="RouteUsersPage">
@@ -21,7 +25,9 @@ const RouteUsersPage = () => (
             breadcrumbs={[{ label: 'CER Route' }, { label: 'Configuration' }, { label: 'Users' }]}
         />
         <div className="flex flex-1 flex-col p-6">
-            <SecurityUsersPanel />
+            {/* El contrato de CER Route: sólo ofrece y sólo acepta los dos
+                roles de producto, para cualquiera que entre por aquí. */}
+            <SecurityUsersPanel contract="cer-route" />
         </div>
     </div>
 );

@@ -23,14 +23,30 @@ desde CER Route sólo concede roles de CER Route.** No depende de comparar
 capacidades, no necesita jerarquía, y no cambia nada para quien administra desde
 el núcleo.
 
-Alcance deliberadamente estrecho
+Dos condiciones, y hacen falta las dos
+---------------------------------------
+Se acota la asignación cuando se cumple **cualquiera** de estas:
+
+1. **El contexto es CER Route** — la petición entró por `/api/route/users`. Da
+   igual quién llame: un Superadmin usando una pantalla de CER Route sólo puede
+   conceder lo que CER Route ofrece (PD-02, el añadido de FC1).
+2. **El actor es de CER Route** — su rol en esta compañía es `route_admin` o
+   `supervisor`. Da igual por dónde llame (A02, y **no se puede quitar**).
+
+La segunda parecía sobrar al llegar PD-02, y quitarla reabrió la escalada al
+instante: un `route_admin` tiene `users.create`, así que llamando a `/api/users`
+—el contrato del núcleo— volvía a poder crear un `owner`. Se midió contra la API
+y devolvía 200. El contexto cierra la pantalla; el actor cierra la puerta de
+atrás. Hacen falta las dos.
+
+Quien administra desde el núcleo por el contrato del núcleo sigue exactamente
+como estaba, que es lo que la resolución pide expresamente.
+
+Lo que queda fuera, y se reporta
 ---------------------------------
-Se aplica cuando **quien llama** tiene un rol de producto de Route. Un `owner` o
-un `admin` del núcleo siguen administrando como siempre: esta resolución cierra
-la superficie de CER Route y pide reportar aparte lo que quede expuesto en el
-núcleo. `manager` tiene `users.create` y `users.update` y está en la misma
-situación que estaba `route_admin`; eso es exposición **del núcleo**, se reporta
-y no se toca aquí (§103 de la resolución).
+`manager` tiene `users.create` y `users.update` en el núcleo y puede conceder
+`owner` por el contrato del núcleo. Es exposición **del núcleo**, explícitamente
+fuera de alcance en esta resolución, y sigue documentada como hueco aparte.
 
 El servidor es la autoridad. Que la pantalla ofrezca dos opciones es experiencia
 de usuario; lo que impide la escalada es esto.
@@ -43,6 +59,7 @@ from sqlalchemy import select
 
 from app.core.db.session import db_session
 from app.core.rbac.catalog import ROUTE_PRODUCT_ROLES
+from app.routers_api.usermanagement.product_context import es_contexto_de_route
 from app.routers_api.companies.models import UserCompany
 from app.routers_api.roles.models import Role
 
@@ -70,12 +87,24 @@ async def _rol_de_quien_llama(*, user_id: int, company_id: int) -> str | None:
         )
 
 
+async def acota_a_roles_de_route(*, actor_user_id: int, company_id: int) -> bool:
+    """Si esta petición queda limitada a los dos roles de producto de CER Route.
+
+    Una sola función para las dos caras del contrato —qué se ofrece y qué se
+    acepta—, porque ofrecer una opción que el servidor después rechaza es peor
+    que no ofrecerla.
+    """
+    if es_contexto_de_route():
+        return True
+
+    rol_del_actor = await _rol_de_quien_llama(
+        user_id=actor_user_id, company_id=company_id
+    )
+    return rol_del_actor in ROUTE_PRODUCT_ROLES
+
+
 async def ensure_assignable_role(
-    *,
-    actor_user_id: int,
-    actor_is_superuser: bool,
-    company_id: int,
-    role_id: int | None,
+    *, actor_user_id: int, company_id: int, role_id: int | None
 ) -> None:
     """403 si quien administra desde Route intenta conceder un rol del núcleo.
 
@@ -89,17 +118,15 @@ async def ensure_assignable_role(
     if role_id is None:
         return
 
-    # El administrador de plataforma está por encima de cualquier tenant (D6) y
-    # no administra "desde CER Route": su autoridad es de otra naturaleza.
-    if actor_is_superuser:
-        return
-
-    rol_del_actor = await _rol_de_quien_llama(
-        user_id=actor_user_id, company_id=company_id
-    )
-    if rol_del_actor not in ROUTE_PRODUCT_ROLES:
-        # Quien administra desde el núcleo sigue como estaba. Lo que el núcleo
-        # permita o no es una cuestión aparte, reportada y fuera de este alcance.
+    # El administrador de plataforma **no** queda exento por el contexto, y es el
+    # cambio central de FC1. Su autoridad es real y sigue intacta en el contrato
+    # del núcleo; lo que no puede es usar una pantalla de CER Route para conceder
+    # un rol que CER Route no ofrece.
+    if not await acota_a_roles_de_route(
+        actor_user_id=actor_user_id, company_id=company_id
+    ):
+        # Actor del núcleo por el contrato del núcleo: sigue como estaba. Lo que
+        # el núcleo permita es una cuestión aparte, reportada y fuera de alcance.
         return
 
     objetivo = await _nombre_del_rol(role_id=role_id, company_id=company_id)

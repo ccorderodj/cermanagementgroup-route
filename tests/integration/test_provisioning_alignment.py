@@ -291,3 +291,37 @@ async def test_the_supervisor_is_never_left_without_operational_capability(seede
     assert "route.worksession.execute" in concedidas
     assert "route.standardvalues.read" in concedidas
     assert len(concedidas) == 2, f"Read + Execute y nada más: {sorted(concedidas)}"
+
+
+async def test_the_two_product_roles_hold_exactly_twelve_and_two_capabilities(
+    seeded,
+):
+    """Los números que la resolución fija como criterio de aceptación.
+
+    Se comprueban por separado del contraste con el catálogo porque son un hecho
+    del producto, no un detalle de implementación: que el Administrador tenga
+    doce y el Supervisor dos es lo que CER certifica. Si mañana alguien añade una
+    capacidad a una plantilla sin pasar por CER, esto falla y obliga a decirlo.
+    """
+    esperado = {"route_admin": 12, "supervisor": 2}
+
+    async with async_session_maker() as session:
+        for nombre, cuantas in esperado.items():
+            filas = await session.execute(
+                text(
+                    "SELECT p.name FROM role r "
+                    "JOIN role_permission rp ON rp.role_id = r.id "
+                    "JOIN permission p ON p.id = rp.permission_id "
+                    "WHERE r.name = :n AND r.company_id = :c"
+                ),
+                {"n": nombre, "c": seeded.alpha.id},
+            )
+            concedidas = {f[0] for f in filas.all()}
+
+            assert len(concedidas) == cuantas, (
+                f"'{nombre}': {len(concedidas)} capacidades, se esperaban "
+                f"{cuantas} — {sorted(concedidas)}"
+            )
+            assert "roles.read" not in concedidas, (
+                f"'{nombre}' no debe leer el catálogo de roles del tenant"
+            )
