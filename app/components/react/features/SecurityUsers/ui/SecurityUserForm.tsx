@@ -26,9 +26,14 @@ import {
 } from '@/shared/ui/shadcn/new-york';
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch/useAppDispatch';
-import { createUserManagement, setUserAccess, updateUserManagement } from '@/entities/UserManagement';
-import { fetchRoles, type RoleEntity } from '@/entities/Roles';
-import type { UserManagementEntity } from '@/entities/UserManagement';
+import {
+    createUserManagement,
+    fetchAssignableRoles,
+    setUserAccess,
+    updateUserManagement,
+    type AssignableRole,
+    type UserManagementEntity,
+} from '@/entities/UserManagement';
 
 interface SecurityUserFormProps {
     getData: (data: UserManagementEntity) => void;
@@ -63,10 +68,13 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
     const { toast } = useToast();
     const [showPassword, setShowPassword] = useState(false);
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-    const [roles, setRoles] = useState<RoleEntity[]>([]);
+    const [roles, setRoles] = useState<AssignableRole[]>([]);
 
     useEffect(() => {
-        dispatch(fetchRoles()).unwrap().then(setRoles).catch(() => setRoles([]));
+        // Los roles que el servidor **aceptaría** de quien está autenticado, no el
+        // catálogo del tenant. Dentro de CER Route son dos; para quien administra
+        // desde el núcleo sigue siendo el catálogo completo.
+        dispatch(fetchAssignableRoles()).unwrap().then(setRoles).catch(() => setRoles([]));
     }, [dispatch]);
 
     const defaultValues = useMemo<Partial<SecurityUserFormValues>>(
@@ -414,7 +422,9 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                         <SelectContent>
                                             {roles.map((role) => (
                                                 <SelectItem key={role.id} value={String(role.id)}>
-                                                    <span className="capitalize">{role.name}</span>
+                                                    {/* La etiqueta de producto. El código
+                                                        técnico —`route_admin`— no se muestra. */}
+                                                    <span className="capitalize">{role.label}</span>
                                                 </SelectItem>
                                             ))}
                                         </SelectContent>

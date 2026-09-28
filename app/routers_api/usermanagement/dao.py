@@ -126,6 +126,54 @@ class UserManagementDAO(BaseDAO):
         return default
 
     @classmethod
+    async def list_assignable_roles(
+        cls, *, company_id: int, actor_user_id: int, actor_is_superuser: bool
+    ) -> list[dict]:
+        """Los roles que este actor puede conceder, con su etiqueta de producto.
+
+        Quien administra desde CER Route recibe **sus dos roles de producto** y
+        nada más; es la misma frontera que aplica `ensure_assignable_role` al
+        escribir, leída de la misma constante para que no puedan divergir.
+
+        Quien administra desde el núcleo sigue viendo el catálogo del tenant, que
+        es el comportamiento que ya tenía y que esta resolución no cambia.
+        """
+        from app.core.rbac.catalog import (
+            ROUTE_PRODUCT_ROLES,
+            ROUTE_PRODUCT_ROLE_LABELS,
+        )
+        from app.routers_api.usermanagement.role_policy import _rol_de_quien_llama
+
+        rol_del_actor = (
+            None
+            if actor_is_superuser
+            else await _rol_de_quien_llama(
+                user_id=actor_user_id, company_id=company_id
+            )
+        )
+        acotado_a_route = rol_del_actor in ROUTE_PRODUCT_ROLES
+
+        async with db_session() as session:
+            filas = await session.execute(
+                select(Role.id, Role.name)
+                .where(Role.company_id == company_id, Role.is_active.is_(True))
+                .order_by(Role.name.asc())
+            )
+
+        opciones: list[dict] = []
+        for role_id, nombre in filas.all():
+            if acotado_a_route and nombre not in ROUTE_PRODUCT_ROLES:
+                continue
+            opciones.append({
+                "id": role_id,
+                "code": nombre,
+                # Los roles del núcleo no tienen etiqueta de producto: se
+                # muestran por su nombre, capitalizado por la pantalla.
+                "label": ROUTE_PRODUCT_ROLE_LABELS.get(nombre, nombre),
+            })
+        return opciones
+
+    @classmethod
     async def _assert_role_of_company(cls, session, *, role_id: int, company_id: int) -> None:
         role = await session.scalar(
             select(Role).where(

@@ -25,6 +25,7 @@ from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.usermanagement.dao import UserManagementDAO
 from app.routers_api.usermanagement.schemas import (
+    AssignableRoleRead,
     UserAccessUpdate,
     UserManagementCreate,
     UserManagementRead,
@@ -33,6 +34,7 @@ from app.routers_api.usermanagement.schemas import (
 )
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
+from app.routers_api.usermanagement.role_policy import ensure_assignable_role
 from app.routers_api.users.permissions import require_permissions
 
 
@@ -74,6 +76,31 @@ def _instantanea(usuario: dict) -> dict:
     return {campo: usuario.get(campo) for campo in _CAMPOS_AUDITADOS}
 
 
+@router.get("/assignable-roles")
+async def list_assignable_roles(
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["users.read"])),
+    company: TenantContext = Depends(get_company_required),
+) -> list[AssignableRoleRead]:
+    """Los roles que **quien llama** puede conceder en esta compañía.
+
+    Existe para que el formulario de usuarios de CER Route no tenga que pedir el
+    catálogo de roles del tenant y quedarse con dos: quien administra desde Route
+    ya no tiene `roles.read`, y no le hace falta. Recibe exactamente sus dos
+    opciones, con su etiqueta de producto.
+
+    La lista que devuelve es **la misma** que aplica el servidor al asignar
+    (`ensure_assignable_role`), no una copia que pueda divergir: las dos salen de
+    `ROUTE_PRODUCT_ROLES`. Aun así esto es experiencia de usuario — quien mande un
+    rol distinto por API recibe 403 igualmente.
+    """
+    return await UserManagementDAO.list_assignable_roles(
+        company_id=company.id,
+        actor_user_id=current_user.id,
+        actor_is_superuser=bool(current_user.is_superuser),
+    )
+
+
 @router.post("")
 async def create_user(
     payload: UserManagementCreate,
@@ -82,6 +109,15 @@ async def create_user(
     company: TenantContext = Depends(get_company_required),
 ) -> UserManagementRead:
     """Crea el usuario y su pertenencia a la compañía en una sola operación."""
+    # Primero **si puede** conceder ese rol, después si el rol existe aquí. Cerrar
+    # este orden es lo que impide la escalada que midió el diagnóstico A01.
+    await ensure_assignable_role(
+        actor_user_id=current_user.id,
+        actor_is_superuser=bool(current_user.is_superuser),
+        company_id=company.id,
+        role_id=payload.role_id,
+    )
+
     created = await UserManagementDAO.create_user_with_company_role(
         company_id=company.id,
         **payload.model_dump(),
@@ -116,6 +152,15 @@ async def update_user(
     """Actualiza los datos del usuario y, si viene, su rol en la compañía."""
     data = payload.model_dump(exclude_unset=True)
     cambia_contrasena = data.get("password") is not None
+
+    # También al **cambiar** el rol: ascender a alguien que ya existe abre la
+    # misma puerta que crearlo ya ascendido.
+    await ensure_assignable_role(
+        actor_user_id=current_user.id,
+        actor_is_superuser=bool(current_user.is_superuser),
+        company_id=company.id,
+        role_id=data.get("role_id"),
+    )
 
     antes = await UserManagementDAO.find_for_company(
         user_id=user_id, company_id=company.id

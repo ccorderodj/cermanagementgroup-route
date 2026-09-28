@@ -54,7 +54,13 @@ def test_route_admin_uses_core_user_capabilities_not_route_ones():
     plantilla = next(t for t in DEFAULT_ROLES if t.name == "route_admin")
     concedidas = set(capabilities_for(plantilla))
 
-    assert {"users.read", "users.create", "users.update", "roles.read"} <= concedidas
+    assert {"users.read", "users.create", "users.update"} <= concedidas
+
+    # `roles.read` **ya no**. Desde A02 el formulario de usuarios de Route no
+    # pide el catálogo de roles del tenant: recibe sus dos roles de producto de
+    # `/api/users/assignable-roles`, así que leer los roles del núcleo dejó de
+    # tener uso y la capacidad que no hace falta no se concede.
+    assert "roles.read" not in concedidas
 
     inventadas = {c for c in concedidas if c.startswith("route.users")}
     assert not inventadas, (
@@ -88,7 +94,7 @@ async def test_the_created_user_belongs_only_to_the_acting_tenant(
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["viewer"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
         )
     ).json()
 
@@ -105,7 +111,7 @@ async def test_route_admin_can_update_and_suspend_a_user(seeded, alpha_client):
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["viewer"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
         )
     ).json()
 
@@ -172,7 +178,7 @@ async def test_route_admin_cannot_grant_platform_superuser(seeded, alpha_client)
         "/api/users",
         json={
             **NUEVO_USUARIO,
-            "role_id": seeded.alpha.roles["viewer"],
+            "role_id": seeded.alpha.roles["supervisor"],
             "is_superuser": True,
         },
     )
@@ -204,13 +210,24 @@ async def test_route_admin_cannot_escalate_an_existing_user_to_superuser(
 
 
 async def test_route_admin_cannot_administer_roles_themselves(seeded, alpha_client):
-    """Puede asignar roles existentes; no fabricar uno con más capacidades."""
+    """Ni fabrica roles, ni lee ya el catálogo del núcleo.
+
+    Antes de A02 leía `/api/roles` para poblar el selector del formulario. Ahora
+    recibe sus dos roles de producto de `/api/users/assignable-roles`, así que el
+    catálogo del tenant —donde viven `owner` y `admin`— dejó de ser asunto suyo:
+    esa taxonomía no es parte de la experiencia de CER Route (FR-01).
+    """
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
 
-    assert (await alpha_client.get("/api/roles")).status_code == 200
+    assert (await alpha_client.get("/api/roles")).status_code == 403
     assert (
         await alpha_client.post("/api/roles", json={"name": "inventado"})
     ).status_code == 403
+
+    # Y lo que sustituye a esa lectura sí funciona.
+    asignables = await alpha_client.get("/api/users/assignable-roles")
+    assert asignables.status_code == 200
+    assert {o["code"] for o in asignables.json()} == {"route_admin", "supervisor"}
 
 
 # ── Designación de supervisor desde el producto ─────────────────────────────
@@ -498,7 +515,7 @@ async def test_user_administration_is_audited_by_core(seeded, alpha_client):
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["viewer"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
         )
     ).json()
 

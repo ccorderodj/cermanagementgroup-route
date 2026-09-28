@@ -768,7 +768,10 @@ async def _crear_usuario(cliente, seeded, username: str) -> dict:
             "first_name": "Temp",
             "last_name": "User",
             "password": TEST_PASSWORD,
-            "role_id": seeded.alpha.roles["viewer"],
+            # Un rol de CER Route, no `viewer`: desde A02 el Administrador de
+            # Route sólo puede conceder los dos roles de producto, y lo que este
+            # test necesita es "un usuario cualquiera", no uno del núcleo.
+            "role_id": seeded.alpha.roles["supervisor"],
         },
     )
     assert respuesta.status_code == 200, respuesta.text
@@ -833,13 +836,17 @@ async def test_a_removed_user_loses_authorization_on_an_open_session(
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     usuario = await _crear_usuario(alpha_client, seeded, "opensession")
 
+    # Se consulta un endpoint del alcance del usuario creado —su propia jornada—
+    # y no el perfil de la compañía: el usuario de prueba es un Supervisor desde
+    # A02, y `companies.read` no es suyo. Lo que el test demuestra es lo mismo:
+    # una sesión abierta deja de autorizar en la siguiente petición.
     async with TenantClient("alpha") as victima:
         await victima.login(usuario["email"])
-        assert (await victima.get("/api/companies/profile")).status_code == 200
+        assert (await victima.get("/api/worksessions/current")).status_code == 200
 
         await alpha_client.delete(f"/api/users/{usuario['id']}")
 
-        despues = await victima.get("/api/companies/profile")
+        despues = await victima.get("/api/worksessions/current")
     assert despues.status_code == 403
 
 
