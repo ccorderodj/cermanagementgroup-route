@@ -8,6 +8,7 @@ from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.routers_api.activities.schemas import ActivityExecutionRead
 from app.routers_api.trips.schemas import TripRead
 
 
@@ -97,20 +98,32 @@ class WorkSessionRead(BaseModel):
 class CurrentWorkSessionResponse(BaseModel):
     """El estado autoritativo de `GET /worksessions/current`.
 
-    El sobre crece, no se duplica. RTE03 traía sólo la jornada; RTE04 añade
-    `current_trip` aquí mismo, y RTE05 añadirá `current_activity` de la misma
+    El sobre crece, no se duplica. RTE03 traía sólo la jornada; RTE04 añadió
+    `current_trip` aquí mismo, y RTE05 añade `current_activity` de la misma
     forma. Nunca un segundo endpoint de "estado actual" compitiendo con este:
     dos fuentes de verdad para la misma pregunta acaban respondiendo cosas
     distintas.
 
     `current_trip` es el viaje **no terminal** de la jornada, si lo hay. Un
-    viaje operativo en `ARRIVED` sigue siendo el actual —espera a RTE05—,
-    mientras que uno `CLOSED` o `INTERRUPTED` ya no lo es. Sin viaje vivo la
-    clave vale `null`, no un marcador de posición: fabricar uno sería fingir un
-    estado que no existe.
+    viaje operativo en `ARRIVED` sigue siendo el actual, y uno `CLOSED` o
+    `INTERRUPTED` ya no lo es. Sin viaje vivo la clave vale `null`, no un
+    marcador de posición: fabricar uno sería fingir un estado que no existe.
+
+    Las dos claves de RTE05 responden lo que el cliente necesita para saber
+    **a qué pantalla volver**:
+
+    * `current_activity` — el bloque de la parada, si existe. En marcha o ya
+      terminado; el cliente distingue por su `status`.
+    * `post_arrival_pending` — si queda trabajo de llegada sin resolver. Es la
+      pregunta que de verdad decide la navegación, y se responde en el servidor
+      para que la pantalla no tenga que deducirla cruzando propósito, estado del
+      viaje y estado del bloque. HOME nunca la pone a verdadero: su viaje se
+      cerró al llegar.
     """
 
     model_config = ConfigDict(extra="forbid")
 
     work_session: Optional[WorkSessionRead] = None
     current_trip: Optional[TripRead] = None
+    current_activity: Optional[ActivityExecutionRead] = None
+    post_arrival_pending: bool = False

@@ -29,6 +29,7 @@ from sqlalchemy import text
 
 from app.database import async_session_maker
 from app.routers_api.odometer.ocr import NoSuggestionReader, set_odometer_reader
+from app.routers_api.standardvalues.provisioning import provision_standard_values
 
 
 pytestmark = pytest.mark.integration
@@ -51,10 +52,47 @@ def _sin_ocr():
 # ── Ayudas ──────────────────────────────────────────────────────────────────
 
 
+async def _resolver_la_parada(cliente, seeded, trip_id: int) -> None:
+    """Cierra la parada para que lo único pendiente sea el odómetro.
+
+    RTE05 cerró el hueco que RTE04 aceptaba: un viaje operativo que llegó y no
+    se resolvió bloquea el fin de jornada **antes** de que se mire el odómetro
+    (PD-04). Lo que estos tests prueban es la guarda del odómetro, así que la
+    parada se resuelve aquí en vez de relajar la guarda nueva.
+
+    De paso queda demostrado FR-15 en la suite de integración: terminalizada la
+    actividad, las reglas de cierre de RTE04 siguen aplicando sin cambios. El
+    viaje pasa a `CLOSED`, y eso **no** quita la necesidad de lectura final —se
+    cuenta por `started_at`, no por estado: quien condujo, condujo.
+    """
+    async with async_session_maker() as session:
+        await provision_standard_values(session, company_id=seeded.alpha.id)
+        await session.commit()
+
+    actividades = (
+        await cliente.get("/api/standard-values/client_visit_activities")
+    ).json()
+    resultados = (await cliente.get("/api/standard-values/outcomes")).json()
+
+    await cliente.post(
+        f"/api/trips/{trip_id}/activity/start",
+        json={"activity_ids": [actividades[0]["id"]]},
+    )
+    await cliente.post(
+        f"/api/trips/{trip_id}/activity/complete",
+        json={"action": "complete", "outcome_id": resultados[0]["id"]},
+    )
+
+
 async def _jornada_conduciendo(cliente, seeded, *, llegar: bool = True) -> dict:
     """Jornada con vehículo, lectura de inicio hecha y un viaje ya arrancado.
 
     Es el estado en que la lectura de cierre **sí** hace falta: se condujo.
+
+    Con `llegar=True` el viaje además llega **y se resuelve su parada**, que es
+    el estado en que un supervisor llega de verdad al fin de jornada desde
+    RTE05. Con `llegar=False` se queda en tránsito, que es lo que necesita la
+    guarda de D-07.
     """
     await cliente.login(seeded.alpha.users["route_admin"].email)
     perfil = (
@@ -94,6 +132,7 @@ async def _jornada_conduciendo(cliente, seeded, *, llegar: bool = True) -> dict:
     await cliente.post(f"/api/trips/{viaje['id']}/start", json={})
     if llegar:
         await cliente.post(f"/api/trips/{viaje['id']}/arrive", json={})
+        await _resolver_la_parada(cliente, seeded, viaje["id"])
 
     jornada["trip_id"] = viaje["id"]
     return jornada

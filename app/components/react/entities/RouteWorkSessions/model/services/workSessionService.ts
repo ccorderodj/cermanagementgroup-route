@@ -1,5 +1,10 @@
 import { $api, parseApi } from '@/shared/api';
-import { enqueueAction, flushQueue, type FlushResult, type PendingAction } from '@/shared/lib/offlineQueue';
+import {
+    enqueueAction,
+    flushPendingActions,
+    type FlushResult,
+    type PendingAction,
+} from '@/shared/lib/offlineQueue';
 import { captureTimeEvidence } from '@/shared/lib/utils/utils';
 import { currentWorkSessionSchema, type CurrentWorkSessionResponse } from '../types';
 
@@ -49,12 +54,5 @@ export async function queueEndWork(
  * sale de la cola y no se reenvía.
  */
 export async function syncPendingWorkSessionActions(): Promise<FlushResult> {
-    return flushQueue(async (accion) => {
-        await $api.request({
-            url: accion.endpoint,
-            method: accion.method,
-            data: accion.payload,
-            headers: { 'Idempotency-Key': accion.id },
-        });
-    });
+    return flushPendingActions();
 }

@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/shared/ui/shadcn/new-york';
 import { ConfirmDestructiveDialog } from '@/features/Common';
-import { NotBuiltYet, RouteMobileShell } from '@/widgets/RouteShell';
+import { RouteMobileShell } from '@/widgets/RouteShell';
 import { TripContextPicker } from '@/features/RouteTrip';
+import { ActivityStop } from '@/features/RouteActivity';
+import type { ActivityExecution } from '@/entities/RouteActivities';
 import {
     OdometerCapture,
     OdometerDistance,
@@ -54,12 +56,15 @@ import { listPendingActions } from '@/shared/lib/offlineQueue';
  * distinguirlos comparando cadenas rompería el día que alguien mejore una
  * frase.
  *
- * Lo que no hace, a propósito
- * ----------------------------
- * No cierra un viaje operativo al llegar ni ofrece actividades: eso es RTE05.
- * Un viaje que llegó se queda en `Arrived` y la pantalla dice honestamente que
- * lo siguiente aún no está construido, en vez de enseñar un botón que no hace
- * nada.
+ * Al llegar
+ * ---------
+ * Un viaje operativo que llegó abre la parada (RTE05): se elige qué se hace
+ * donde el contexto lo pide, y se sale terminando o marchándose —las dos
+ * diciendo cómo fue—. Nada cierra el viaje por su cuenta: `End Work` con una
+ * parada sin resolver recibe un 409 y lo dice, no cierra el día por detrás.
+ *
+ * `HOME` no pasa por aquí: su viaje se cierra al llegar, porque volver a casa
+ * no es una parada de trabajo.
  */
 
 function formatearHora(iso: string): string {
@@ -76,7 +81,13 @@ type Vista =
     | { phase: 'working'; session: WorkSession }
     | { phase: 'planning'; session: WorkSession; trip: Trip }
     | { phase: 'on-route'; session: WorkSession; trip: Trip }
-    | { phase: 'arrived'; session: WorkSession; trip: Trip }
+    | {
+        phase: 'arrived';
+        session: WorkSession;
+        trip: Trip;
+        /** El bloque de la parada, si ya se arrancó. */
+        execution: ActivityExecution | null;
+    }
     | { phase: 'ending'; session: WorkSession }
     | { phase: 'end-queued'; session: WorkSession }
     | { phase: 'error' };
@@ -139,6 +150,10 @@ export const RouteMyRoutePage = () => {
     // La revisión de End Work con un viaje en ruta (D-07).
     const [revisandoCierre, setRevisandoCierre] = useState(false);
     const ultimaJornada = useRef<WorkSession | null>(null);
+    // La última vista que el servidor confirmó. Es a la que se vuelve sin
+    // red: ver la parada de hace un minuto es cierto, y ofrecer
+    // "Where to next?" con una llegada sin resolver no lo es (FR-01).
+    const ultimaVista = useRef<Vista | null>(null);
 
     const detalleDeError = (err: unknown, porDefecto: string) => {
         const detalle = (err as { response?: { data?: { detail?: string } } })
@@ -161,6 +176,7 @@ export const RouteMyRoutePage = () => {
 
             if (!sesion) {
                 ultimaJornada.current = null;
+                ultimaVista.current = null;
                 setOdometro(null);
                 setView({ phase: 'no-session' });
                 return;
@@ -175,25 +191,45 @@ export const RouteMyRoutePage = () => {
                 await fetchSessionOdometer(sesion.id).catch(() => null),
             );
 
+            const confirmar = (vista: Vista) => {
+                ultimaVista.current = vista;
+                setView(vista);
+            };
+
             if (!viaje) {
-                setView({ phase: 'working', session: sesion });
+                confirmar({ phase: 'working', session: sesion });
                 return;
             }
             if (viaje.status === 'planning') {
-                setView({ phase: 'planning', session: sesion, trip: viaje });
+                confirmar({ phase: 'planning', session: sesion, trip: viaje });
                 return;
             }
             if (viaje.status === 'in_transit') {
-                setView({ phase: 'on-route', session: sesion, trip: viaje });
+                confirmar({ phase: 'on-route', session: sesion, trip: viaje });
                 return;
             }
-            setView({ phase: 'arrived', session: sesion, trip: viaje });
+            // El bloque viene en la misma respuesta que la jornada: la
+            // pantalla no tiene que deducir a dónde volver cruzando
+            // propósito, estado del viaje y estado de la parada.
+            confirmar({
+                phase: 'arrived',
+                session: sesion,
+                trip: viaje,
+                execution: actual.current_activity ?? null,
+            });
         } catch {
             // Sin servidor se infiere de lo pendiente, sin inventar un viaje:
             // lo único que se puede afirmar sin red es que hay algo encolado.
             const pendientes = await listPendingActions().catch(() => []);
             if (pendientes.some((a) => a.kind === 'worksession.start')) {
                 setView({ phase: 'start-queued' });
+            } else if (ultimaVista.current) {
+                // Lo último que el servidor dijo, no un estado más simple:
+                // colapsar a "Where to next?" con un viaje sin resolver
+                // ofrecía planificar un segundo viaje que el servidor va a
+                // rechazar —hay un único viaje vivo por jornada— y escondía
+                // el trabajo que quedaba en la parada.
+                setView(ultimaVista.current);
             } else if (ultimaJornada.current) {
                 setView({ phase: 'working', session: ultimaJornada.current });
             } else {
@@ -286,6 +322,18 @@ export const RouteMyRoutePage = () => {
             const viaje = actual?.current_trip ?? null;
             if (viaje?.status === 'in_transit' && !deTodosModos) {
                 setRevisandoCierre(true);
+                await reconcile();
+                return;
+            }
+
+            // Parada sin resolver: no hay nada que confirmar ni que forzar.
+            // Terminar o marcharse es una decisión con resultado, así que la
+            // pantalla vuelve a la parada en vez de ofrecer un atajo que el
+            // servidor va a rechazar igual —`end_anyway` cubre el viaje en
+            // ruta de D-07, no esto.
+            if (actual?.post_arrival_pending) {
+                setRevisandoCierre(false);
+                setError('Finish or leave this stop before ending your workday.');
                 await reconcile();
                 return;
             }
@@ -532,19 +580,33 @@ export const RouteMyRoutePage = () => {
                     <div className="flex flex-col gap-6">
                         <Cabecera session={view.session} />
                         <Destino trip={view.trip} />
-                        {/* Lo que se hace al llegar es RTE05. Un espacio
-                            reservado explícito evita el callejón sin salida sin
-                            fingir una función que no existe. */}
-                        <NotBuiltYet feature="Activities" checkpoint="RTE05" />
-                        <Button
-                            variant="outline"
-                            size="lg"
-                            className="h-14 w-full"
-                            disabled={busy}
-                            onClick={() => cerrarJornada(view.session)}
-                        >
-                            End Work
-                        </Button>
+
+                        <ActivityStop
+                            trip={view.trip}
+                            execution={view.execution}
+                            onChanged={reconcile}
+                        />
+
+                        {/* Con la parada en marcha, `End Work` no se ofrece
+                            (FR-14): la salida es terminar o marcharse, y las dos
+                            están ahí arriba. No es un callejón sin salida —hay
+                            dos puertas—, y ocultarlo evita ofrecer algo que el
+                            servidor va a rechazar de todos modos.
+
+                            Llegado sin empezar todavía sí lo ofrece: ahí lo que
+                            hace falta es que la pantalla devuelva al trabajo de
+                            la parada, no que esconda el fin de jornada. */}
+                        {view.execution?.status !== 'in_progress' && (
+                            <Button
+                                variant="ghost"
+                                size="lg"
+                                className="h-12 w-full"
+                                disabled={busy}
+                                onClick={() => cerrarJornada(view.session)}
+                            >
+                                End Work
+                            </Button>
+                        )}
                     </div>
                 )}
 
