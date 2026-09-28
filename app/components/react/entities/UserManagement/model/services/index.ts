@@ -4,3 +4,4 @@ export * from './setUserAccess/setUserAccess';
 export * from './fetchUserManagementPagination/fetchUserManagementPagination';
 export * from './deleteUserManagement/deleteUserManagement';
 export * from './fetchAssignableRoles/fetchAssignableRoles';
+export * from './contract';

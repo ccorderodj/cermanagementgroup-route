@@ -154,16 +154,35 @@ async def test_a_supervisor_cannot_administer_vehicles(seeded, alpha_client):
 
 
 async def test_a_supervisor_cannot_administer_standard_values(seeded, alpha_client):
+    """Lee los valores operativos, y nada más (A02/BR-03).
+
+    Antes de A02 la lectura también se le negaba, y eso hacía imposible arrancar
+    los tres contextos de viaje que exigen un valor de lista antes de salir: el
+    formulario pedía el dato y recibía 403 al buscar las opciones. La lectura
+    pasó a ser una capacidad propia, `route.standardvalues.read`, precisamente
+    para poder concederla sin conceder administración.
+
+    Leer para elegir no es administrar, y este test lo dice en las dos
+    direcciones.
+    """
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
 
     assert (
         await alpha_client.get("/api/standard-values/outcomes")
-    ).status_code == 403
+    ).status_code == 200, "el supervisor lee los valores que su viaje exige"
+
+    # Y no puede tocarlos de ninguna forma.
     assert (
         await alpha_client.post(
             "/api/standard-values",
             json={"list_code": "outcomes", "label": "Nope"},
         )
+    ).status_code == 403
+    assert (
+        await alpha_client.get("/api/standard-values/lists")
+    ).status_code == 403
+    assert (
+        await alpha_client.get("/api/standard-values/outcomes?include_inactive=true")
     ).status_code == 403
 
 

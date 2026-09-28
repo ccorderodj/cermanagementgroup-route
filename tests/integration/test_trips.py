@@ -451,10 +451,25 @@ async def test_a_trip_of_another_tenant_returns_not_found(seeded, alpha_client):
 
 
 async def test_planning_a_trip_requires_the_capability(seeded, alpha_client):
-    """`route_admin` administra la compañía; no ejecuta trabajo de campo."""
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    """La capacidad es lo que abre la puerta, no el rol.
+
+    Los **dos** roles de producto de CER Route la tienen desde A02 —el
+    Administrador también sale a ruta (BR-02)—, así que quien queda fuera es
+    quien no tiene `route.worksession.execute`: aquí un `viewer`.
+
+    Lo que el test protege sigue siendo lo mismo que protegía antes: que
+    planificar un viaje exija la capacidad y no se cuele por pertenecer al
+    tenant.
+    """
+    await alpha_client.login(seeded.alpha.users["viewer"].email)
     respuesta = await alpha_client.post("/api/trips", json={"purpose": "office"})
     assert respuesta.status_code == 403
+
+    # Y el Administrador de Route sí puede: es su experiencia operativa.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    await alpha_client.post("/api/worksessions", json={})
+    permitido = await alpha_client.post("/api/trips", json={"purpose": "office"})
+    assert permitido.status_code == 200, permitido.text
 
 
 # ── Idempotencia de la cola offline ─────────────────────────────────────────

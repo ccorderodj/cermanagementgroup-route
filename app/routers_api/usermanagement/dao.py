@@ -127,31 +127,24 @@ class UserManagementDAO(BaseDAO):
 
     @classmethod
     async def list_assignable_roles(
-        cls, *, company_id: int, actor_user_id: int, actor_is_superuser: bool
+        cls, *, company_id: int, actor_user_id: int
     ) -> list[dict]:
-        """Los roles que este actor puede conceder, con su etiqueta de producto.
+        """Los roles que esta petición puede conceder, con su etiqueta.
 
-        Quien administra desde CER Route recibe **sus dos roles de producto** y
-        nada más; es la misma frontera que aplica `ensure_assignable_role` al
-        escribir, leída de la misma constante para que no puedan divergir.
-
-        Quien administra desde el núcleo sigue viendo el catálogo del tenant, que
-        es el comportamiento que ya tenía y que esta resolución no cambia.
+        Aplica **las mismas dos condiciones** que `ensure_assignable_role` al
+        escribir —contexto de CER Route, o actor con rol de CER Route— y reutiliza
+        esa función para decidir, no una copia suya: una lista que ofreciera algo
+        que el servidor después rechaza sería peor que no ofrecer nada.
         """
         from app.core.rbac.catalog import (
             ROUTE_PRODUCT_ROLES,
             ROUTE_PRODUCT_ROLE_LABELS,
         )
-        from app.routers_api.usermanagement.role_policy import _rol_de_quien_llama
+        from app.routers_api.usermanagement.role_policy import acota_a_roles_de_route
 
-        rol_del_actor = (
-            None
-            if actor_is_superuser
-            else await _rol_de_quien_llama(
-                user_id=actor_user_id, company_id=company_id
-            )
+        acotado_a_route = await acota_a_roles_de_route(
+            actor_user_id=actor_user_id, company_id=company_id
         )
-        acotado_a_route = rol_del_actor in ROUTE_PRODUCT_ROLES
 
         async with db_session() as session:
             filas = await session.execute(

@@ -32,12 +32,19 @@ import {
     setUserAccess,
     updateUserManagement,
     type AssignableRole,
+    type UserManagementContract,
     type UserManagementEntity,
 } from '@/entities/UserManagement';
 
 interface SecurityUserFormProps {
     getData: (data: UserManagementEntity) => void;
     initialData?: UserManagementEntity;
+    /**
+     * Desde qué producto se administra. Decide a qué contrato se habla, y con
+     * ello qué roles se ofrecen y cuáles acepta el servidor. Sin declararlo, el
+     * del núcleo — que es el comportamiento que ya existía.
+     */
+    contract?: UserManagementContract;
 }
 
 const SecurityUserFormSchema = z.object({
@@ -62,6 +69,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
     const {
         getData,
         initialData,
+        contract,
     } = props;
     const dispatch = useAppDispatch();
     const isEditMode = Boolean(initialData);
@@ -71,11 +79,11 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
     const [roles, setRoles] = useState<AssignableRole[]>([]);
 
     useEffect(() => {
-        // Los roles que el servidor **aceptaría** de quien está autenticado, no el
-        // catálogo del tenant. Dentro de CER Route son dos; para quien administra
-        // desde el núcleo sigue siendo el catálogo completo.
-        dispatch(fetchAssignableRoles()).unwrap().then(setRoles).catch(() => setRoles([]));
-    }, [dispatch]);
+        // Los roles que el servidor **aceptaría** por este contrato, no el
+        // catálogo del tenant. Por el de CER Route son dos, para cualquiera;
+        // por el del núcleo sigue siendo el catálogo completo.
+        dispatch(fetchAssignableRoles(contract)).unwrap().then(setRoles).catch(() => setRoles([]));
+    }, [contract, dispatch]);
 
     const defaultValues = useMemo<Partial<SecurityUserFormValues>>(
         () => {
@@ -143,6 +151,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                         password: isPasswordProvided ? password : undefined,
                         gender: values.gender === 'true',
                         role_id: Number(values.role_id),
+                        contract,
                     },
                 })).unwrap();
 
@@ -173,6 +182,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                     // Un usuario nuevo entra siempre con la pertenencia activa;
                     // suspenderlo es una acción posterior y explícita.
                     role_id: Number(values.role_id),
+                    contract,
                 })).unwrap();
                 getData(created);
                 toast({
@@ -200,7 +210,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 action: <ToastAction altText="Try again">Try again</ToastAction>,
             });
         }
-    }, [dispatch, form, getData, initialData, isEditMode, toast]);
+    }, [contract, dispatch, form, getData, initialData, isEditMode, toast]);
 
     return (
         <Form {...form}>

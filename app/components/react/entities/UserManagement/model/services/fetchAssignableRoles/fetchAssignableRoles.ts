@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ThunkConfig } from '@/app/providers/StoreProvider';
 import { parseApi } from '@/shared/api';
 import { handleAsyncError } from '@/shared/lib/utils/utils';
+import { contractBasePath, type UserManagementContract } from '../contract';
 
 /**
  * Los roles que **quien está autenticado** puede conceder en esta compañía.
@@ -37,14 +38,16 @@ export type AssignableRole = z.infer<typeof assignableRoleSchema>;
 
 export const fetchAssignableRoles = createAsyncThunk<
     AssignableRole[],
-    void,
+    UserManagementContract | undefined,
     ThunkConfig<string>
 >(
     'userManagement/fetchAssignableRoles',
-    async (_, thunkApi) => {
+    async (contrato, thunkApi) => {
         const { extra, rejectWithValue } = thunkApi;
         try {
-            const response = await extra.api.get('/users/assignable-roles');
+            const response = await extra.api.get(
+                `${contractBasePath(contrato)}/assignable-roles`,
+            );
             return parseApi(
                 z.array(assignableRoleSchema),
                 response.data,

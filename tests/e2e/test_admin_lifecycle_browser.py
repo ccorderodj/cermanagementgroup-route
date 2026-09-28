@@ -90,8 +90,11 @@ async def test_vehicle_lifecycle_in_the_browser(seeded, live_server):
                 "/admin/route/vehicles",
             )
 
-            # Alta desde la propia pantalla: sin Postman ni API directa.
-            await page.wait_for_selector("text=Add a vehicle", timeout=20_000)
+            # Alta desde la propia pantalla: sin Postman ni API directa. Desde
+            # A02-FC3 el formulario no está permanentemente arriba: lo abre
+            # `Add Vehicle` en un diálogo.
+            await page.get_by_role("button", name="Add Vehicle").click()
+            await page.wait_for_selector("#vehicle-unit", timeout=20_000)
             await page.get_by_label("Unit").fill("V-UX1")
             await page.get_by_label("Make").fill("Toyota")
             await page.get_by_label("Model").fill("RAV4")
@@ -331,7 +334,9 @@ async def test_standard_value_lifecycle_in_the_browser(seeded, live_server):
                 seeded.alpha.users["route_admin"].email,
                 "/admin/route/standard-values",
             )
-            await page.wait_for_selector("text=Add a value", timeout=20_000)
+            # Desde A02-FC4 el alta es un diálogo que ya sabe a qué lista añade.
+            await page.get_by_role("button", name="Add Value").click()
+            await page.wait_for_selector("#new-value", timeout=20_000)
 
             await page.get_by_placeholder("New value").fill("Browser Check")
             await page.get_by_role("button", name="Add", exact=True).click()
@@ -415,7 +420,10 @@ async def test_user_delete_is_reachable_and_complete_from_the_admin_ui(
                 "first_name": "Browser",
                 "last_name": "Remove",
                 "password": "Str0ng!Passw0rd",
-                "role_id": seeded.alpha.roles["viewer"],
+                # Un rol de CER Route: desde A02 el Administrador sólo concede
+                # los dos de producto, y aquí hace falta "un usuario", no uno
+                # del núcleo.
+                "role_id": seeded.alpha.roles["supervisor"],
             },
         )
     ).json()

@@ -32,7 +32,10 @@ import {
     getUserManagementPaginationPageSize,
     userManagementPaginationSliceActions,
 } from '@/entities/UserManagement';
-import type { UserManagementEntity } from '@/entities/UserManagement';
+import type {
+    UserManagementContract,
+    UserManagementEntity,
+} from '@/entities/UserManagement';
 import { DataTable, DataTablePagination } from '@/features/Common';
 import { getSecurityUsersColumns } from './components/SecurityUsersColumns';
 import { DataTableRowActions } from './components/data-table-row-actions';
@@ -40,7 +43,24 @@ import SecurityUserForm from './SecurityUserForm';
 
 const DEBOUNCE_DELAY = 500;
 
-export const SecurityUsersPanel = () => {
+interface SecurityUsersPanelProps {
+    /**
+     * Desde qué producto se administra.
+     *
+     * El panel se reutiliza tal cual en `Security > Users` y en
+     * `CER Route > Users`, y esa reutilización era correcta salvo por una cosa:
+     * el servidor tiene dos contratos y la pantalla tenía que decir con cuál
+     * habla. Sin decirlo, `CER Route > Users` pedía el catálogo del núcleo y un
+     * Superadmin veía los seis roles del tenant dentro de una pantalla de CER
+     * Route — el hueco que CER encontró.
+     *
+     * Configurar el panel, no duplicarlo: escribir una segunda administración de
+     * usuarios habría creado un segundo sitio donde arreglar el mismo fallo.
+     */
+    contract?: UserManagementContract;
+}
+
+export const SecurityUsersPanel = ({ contract }: SecurityUsersPanelProps = {}) => {
     const dispatch = useAppDispatch();
     const { hasUserPermission } = useUser();
 
@@ -133,6 +153,7 @@ export const SecurityUsersPanel = () => {
                     </DialogHeader>
 
                     <SecurityUserForm
+                        contract={contract}
                         getData={handleCreated}
                     />
 

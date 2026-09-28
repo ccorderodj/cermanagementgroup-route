@@ -2,6 +2,12 @@ import { useCallback, useEffect, useState } from 'react';
 import {
     Badge,
     Button,
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
     Input,
     Checkbox,
     Label,
@@ -41,6 +47,17 @@ import {
  * El formulario manda `version` al editar: si otro administrador guardó
  * entretanto, el servidor responde 409 y aquí se enseña el conflicto en vez de
  * pisar su trabajo en silencio.
+ *
+ * Primero la lista, el formulario en un diálogo (A02-FC3)
+ * --------------------------------------------------------
+ * Antes el alta ocupaba la parte de arriba de forma permanente, así que lo
+ * primero que veía un administrador era un formulario vacío y su flota quedaba
+ * empujada hacia abajo. Se entra a mirar mucho más a menudo que a dar de alta, y
+ * la pantalla ahora lo refleja: la lista manda, y `Add Vehicle` abre el mismo
+ * formulario en un diálogo.
+ *
+ * Alta y edición comparten diálogo a propósito: son los mismos seis campos y las
+ * mismas validaciones, y separarlos crearía dos sitios donde corregir lo mismo.
  */
 
 type FormState = {
@@ -67,6 +84,8 @@ export function VehiclesPanel() {
     const [error, setError] = useState<string | null>(null);
     const [form, setForm] = useState<FormState>(FORM_VACIO);
     const [editing, setEditing] = useState<Vehicle | null>(null);
+    // El diálogo del formulario. Abierto para alta y para edición.
+    const [formularioAbierto, setFormularioAbierto] = useState(false);
     const [saving, setSaving] = useState(false);
     const [includeInactive, setIncludeInactive] = useState(false);
     // El vehículo cuyo borrado espera confirmación. `null` = diálogo cerrado.
@@ -93,6 +112,20 @@ export function VehiclesPanel() {
 
     const limpiar = () => { setForm(FORM_VACIO); setEditing(null); };
 
+    const abrirAlta = () => {
+        limpiar();
+        setError(null);
+        setFormularioAbierto(true);
+    };
+
+    const cerrarFormulario = (abierto: boolean) => {
+        setFormularioAbierto(abierto);
+        if (!abierto) {
+            limpiar();
+            setError(null);
+        }
+    };
+
     const guardar = async () => {
         setSaving(true);
         setError(null);
@@ -112,6 +145,7 @@ export function VehiclesPanel() {
             } else {
                 await createVehicle(datos);
             }
+            setFormularioAbierto(false);
             limpiar();
             await cargar();
         } catch (err) {
@@ -176,7 +210,9 @@ export function VehiclesPanel() {
     };
 
     const editar = (vehicle: Vehicle) => {
+        setError(null);
         setEditing(vehicle);
+        setFormularioAbierto(true);
         setForm({
             make: vehicle.make,
             model: vehicle.model,
@@ -192,104 +228,126 @@ export function VehiclesPanel() {
 
     return (
         <div className="flex flex-col gap-6" data-testid="VehiclesPanel">
-            <section className="rounded-lg border border-border bg-card p-4">
-                <h3 className="text-sm font-semibold text-foreground">
-                    {editing ? `Edit vehicle ${editing.unit}` : 'Add a vehicle'}
-                </h3>
-
-                <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-unit">Unit</Label>
-                        <Input
-                            id="vehicle-unit"
-                            value={form.unit}
-                            placeholder="V-014"
-                            onChange={(e) => setForm({ ...form, unit: e.target.value })}
-                        />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-make">Make</Label>
-                        <Input
-                            id="vehicle-make"
-                            value={form.make}
-                            onChange={(e) => setForm({ ...form, make: e.target.value })}
-                        />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-model">Model</Label>
-                        <Input
-                            id="vehicle-model"
-                            value={form.model}
-                            onChange={(e) => setForm({ ...form, model: e.target.value })}
-                        />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-year">Year</Label>
-                        <Input
-                            id="vehicle-year"
-                            type="number"
-                            value={form.year}
-                            onChange={(e) => setForm({ ...form, year: e.target.value })}
-                        />
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-fuel">Fuel grade</Label>
-                        <Select
-                            value={form.fuel_grade}
-                            onValueChange={(v) => setForm({ ...form, fuel_grade: v as FuelGrade })}
-                        >
-                            <SelectTrigger id="vehicle-fuel">
-                                <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                                {FUEL_GRADES.map((grade) => (
-                                    <SelectItem key={grade} value={grade}>
-                                        {FUEL_GRADE_LABELS[grade]}
-                                    </SelectItem>
-                                ))}
-                            </SelectContent>
-                        </Select>
-                    </div>
-                    <div className="flex flex-col gap-1.5">
-                        <Label htmlFor="vehicle-mpg">Operational MPG</Label>
-                        <Input
-                            id="vehicle-mpg"
-                            type="number"
-                            step="0.01"
-                            value={form.operational_mpg}
-                            placeholder="27.00"
-                            onChange={(e) => setForm({ ...form, operational_mpg: e.target.value })}
-                        />
-                    </div>
+            {/* La acción primaria y el filtro, encima de la lista. Lo que se hace
+                a diario es mirar la flota; dar de alta es lo excepcional. */}
+            <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-2">
+                    <Checkbox
+                        id="show-inactive-vehicles"
+                        checked={includeInactive}
+                        onCheckedChange={(v) => setIncludeInactive(v === true)}
+                    />
+                    <Label
+                        htmlFor="show-inactive-vehicles"
+                        className="text-sm text-muted-foreground"
+                    >
+                        Show inactive vehicles
+                    </Label>
                 </div>
+                <Button onClick={abrirAlta}>Add Vehicle</Button>
+            </div>
 
-                <div className="mt-4 flex gap-2">
-                    <Button onClick={guardar} disabled={saving || !completo}>
-                        {editing ? 'Save changes' : 'Add vehicle'}
-                    </Button>
-                    {editing && (
-                        <Button variant="outline" onClick={limpiar} disabled={saving}>
+            {/* El error de carga o de ciclo de vida vive fuera del diálogo; el de
+                guardar se queda dentro, junto al campo que hay que corregir. */}
+            {error && !formularioAbierto && (
+                <p className="text-sm text-destructive">{error}</p>
+            )}
+
+            <Dialog open={formularioAbierto} onOpenChange={cerrarFormulario}>
+                <DialogContent className="sm:max-w-[720px]">
+                    <DialogHeader>
+                        <DialogTitle>
+                            {editing ? `Edit vehicle ${editing.unit}` : 'Add Vehicle'}
+                        </DialogTitle>
+                        <DialogDescription>
+                            {editing
+                                ? 'Changes apply to future assignments; past work sessions keep what they recorded.'
+                                : 'The unit is how supervisors recognise it on the road.'}
+                        </DialogDescription>
+                    </DialogHeader>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-unit">Unit</Label>
+                            <Input
+                                id="vehicle-unit"
+                                value={form.unit}
+                                placeholder="V-014"
+                                onChange={(e) => setForm({ ...form, unit: e.target.value })}
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-make">Make</Label>
+                            <Input
+                                id="vehicle-make"
+                                value={form.make}
+                                onChange={(e) => setForm({ ...form, make: e.target.value })}
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-model">Model</Label>
+                            <Input
+                                id="vehicle-model"
+                                value={form.model}
+                                onChange={(e) => setForm({ ...form, model: e.target.value })}
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-year">Year</Label>
+                            <Input
+                                id="vehicle-year"
+                                type="number"
+                                value={form.year}
+                                onChange={(e) => setForm({ ...form, year: e.target.value })}
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-fuel">Fuel grade</Label>
+                            <Select
+                                value={form.fuel_grade}
+                                onValueChange={(v) => setForm({ ...form, fuel_grade: v as FuelGrade })}
+                            >
+                                <SelectTrigger id="vehicle-fuel">
+                                    <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {FUEL_GRADES.map((grade) => (
+                                        <SelectItem key={grade} value={grade}>
+                                            {FUEL_GRADE_LABELS[grade]}
+                                        </SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                            <Label htmlFor="vehicle-mpg">Operational MPG</Label>
+                            <Input
+                                id="vehicle-mpg"
+                                type="number"
+                                step="0.01"
+                                value={form.operational_mpg}
+                                placeholder="27.00"
+                                onChange={(e) => setForm({ ...form, operational_mpg: e.target.value })}
+                            />
+                        </div>
+                    </div>
+
+                    {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
+
+                    <DialogFooter className="mt-4">
+                        <Button
+                            variant="outline"
+                            onClick={() => cerrarFormulario(false)}
+                            disabled={saving}
+                        >
                             Cancel
                         </Button>
-                    )}
-                </div>
-
-                {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
-            </section>
-
-            <div className="flex items-center gap-2">
-                <Checkbox
-                    id="show-inactive-vehicles"
-                    checked={includeInactive}
-                    onCheckedChange={(v) => setIncludeInactive(v === true)}
-                />
-                <Label
-                    htmlFor="show-inactive-vehicles"
-                    className="text-sm text-muted-foreground"
-                >
-                    Show inactive vehicles
-                </Label>
-            </div>
+                        <Button onClick={guardar} disabled={saving || !completo}>
+                            {editing ? 'Save changes' : 'Add vehicle'}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
 
             <section className="rounded-lg border border-border bg-card">
                 {loading && (
@@ -298,7 +356,7 @@ export function VehiclesPanel() {
 
                 {!loading && vehicles.length === 0 && (
                     <p className="p-4 text-sm text-muted-foreground">
-                        No vehicles yet. Add the first one above.
+                        No vehicles yet. Use “Add Vehicle” to register the first one.
                     </p>
                 )}
 

@@ -31,6 +31,7 @@ from playwright.async_api import expect
 from app.core.rbac.catalog import ROUTE_PRODUCT_ROLE_LABELS
 from app.database import async_session_maker
 from app.routers_api.standardvalues.provisioning import provision_standard_values
+from tests.integration.conftest import TEST_PASSWORD, TenantClient
 from tests.e2e.conftest import abrir_sesion, lanzar_edge
 
 
@@ -273,3 +274,102 @@ async def test_the_supervisor_reads_the_values_their_trip_needs(seeded, live_ser
             assert respuesta.status in (401, 403, 404)
         finally:
             await navegador.close()
+
+
+# ── FR-03: el escenario que destapó el hueco, en el navegador ────────────────
+
+
+@pytest.mark.parametrize(
+    "quien",
+    ["platform_admin", "owner", "admin"],
+    ids=["superadmin", "core-owner", "core-admin"],
+)
+async def test_the_route_user_form_shows_two_roles_to_every_authority(
+    seeded, alpha_client, live_server, quien,
+):
+    """FR-03, declarado test de aceptación obligatorio, y el test #3.
+
+    El caso que CER encontró: alguien con toda la autoridad de la plataforma —o
+    un `owner` del núcleo— entrando por `CER Route > Users` seguía recibiendo el
+    catálogo completo del tenant. La autoridad de quien mira no debería cambiar
+    lo que una pantalla de producto ofrece.
+
+    Se recorre en el navegador porque es donde ocurría, y se cierra con la
+    comprobación por API: el paso 7 de FR-03 pide intentar la asignación directa
+    saltándose el selector, y el 8 que no se escriba nada.
+    """
+    from playwright.async_api import async_playwright
+
+    email = (
+        seeded.platform_admin.email
+        if quien == "platform_admin"
+        else seeded.alpha.users[quien].email
+    )
+
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(
+                base_url=live_server, viewport=ESCRITORIO
+            )
+            page = await contexto.new_page()
+            await abrir_sesion(page, email)
+
+            await page.goto("/admin/route/users")
+            await expect(
+                page.locator("h1", has_text="Users")
+            ).to_have_count(1, timeout=20_000)
+
+            await page.get_by_role("button", name="Create User").click()
+            await expect(
+                page.get_by_text("Role in this company")
+            ).to_have_count(1, timeout=20_000)
+
+            selector = page.locator("[role='combobox']").last
+            await selector.click()
+
+            opciones = page.get_by_role("option")
+            await expect(opciones).to_have_count(2, timeout=20_000)
+
+            textos = sorted(await opciones.all_inner_texts())
+            assert textos == ["Administrador", "Supervisor"], (
+                f"{quien} debería ver exactamente los dos roles de producto: {textos}"
+            )
+
+            # Paso 5: ninguna etiqueta del núcleo.
+            for nombre in ROLES_DEL_NUCLEO:
+                await expect(
+                    page.get_by_role("option", name=nombre, exact=True)
+                ).to_have_count(0)
+
+            # Paso 6: ningún código técnico.
+            assert "route_admin" not in " ".join(textos)
+            assert "supervisor" not in " ".join(textos)
+        finally:
+            await navegador.close()
+
+    # ── Pasos 7 y 8: por API, saltándose el selector ────────────────────────
+    async with TenantClient("alpha") as cliente:
+        await cliente.login(email)
+        respuesta = await cliente.post(
+            "/api/route/users",
+            json={
+                "username": f"fr03_{quien}",
+                "email": f"fr03_{quien}@alpha.example.com",
+                "first_name": "FR03",
+                "last_name": quien,
+                "password": TEST_PASSWORD,
+                "role_id": seeded.alpha.roles["owner"],
+            },
+        )
+
+    assert respuesta.status_code == 403, respuesta.text
+
+    from sqlalchemy import text
+
+    async with async_session_maker() as session:
+        escrito = await session.scalar(
+            text('SELECT count(*) FROM "user" WHERE email = :e'),
+            {"e": f"fr03_{quien}@alpha.example.com"},
+        )
+    assert escrito == 0, "el rechazo precede a la escritura"
