@@ -11,7 +11,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, and_, select
+from sqlalchemy import Select, and_, or_, select
 
 from app.core.dao.base import BaseDAO
 from app.core.db.session import db_session
@@ -263,13 +263,50 @@ class VehicleAssignmentsDAO(BaseDAO):
         return VehicleAssignment.effective_from.desc()
 
     @classmethod
+    async def effective_at(
+        cls, *, company_id: int, supervisor_profile_id: int, moment: datetime
+    ) -> VehicleAssignment | None:
+        """La asignación que **aplica** en ese instante.
+
+        Aplica cuando empezó (`effective_from <= moment`) y todavía no acabó
+        (`effective_to` nulo o posterior). Las dos mitades importan:
+
+        * sin la primera, una asignación fechada para el mes que viene se
+          aplicaría hoy — un vehículo que el supervisor no tiene todavía, con
+          una lectura de odómetro exigida por él;
+        * sin la segunda, una asignación cerrada seguiría aplicando.
+
+        El instante se recibe, no se toma de `now()`, y eso es deliberado: una
+        jornada encolada sin cobertura ocurrió antes de que el servidor la
+        supiera (D-10). Resolverla con el reloj de la recepción le atribuiría el
+        vehículo que tenía al reconectar, no el que tenía al empezar.
+        """
+        async with db_session() as session:
+            return await session.scalar(
+                select(VehicleAssignment).where(
+                    VehicleAssignment.company_id == company_id,
+                    VehicleAssignment.supervisor_profile_id == supervisor_profile_id,
+                    VehicleAssignment.effective_from <= moment,
+                    or_(
+                        VehicleAssignment.effective_to.is_(None),
+                        VehicleAssignment.effective_to > moment,
+                    ),
+                )
+            )
+
+    @classmethod
     async def current_for_supervisor(
         cls, *, company_id: int, supervisor_profile_id: int
     ) -> VehicleAssignment | None:
-        """La asignación vigente, que es la que no tiene fecha de fin.
+        """La asignación **abierta**: la que no tiene fecha de fin.
 
-        Es **la** fuente del vehículo actual de un supervisor. No hay copia en
-        el perfil que pueda decir otra cosa.
+        Responde "¿hay un vehículo en manos de este supervisor en el registro?",
+        que es la pregunta correcta para impedir desactivarlo o borrarlo —
+        también si su asignación empieza mañana.
+
+        **No** es la que decide el vehículo de una jornada: para eso está
+        `effective_at`, porque una asignación futura existe en el registro y aun
+        así no aplica todavía.
         """
         async with db_session() as session:
             return await session.scalar(

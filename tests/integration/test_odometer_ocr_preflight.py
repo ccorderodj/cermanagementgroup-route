@@ -24,6 +24,7 @@ banner" tiene dos causas posibles y sólo una es un defecto.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 import pytest
@@ -183,12 +184,13 @@ async def test_without_a_current_assignment_no_reading_is_required(
 
 
 async def test_an_assignment_with_an_end_date_is_not_current(seeded, alpha_client):
-    """Qué significa "vigente", medido y no supuesto.
+    """Una asignación cerrada no aplica.
 
-    `current_for_supervisor` considera vigente **la asignación sin fecha de
-    fin**. Una cerrada no cuenta, y eso es correcto. Se fija por escrito porque
-    es la vía más plausible por la que un supervisor con vehículo "asignado" en
-    la pantalla de administración acabe con una jornada sin vehículo.
+    `effective_at` la descarta por su segunda mitad —`effective_to` posterior al
+    instante, o nulo—, igual que antes lo hacía el resolutor de asignación
+    abierta. Se conserva porque sigue siendo la vía más plausible por la que un
+    supervisor con vehículo "asignado" en pantalla acabe con una jornada sin
+    vehículo.
     """
     perfil, vehiculo = await _perfil_y_vehiculo(
         alpha_client, seeded, unidad="V-PRE3", asignar=True
@@ -355,3 +357,235 @@ async def test_the_port_works_when_an_adapter_is_plugged_in(seeded, alpha_client
     assert str(fila.ocr_detected_reading) == "99120.0", "la sugerencia se conserva"
     assert str(fila.confirmed_reading) == "99125.0", "y la corrección es la que vale"
     assert fila.evidence_method == "photo"
+
+
+# ── Corrección CER: la asignación se resuelve por su efectividad ───────────
+
+
+async def test_a_future_assignment_does_not_apply_yet(seeded, alpha_client):
+    """La decisión de CER, medida: una asignación futura **no** aplica hoy.
+
+    Antes sólo se miraba `effective_to IS NULL`, así que una asignación fechada
+    para la semana que viene se aplicaba ya: la jornada de hoy salía con un
+    vehículo que el supervisor todavía no tiene, y con una lectura de odómetro
+    exigida por él. Ahora también se exige que `effective_from` sea anterior o
+    igual al instante de `Start Work`, y sin asignación efectiva la jornada
+    empieza sin vehículo con el odómetro `NOT_REQUIRED`.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": seeded.alpha.users["supervisor"].id}
+        )
+    ).json()
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Toyota", "model": "Hilux", "year": 2024, "unit": "V-FUT",
+                "fuel_grade": "regular", "operational_mpg": "24.00",
+            },
+        )
+    ).json()
+
+    semana_que_viene = datetime.now(timezone.utc) + timedelta(days=7)
+    alta = await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={
+            "vehicle_id": vehiculo["id"],
+            "effective_from": semana_que_viene.isoformat(),
+        },
+    )
+    assert alta.status_code in (200, 201), alta.text
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+
+    async with async_session_maker() as session:
+        vehiculo_de_la_jornada = await session.scalar(
+            text("SELECT vehicle_id FROM work_session WHERE id = :i"),
+            {"i": jornada["id"]},
+        )
+    assert vehiculo_de_la_jornada is None, (
+        "una asignación que empieza la semana que viene no puede aplicarse hoy"
+    )
+
+    estado = (
+        await alpha_client.get(f"/api/odometer/sessions/{jornada['id']}")
+    ).json()
+    assert estado["start"]["status"] == "not_required"
+    assert estado["start"]["vehicle_id"] is None
+
+    # Y por tanto el primer viaje sale sin pedir lectura.
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "client_visit"})
+    ).json()
+    salida = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    assert salida.status_code == 200, salida.text
+
+
+async def test_the_admin_does_not_show_a_future_assignment_as_current(
+    seeded, alpha_client,
+):
+    """La misma regla en el presente, para que dos pantallas no discrepen.
+
+    Antes la administración enseñaba como "vehículo actual" uno cuya asignación
+    empieza la semana que viene, mientras la jornada de ese supervisor empezaba
+    sin vehículo. Es el mismo hecho contado de dos maneras, y es justo la
+    confusión que el preflight señaló.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": seeded.alpha.users["supervisor"].id}
+        )
+    ).json()
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Ford", "model": "Transit", "year": 2023, "unit": "V-FUT2",
+                "fuel_grade": "regular", "operational_mpg": "19.00",
+            },
+        )
+    ).json()
+    await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={
+            "vehicle_id": vehiculo["id"],
+            "effective_from": (
+                datetime.now(timezone.utc) + timedelta(days=7)
+            ).isoformat(),
+        },
+    )
+
+    detalle = (await alpha_client.get(f"/api/supervisors/{perfil['id']}")).json()
+    assert not detalle.get("current_vehicle"), (
+        f"una asignación futura no es el vehículo actual: {detalle.get('current_vehicle')}"
+    )
+
+    # Pero sigue estando en el registro, y por eso sigue impidiendo desactivar
+    # al supervisor: son dos preguntas distintas.
+    baja = await alpha_client.put(
+        f"/api/supervisors/{perfil['id']}", json={"is_active": False}
+    )
+    assert baja.status_code == 409, baja.text
+
+
+async def test_the_vehicle_snapshot_does_not_change_retroactively(
+    seeded, alpha_client,
+):
+    """El vehículo queda congelado en la jornada al empezarla.
+
+    Reasignar mañana no reescribe el día de ayer: la jornada guarda el
+    identificador y el `mpg_snapshot` en su propia fila, así que una
+    modificación posterior de la asignación no puede cambiar lo que ya ocurrió.
+    Es lo que hace interpretable el millaje de un día cerrado.
+    """
+    perfil, primero = await _perfil_y_vehiculo(
+        alpha_client, seeded, unidad="V-SNAP1", asignar=True
+    )
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+
+    async with async_session_maker() as session:
+        antes = (
+            await session.execute(
+                text(
+                    "SELECT vehicle_id, mpg_snapshot FROM work_session WHERE id = :i"
+                ),
+                {"i": jornada["id"]},
+            )
+        ).one()
+    assert antes.vehicle_id == primero["id"]
+
+    # El administrador reasigna a otro vehículo, que cierra la anterior.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    segundo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Ford", "model": "Transit", "year": 2023, "unit": "V-SNAP2",
+                "fuel_grade": "regular", "operational_mpg": "19.00",
+            },
+        )
+    ).json()
+    reasignacion = await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={"vehicle_id": segundo["id"]},
+    )
+    assert reasignacion.status_code in (200, 201), reasignacion.text
+
+    async with async_session_maker() as session:
+        despues = (
+            await session.execute(
+                text(
+                    "SELECT vehicle_id, mpg_snapshot FROM work_session WHERE id = :i"
+                ),
+                {"i": jornada["id"]},
+            )
+        ).one()
+    assert despues.vehicle_id == antes.vehicle_id, (
+        "reasignar no puede reescribir la jornada ya empezada"
+    )
+    assert despues.mpg_snapshot == antes.mpg_snapshot
+
+
+async def test_a_queued_start_work_resolves_the_vehicle_it_had_then(
+    seeded, alpha_client,
+):
+    """D-10 y la asignación, juntas: cuenta el instante en que se pulsó.
+
+    Una jornada encolada sin cobertura ocurrió antes de que el servidor la
+    supiera. Si la asignación empezó **después** de ese instante pero antes de
+    la recepción, no aplicaba cuando el supervisor empezó a trabajar — y
+    resolverla con el reloj de la recepción le atribuiría un vehículo que
+    entonces no tenía, con una lectura de odómetro exigida retroactivamente.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": seeded.alpha.users["supervisor"].id}
+        )
+    ).json()
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Toyota", "model": "Hilux", "year": 2024, "unit": "V-COLA",
+                "fuel_grade": "regular", "operational_mpg": "24.00",
+            },
+        )
+    ).json()
+
+    # La asignación empieza hace un minuto…
+    desde = datetime.now(timezone.utc) - timedelta(minutes=1)
+    await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={"vehicle_id": vehiculo["id"], "effective_from": desde.isoformat()},
+    )
+
+    # …y la jornada se pulsó **antes** de eso, y esperó en la cola.
+    pulsado = desde - timedelta(minutes=30)
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (
+        await alpha_client.post(
+            "/api/worksessions", json={"device_captured_at": pulsado.isoformat()}
+        )
+    ).json()
+
+    async with async_session_maker() as session:
+        fila = (
+            await session.execute(
+                text(
+                    "SELECT vehicle_id, started_at_source FROM work_session "
+                    "WHERE id = :i"
+                ),
+                {"i": jornada["id"]},
+            )
+        ).one()
+    assert fila.started_at_source == "device", (
+        "la evidencia del dispositivo se aceptó; si no, este test no prueba nada"
+    )
+    assert fila.vehicle_id is None, (
+        "al empezar la jornada esa asignación no existía todavía"
+    )

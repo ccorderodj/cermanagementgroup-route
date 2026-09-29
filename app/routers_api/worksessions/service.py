@@ -160,17 +160,36 @@ class WorkSessionService:
         if existente is not None:
             return existente, False
 
+        # **Primero cuándo ocurrió**, y sólo después qué vehículo aplicaba.
+        #
+        # El orden es la corrección: la asignación se resuelve al instante en
+        # que la jornada empezó, no al que el servidor la recibió. Con una
+        # jornada encolada sin cobertura los dos no coinciden, y usar el de la
+        # recepción le atribuiría el vehículo que el supervisor tenía al
+        # reconectar.
+        recibido_en = datetime.now(timezone.utc)
+        ocurrido_en, origen = _resolve_occurrence(
+            received_at=recibido_en, device_captured_at=device_captured_at
+        )
+        session_date = _session_date_from(ocurrido_en, utc_offset_minutes)
+
         # El snapshot de vehículo es opcional: un supervisor sin perfil de
-        # Route, o sin asignación vigente, tiene una jornada igualmente válida
-        # (§6.1). No se fabrica ninguno de los dos.
+        # Route, o sin asignación **efectiva en ese momento**, tiene una jornada
+        # igualmente válida (§6.1) y su odómetro queda `NOT_REQUIRED`. No se
+        # fabrica ninguno de los dos.
+        #
+        # Y es un snapshot de verdad: queda escrito en la fila de la jornada, así
+        # que reasignar el vehículo mañana no reescribe el día de ayer.
         vehicle_id: int | None = None
         mpg_snapshot = None
         perfil = await SupervisorProfilesDAO.find_by_user(
             company_id=company_id, user_id=user_id
         )
         if perfil is not None and perfil.is_active:
-            asignacion = await VehicleAssignmentsDAO.current_for_supervisor(
-                company_id=company_id, supervisor_profile_id=perfil.id
+            asignacion = await VehicleAssignmentsDAO.effective_at(
+                company_id=company_id,
+                supervisor_profile_id=perfil.id,
+                moment=ocurrido_en,
             )
             if asignacion is not None:
                 vehiculo = await VehiclesDAO.get_for_company(
@@ -178,12 +197,6 @@ class WorkSessionService:
                 )
                 vehicle_id = vehiculo.id
                 mpg_snapshot = vehiculo.operational_mpg
-
-        recibido_en = datetime.now(timezone.utc)
-        ocurrido_en, origen = _resolve_occurrence(
-            received_at=recibido_en, device_captured_at=device_captured_at
-        )
-        session_date = _session_date_from(ocurrido_en, utc_offset_minutes)
 
         try:
             async with transaction() as session:
