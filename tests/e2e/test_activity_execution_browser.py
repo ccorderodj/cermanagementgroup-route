@@ -104,21 +104,21 @@ async def _movil(live_server, email: str):
 
 
 async def _hasta_la_llegada(page, *, contexto_ui: str, valor: str | None = None):
-    """Start Work → elegir contexto → Start Trip → Arrived.
+    """Start Work → workbench → contexto → Start Trip → Arrived.
 
-    El camino común de todas las travesías. Sin vehículo no hay lectura que
-    capturar en medio, así que son cuatro pulsaciones y el destino.
+    El camino común de todas las travesías. Tras `Start Work` el workbench ya
+    está: no hay un botón intermedio que revele las opciones (PD-04), y elegir
+    contexto lleva a una sola pantalla que pide sus datos y ofrece `Start Trip`
+    (PD-05). Sin vehículo no hay lectura que capturar en medio.
     """
     await page.goto("/route")
     await page.get_by_role("button", name="Start Work").click()
-    await expect(page.get_by_text("Working since")).to_have_count(1, timeout=20_000)
+    await expect(page.get_by_text("What's next?")).to_have_count(1, timeout=20_000)
 
-    await page.get_by_role("button", name="Where to next?").click()
     await page.get_by_role("button", name=contexto_ui, exact=True).click()
     if valor is not None:
         await page.locator("#trip-standard-value").click()
         await page.get_by_role("option", name=valor, exact=True).click()
-    await page.get_by_role("button", name="Prepare trip").click()
 
     await page.get_by_role("button", name="Start Trip").click()
     if contexto_ui == "Return Home":
@@ -250,7 +250,7 @@ async def test_client_visit_with_two_activities_completes_and_closes_the_trip(
 
         # Cerrada la parada, la pantalla vuelve al trabajo: la jornada sigue.
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -297,7 +297,7 @@ async def test_recruiting_with_several_activities_leaves_and_closes_the_trip(
         await _salir(page, accion="Leave", resultado="No Contact")
 
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -352,7 +352,7 @@ async def test_the_contexts_that_already_asked_do_not_ask_again(
 
         await _salir(page, accion="Complete Activity", resultado="Completed")
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -402,7 +402,7 @@ async def test_check_delivery_asks_who_received_it_only_on_arrival(
         await page.get_by_role("button", name="Complete Activity", exact=True).click()
 
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -435,7 +435,7 @@ async def test_other_completes_with_several_activities(seeded, live_server):
             page, accion="Complete Activity", resultado="Follow-up Required"
         )
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -463,7 +463,7 @@ async def test_going_home_never_reaches_the_activity_screen(seeded, live_server)
 
         # Ni selector ni bloque: se vuelve directo al trabajo.
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
         await expect(
             page.get_by_role("button", name="Start Activity")
@@ -521,7 +521,7 @@ async def test_reloading_resumes_the_running_execution(seeded, live_server):
         # Y desde ahí se puede terminar, que es lo que hace útil reanudar.
         await _salir(page, accion="Complete Activity", resultado="Completed")
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     assert await _contar_bloques(seeded.alpha.id) == 1, (
@@ -565,7 +565,7 @@ async def test_a_new_session_resolves_the_same_execution(seeded, live_server):
 
         await _salir(page, accion="Complete Activity", resultado="Escalated")
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque_despues = await _bloque(seeded.alpha.id)
@@ -578,13 +578,25 @@ async def test_a_new_session_resolves_the_same_execution(seeded, live_server):
 # ── J10 ──────────────────────────────────────────────────────────────────────
 
 
-async def test_end_work_is_blocked_from_an_unresolved_arrival(seeded, live_server):
-    """Travesía 10. Llegó y no hizo nada: terminar el día no lo resuelve.
+async def test_end_work_is_not_offered_from_an_unresolved_arrival(
+    seeded, live_server,
+):
+    """Travesía 10, con la expectativa que el cierre 003 sustituye.
 
-    La pantalla no ofrece un atajo de "terminar de todos modos" aquí. Ese atajo
-    existe para el viaje en ruta (D-07), donde lo que falta es una llegada que
-    nadie puede inventar; aquí lo que falta es una decisión con resultado, y
-    tomarla cuesta dos pulsaciones.
+    `old expectation` — pulsar `End Work` en la llegada sin resolver y ver el
+    409 explicado en pantalla.
+
+    `approved decision` — PD-03 y FR-07 del cierre 003: `End Work` no se expone
+    mientras se seleccionan o ejecutan actividades post-llegada, y llegado sin
+    resolver la pantalla entra en el flujo de la parada y no vuelve al
+    workbench.
+
+    `new expectation` — el botón **no está**. Lo que hay son las dos salidas de
+    la parada. La guarda del servidor no cambió y sigue cubierta por la
+    integración (`test_end_work_is_blocked_while_the_arrival_is_unresolved`):
+    el control está en el backend, la ausencia del botón es experiencia de
+    usuario. Tampoco se ofrece el "de todos modos", que es de D-07 y pertenece
+    al viaje en ruta.
     """
     await _sembrar_valores(seeded.alpha.id)
     supervisor = seeded.alpha.users["supervisor"]
@@ -592,16 +604,16 @@ async def test_end_work_is_blocked_from_an_unresolved_arrival(seeded, live_serve
     async with _movil(live_server, supervisor.email) as (_ctx, page):
         await _hasta_la_llegada(page, contexto_ui="Client Visit")
 
-        await page.get_by_role("button", name="End Work").click()
-        await expect(
-            page.get_by_text("Finish or leave this stop before ending your workday.")
-        ).to_have_count(1, timeout=20_000)
-
-        # Sigue en la parada, con su selector intacto.
         await expect(page.get_by_text("What are you doing here?")).to_have_count(1)
+        await expect(page.get_by_role("button", name="End Work")).to_have_count(0)
         await expect(
             page.get_by_role("button", name="End Work Anyway")
         ).to_have_count(0)
+        # Ni se vuelve al workbench con el viaje sin resolver (FR-07).
+        await expect(page.get_by_text("What's next?")).to_have_count(0)
+        await expect(
+            page.get_by_role("button", name="Start Activity")
+        ).to_have_count(1)
 
     assert await _estado_de_la_jornada(seeded.alpha.id, supervisor.id) == "active"
     assert await _estado_del_viaje(seeded.alpha.id) == "arrived"
@@ -628,9 +640,9 @@ async def test_end_work_is_blocked_while_the_execution_runs(seeded, live_server)
     async with _movil(live_server, supervisor.email) as (_ctx, page):
         await _hasta_la_llegada(page, contexto_ui="Recruiting")
 
-        # Llegado y sin empezar, `End Work` sí está: lo que hace falta ahí es
-        # que la pantalla devuelva a la parada, no que esconda el fin del día.
-        await expect(page.get_by_role("button", name="End Work")).to_have_count(1)
+        # Llegado y sin empezar tampoco se ofrece (PD-03): la parada se
+        # resuelve, y el día se cierra después, desde el workbench.
+        await expect(page.get_by_role("button", name="End Work")).to_have_count(0)
 
         await _elegir_actividades(page, "Referral Follow-up")
         await page.get_by_role("button", name="Start Activity").click()
@@ -647,7 +659,7 @@ async def test_end_work_is_blocked_while_the_execution_runs(seeded, live_server)
 
         await _salir(page, accion="Leave", resultado="Follow-up Required")
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
         await page.get_by_role("button", name="End Work").click()
@@ -704,7 +716,7 @@ async def test_losing_the_network_does_not_hide_the_unresolved_stop(
         await expect(page.get_by_text("Arrived at")).to_have_count(1, timeout=20_000)
         await expect(page.get_by_text("What are you doing here?")).to_have_count(1)
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(0)
 
         # Recarga sin red: se dice que no se pudo cargar, y tampoco se ofrece
@@ -714,7 +726,7 @@ async def test_losing_the_network_does_not_hide_the_unresolved_stop(
             page.get_by_text("Your workday could not be loaded. Check your connection.")
         ).to_have_count(1, timeout=20_000)
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(0)
 
         # Y al volver la red, el servidor sigue siendo la autoridad.
@@ -751,7 +763,7 @@ async def test_the_administrator_runs_an_rte05_operational_journey(
         )
         await _salir(page, accion="Complete Activity", resultado="Completed")
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -861,7 +873,7 @@ async def test_an_execution_command_survives_a_disconnection(seeded, live_server
         await page.goto("/route")
 
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
         assert await page.evaluate(LEER_COLA) == [], "lo aplicado sale de la cola"
 

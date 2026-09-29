@@ -254,7 +254,6 @@ async def test_the_supervisor_reads_the_values_their_trip_needs(seeded, live_ser
                 1, timeout=20_000
             )
 
-            await page.get_by_role("button", name="Where to next?").click()
             await page.get_by_role("button", name="Employee Visit").click()
             await page.get_by_role("combobox").click()
 

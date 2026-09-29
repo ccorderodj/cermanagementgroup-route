@@ -231,7 +231,7 @@ async def test_completing_a_check_delivery_still_demands_a_receiver(
         await page.get_by_role("button", name="Complete Activity", exact=True).click()
 
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
@@ -290,7 +290,7 @@ async def test_leaving_a_check_delivery_confirms_without_a_receiver(
         await page.get_by_role("button", name="Leave", exact=True).click()
 
         await expect(
-            page.get_by_role("button", name="Where to next?")
+            page.get_by_text("What's next?")
         ).to_have_count(1, timeout=20_000)
 
     bloque = await _bloque(seeded.alpha.id)
