@@ -645,3 +645,86 @@ async def test_my_route_stays_visually_separate_from_configuration(
             page.get_by_role("button", name="Start Work")
         ).to_have_count(1, timeout=20_000)
         assert page.url.endswith("/route"), page.url
+
+
+# ── Preflight de odómetro: el banner conviviendo con la rejilla ─────────────
+
+
+async def test_the_odometer_banner_coexists_with_the_card_grid(
+    seeded, alpha_client, live_server,
+):
+    """VR-04 pedía "sin solape con el banner de odómetro", y faltaba medirlo.
+
+    Las travesías del cierre 004 se recorrieron **sin vehículo asignado**, así
+    que el banner nunca estuvo en pantalla y esa cláusula quedó afirmada sin
+    evidencia. Aquí el supervisor tiene asignación vigente, el banner aparece, y
+    se comprueba lo que la cláusula pide: que esté por encima de las tarjetas,
+    que no las solape, y que la rejilla siga siendo la rejilla.
+
+    Y de paso los pasos 3 y 4 del preflight: el aviso se renderiza con la
+    evidencia de inicio sin resolver, y pulsar `Start Trip` lleva a la captura
+    antes de crear el viaje.
+    """
+    # Perfil, vehículo y asignación vigente, por API.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": seeded.alpha.users["supervisor"].id}
+        )
+    ).json()
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Toyota", "model": "Hilux", "year": 2024, "unit": "V-PF1",
+                "fuel_grade": "regular", "operational_mpg": "24.00",
+            },
+        )
+    ).json()
+    await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={"vehicle_id": vehiculo["id"]},
+    )
+
+    supervisor = seeded.alpha.users["supervisor"]
+
+    async with _movil(live_server, supervisor.email) as (_c, page):
+        await page.goto("/route")
+        await page.get_by_role("button", name="Start Work").click()
+        await expect(page.get_by_text("What's next?")).to_have_count(
+            1, timeout=20_000
+        )
+
+        # Paso 3: el aviso se renderiza porque la evidencia de inicio está sin
+        # resolver, y **no** bloquea elegir destino.
+        aviso = page.get_by_role("button", name="Odometer pending")
+        await expect(aviso).to_have_count(1, timeout=20_000)
+
+        # La rejilla sigue siendo rejilla, con el aviso encima y sin solaparse.
+        assert await _columnas_de_la_rejilla(page) >= 2
+        caja_aviso = await aviso.bounding_box()
+        caja_tarjeta = await page.get_by_role(
+            "button", name="Client Visit"
+        ).first.bounding_box()
+        caja_salir = await page.get_by_role(
+            "button", name="End Work"
+        ).bounding_box()
+        assert caja_aviso is not None and caja_tarjeta is not None
+        assert caja_salir is not None
+        assert caja_aviso["y"] + caja_aviso["height"] <= caja_tarjeta["y"] + 1, (
+            "el aviso no puede solaparse con las tarjetas"
+        )
+        assert caja_tarjeta["y"] < caja_salir["y"], (
+            "ni alterar el orden: trabajo primero, fin de jornada después"
+        )
+        assert not await _hay_desbordamiento_horizontal(page)
+
+        # Paso 4: elegir contexto y pulsar `Start Trip` lleva a la captura.
+        await page.get_by_role("button", name="Client Visit").first.click()
+        await page.get_by_role("button", name="Start Trip").click()
+        await expect(
+            page.get_by_text("Take a photo of the odometer, then confirm the reading.")
+        ).to_have_count(1, timeout=20_000)
+
+    # Y no se creó ningún viaje antes de resolver la lectura.
+    assert await _contar_viajes(seeded.alpha.id) == 0

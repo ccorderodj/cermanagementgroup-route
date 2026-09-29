@@ -633,9 +633,20 @@ class VehicleAssignmentService:
     async def current_vehicle(
         *, company_id: int, supervisor_profile_id: int
     ) -> Vehicle | None:
-        """El vehículo actual del supervisor, derivado de la asignación vigente."""
-        asignacion = await VehicleAssignmentsDAO.current_for_supervisor(
-            company_id=company_id, supervisor_profile_id=supervisor_profile_id
+        """El vehículo actual del supervisor, derivado de la asignación efectiva.
+
+        Efectiva **ahora**, no simplemente abierta: una asignación fechada para
+        el mes que viene existe en el registro y todavía no aplica. Es la misma
+        regla que decide el vehículo de una jornada, evaluada en el presente.
+
+        Sin esto, la administración enseñaba como "vehículo actual" uno que el
+        supervisor aún no tenía, y su jornada empezaba sin vehículo: dos
+        pantallas diciendo cosas distintas sobre el mismo hecho.
+        """
+        asignacion = await VehicleAssignmentsDAO.effective_at(
+            company_id=company_id,
+            supervisor_profile_id=supervisor_profile_id,
+            moment=datetime.now(timezone.utc),
         )
         if asignacion is None:
             return None
