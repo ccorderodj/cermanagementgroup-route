@@ -87,48 +87,62 @@ export interface TripPlanInput {
  */
 export const TRIP_CONTEXTS: Record<TripPurpose, {
     label: string;
+    /**
+     * La segunda línea de la tarjeta del workbench, literal del mockup V0.7
+     * aprobado (`purposeGrid()` en `standalone.html`). No es decorativa: con
+     * siete tarjetas en una rejilla, es lo que distingue "Office" de "Other"
+     * de un vistazo y con el teléfono en la mano.
+     */
+    hint: string;
     freeTextLabel: string | null;
     standardList: string | null;
     standardLabel: string | null;
 }> = {
     client_visit: {
         label: 'Client Visit',
+        hint: 'Client / site',
         freeTextLabel: 'Destination',
         standardList: null,
         standardLabel: null,
     },
     recruiting: {
         label: 'Recruiting',
+        hint: 'Candidate activity',
         freeTextLabel: 'Area / Location',
         standardList: null,
         standardLabel: null,
     },
     employee_visit: {
         label: 'Employee Visit',
+        hint: 'Employee support',
         freeTextLabel: 'Employee / Reference',
         standardList: 'employee_visit_reasons',
         standardLabel: 'Reason',
     },
     check_delivery: {
         label: 'Check Delivery',
+        hint: 'Delivery',
         freeTextLabel: 'Employee / Reference',
         standardList: 'delivery_types',
         standardLabel: 'Delivery type',
     },
     office: {
         label: 'Office',
+        hint: 'Office task',
         freeTextLabel: 'Office',
         standardList: 'office_purposes',
         standardLabel: 'Purpose',
     },
     other: {
         label: 'Other',
+        hint: 'Field task',
         freeTextLabel: 'Area / Location',
         standardList: null,
         standardLabel: null,
     },
     home: {
         label: 'Return Home',
+        hint: 'End route',
         freeTextLabel: null,
         standardList: null,
         standardLabel: null,

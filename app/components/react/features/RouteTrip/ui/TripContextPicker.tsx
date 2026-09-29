@@ -37,10 +37,21 @@ export function TripContextPicker(props: TripContextPickerProps) {
     if (purpose === null) {
         return (
             <div className="flex flex-col gap-3" data-testid="TripContextPicker">
-                <p className="text-center text-sm text-muted-foreground">
-                    Where are you heading?
-                </p>
-                <TripContextChoices busy={busy} onSelect={setPurpose} />
+                {/* El mockup titula esta pantalla "Change activity", no como el
+                    workbench: la rejilla es la misma, el encabezado sitúa. */}
+                <div>
+                    <p className="text-xl font-bold text-foreground">
+                        Change activity
+                    </p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                        Select the new trip purpose.
+                    </p>
+                </div>
+                <TripContextChoices
+                    busy={busy}
+                    selected={initial?.purpose ?? null}
+                    onSelect={setPurpose}
+                />
                 <Button variant="ghost" onClick={onCancel} disabled={busy}>
                     Cancel
                 </Button>

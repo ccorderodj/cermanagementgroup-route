@@ -566,9 +566,17 @@ export const RouteMyRoutePage = () => {
                             de reposo: no hay un botón previo que las revele. */}
                         {!capturandoOdometro && preparando === null && (
                             <>
-                                <p className="text-center text-base font-medium text-foreground">
-                                    What&apos;s next?
-                                </p>
+                                {/* Título y subtítulo literales del mockup
+                                    V0.7 aprobado: el workbench se presenta, no
+                                    aparece sin más. */}
+                                <div>
+                                    <p className="text-xl font-bold text-foreground">
+                                        What&apos;s next?
+                                    </p>
+                                    <p className="mt-0.5 text-xs text-muted-foreground">
+                                        Choose one activity to start a trip.
+                                    </p>
+                                </div>
                                 <TripContextChoices
                                     busy={busy}
                                     onSelect={setPreparando}

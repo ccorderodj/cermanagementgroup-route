@@ -46,6 +46,7 @@ pytest.importorskip("playwright", reason="playwright no está instalado")
 
 
 MOVIL = {"width": 390, "height": 844}
+ESCRITORIO = {"width": 1280, "height": 900}
 
 #: Las siete opciones aprobadas, con la etiqueta que ve el supervisor.
 OPCIONES = (
@@ -59,6 +60,39 @@ OPCIONES = (
 )
 
 
+#: Nombre y subetiqueta de cada tarjeta, literales del mockup V0.7 aprobado
+#: (`purposeGrid()` en `standalone.html`).
+TARJETAS = (
+    ("Client Visit", "Client / site"),
+    ("Recruiting", "Candidate activity"),
+    ("Employee Visit", "Employee support"),
+    ("Check Delivery", "Delivery"),
+    ("Office", "Office task"),
+    ("Other", "Field task"),
+    ("Return Home", "End route"),
+)
+
+
+async def _columnas_de_la_rejilla(page) -> int:
+    """Cuántas columnas tiene de verdad la rejilla, según el navegador.
+
+    Se mide sobre el estilo calculado del contenedor, no sobre la clase escrita:
+    lo que importa es lo que el supervisor ve renderizado. Un apilado a todo el
+    ancho da una sola columna; la rejilla aprobada, dos en el teléfono.
+    """
+    return await page.get_by_role("button", name="Client Visit").first.evaluate(
+        "el => getComputedStyle(el.parentElement).gridTemplateColumns"
+        ".split(' ').filter(Boolean).length"
+    )
+
+
+async def _hay_desbordamiento_horizontal(page) -> bool:
+    return await page.evaluate(
+        "() => document.documentElement.scrollWidth > "
+        "document.documentElement.clientWidth + 1"
+    )
+
+
 async def _sembrar_valores(company_id: int) -> None:
     async with async_session_maker() as session:
         await provision_standard_values(session, company_id=company_id)
@@ -66,14 +100,14 @@ async def _sembrar_valores(company_id: int) -> None:
 
 
 @asynccontextmanager
-async def _movil(live_server, email: str):
+async def _movil(live_server, email: str, viewport: dict | None = None):
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
         navegador = await lanzar_edge(p)
         try:
             contexto = await navegador.new_context(
-                base_url=live_server, viewport=MOVIL
+                base_url=live_server, viewport=viewport or MOVIL
             )
             page = await contexto.new_page()
             await abrir_sesion(page, email)
@@ -121,7 +155,7 @@ async def test_start_work_lands_directly_on_the_workbench(seeded, live_server):
         )
         for opcion in OPCIONES:
             await expect(
-                page.get_by_role("button", name=opcion, exact=True)
+                page.get_by_role("button", name=opcion)
             ).to_have_count(1)
 
         # El botón intermedio no existe en ninguna de sus dos formas.
@@ -189,7 +223,7 @@ async def test_the_pre_trip_screen_is_one_screen_and_back_returns_empty_handed(
             1, timeout=20_000
         )
 
-        await page.get_by_role("button", name="Client Visit", exact=True).click()
+        await page.get_by_role("button", name="Client Visit").click()
 
         # Su dato, y la acción principal. Nada de `Prepare trip`.
         await expect(page.locator("#trip-reference")).to_have_count(1, timeout=20_000)
@@ -231,7 +265,7 @@ async def test_change_plan_reuses_the_same_seven_choices(seeded, live_server):
     async with _movil(live_server, supervisor.email) as (_c, page):
         await page.goto("/route")
         await page.get_by_role("button", name="Start Work").click()
-        await page.get_by_role("button", name="Client Visit", exact=True).click()
+        await page.get_by_role("button", name="Client Visit").click()
         await page.get_by_role("button", name="Start Trip").click()
         await expect(
             page.get_by_role("button", name="Change Plan")
@@ -243,10 +277,10 @@ async def test_change_plan_reuses_the_same_seven_choices(seeded, live_server):
         # Las siete, otra vez, con la misma presentación.
         for opcion in OPCIONES:
             await expect(
-                page.get_by_role("button", name=opcion, exact=True)
+                page.get_by_role("button", name=opcion)
             ).to_have_count(1, timeout=20_000)
 
-        await page.get_by_role("button", name="Employee Visit", exact=True).click()
+        await page.get_by_role("button", name="Employee Visit").click()
         await page.locator("#trip-standard-value").click()
         await page.get_by_role("option", name="Attendance Issue", exact=True).click()
         await page.get_by_role("button", name="Update plan").click()
@@ -295,7 +329,7 @@ async def test_end_work_is_offered_only_from_the_workbench(seeded, live_server):
         await expect(salir(page)).to_have_count(1)
 
         # Pre-viaje: no.
-        await page.get_by_role("button", name="Client Visit", exact=True).click()
+        await page.get_by_role("button", name="Client Visit").click()
         await expect(page.locator("#trip-reference")).to_have_count(1, timeout=20_000)
         await expect(salir(page)).to_have_count(0)
 
@@ -357,7 +391,7 @@ async def test_the_administrator_reaches_the_same_workbench(seeded, live_server)
         )
         for opcion in OPCIONES:
             await expect(
-                page.get_by_role("button", name=opcion, exact=True)
+                page.get_by_role("button", name=opcion)
             ).to_have_count(1)
 
 
@@ -429,3 +463,185 @@ async def test_platform_identity_alone_does_not_open_the_route_shell(
         assert respuesta is not None and respuesta.status == 403, (
             f"la identidad de plataforma no ejecuta ruta: {respuesta}"
         )
+
+
+# ── V1 · V3 · VR-01 · VR-04 ─────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "viewport,columnas_minimas,nombre",
+    [(MOVIL, 2, "movil"), (ESCRITORIO, 2, "escritorio")],
+    ids=["390x844", "1280x900"],
+)
+async def test_the_workbench_is_the_approved_card_grid(
+    seeded, live_server, viewport, columnas_minimas, nombre,
+):
+    """V1 y V3: la presentación aprobada, medida y no descrita.
+
+    `old visual expectation` — botones apilados a todo el ancho, uno por fila.
+    `V0.7 approved visual baseline` — `purposeGrid()` del mockup: una rejilla de
+    dos columnas de tarjetas, cada una con nombre y una segunda línea que lo
+    sitúa.
+    `new expectation` — eso, comprobado sobre el **estilo calculado** del
+    contenedor y sobre el texto de cada tarjeta. Medirlo en el navegador y no
+    leer la clase escrita es la diferencia entre comprobar y suponer: un apilado
+    daría una sola columna.
+
+    Se recorre en los dos anchos que VR-04 exige. En escritorio la rejilla puede
+    crecer, pero sigue siendo la misma rejilla — nunca menos columnas que en el
+    teléfono, y nunca desbordamiento horizontal.
+    """
+    supervisor = seeded.alpha.users["supervisor"]
+
+    async with _movil(live_server, supervisor.email, viewport) as (_c, page):
+        await page.goto("/route")
+        await page.get_by_role("button", name="Start Work").click()
+        await expect(page.get_by_text("What's next?")).to_have_count(
+            1, timeout=20_000
+        )
+        # El encabezado del mockup, que presenta el workbench.
+        await expect(
+            page.get_by_text("Choose one activity to start a trip.")
+        ).to_have_count(1)
+
+        columnas = await _columnas_de_la_rejilla(page)
+        assert columnas >= columnas_minimas, (
+            f"en {nombre} la rejilla tiene {columnas} columna(s): "
+            "eso es un apilado, no la rejilla aprobada"
+        )
+
+        # Cada tarjeta lleva su nombre y su subetiqueta, y es pulsable.
+        for etiqueta, pista in TARJETAS:
+            tarjeta = page.get_by_role("button", name=etiqueta).first
+            await expect(tarjeta).to_have_count(1)
+            await expect(tarjeta).to_be_enabled()
+            await expect(page.get_by_text(pista, exact=True)).to_have_count(1)
+
+        assert not await _hay_desbordamiento_horizontal(page), (
+            f"la rejilla desborda a lo ancho en {nombre}"
+        )
+
+        # VR-03: `End Work` sigue estando y sigue siendo secundario — no es una
+        # octava tarjeta ni se repite dentro de cada una.
+        salir = page.get_by_role("button", name="End Work")
+        await expect(salir).to_have_count(1)
+        await expect(salir).to_be_enabled()
+        caja_tarjeta = await page.get_by_role(
+            "button", name="Client Visit"
+        ).first.bounding_box()
+        caja_salir = await salir.bounding_box()
+        assert caja_tarjeta is not None and caja_salir is not None
+        assert caja_salir["y"] > caja_tarjeta["y"], (
+            "terminar el día va **después** de elegir el siguiente trabajo"
+        )
+
+
+# ── V4 ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "etiqueta,campo,valor",
+    [
+        ("Client Visit", "#trip-reference", None),
+        ("Recruiting", "#trip-reference", None),
+        ("Employee Visit", "#trip-standard-value", "Attendance Issue"),
+        ("Check Delivery", "#trip-standard-value", "Payroll Check"),
+        ("Office", "#trip-standard-value", "Paperwork"),
+        ("Other", "#trip-reference", None),
+        ("Return Home", None, None),
+    ],
+)
+async def test_every_card_opens_its_own_context_flow(
+    seeded, live_server, etiqueta, campo, valor,
+):
+    """V4: **las siete**, no una representativa.
+
+    Cada tarjeta abre el pre-viaje de su contexto y pide exactamente lo suyo:
+    texto libre donde el contexto lo tiene, valor de lista donde lo tiene, y
+    `Return Home` ninguno de los dos. `Back` devuelve al workbench sin crear
+    nada, que es lo que hace que recorrer las siete sea barato y seguro.
+    """
+    await _sembrar_valores(seeded.alpha.id)
+    supervisor = seeded.alpha.users["supervisor"]
+
+    async with _movil(live_server, supervisor.email) as (_c, page):
+        await page.goto("/route")
+        await page.get_by_role("button", name="Start Work").click()
+        await expect(page.get_by_text("What's next?")).to_have_count(
+            1, timeout=20_000
+        )
+
+        await page.get_by_role("button", name=etiqueta).first.click()
+
+        # La pantalla de ese contexto, con `Start Trip` como acción principal.
+        await expect(
+            page.get_by_role("button", name="Start Trip")
+        ).to_have_count(1, timeout=20_000)
+        if campo:
+            await expect(page.locator(campo)).to_have_count(1)
+            if valor:
+                await page.locator(campo).click()
+                await expect(
+                    page.get_by_role("option", name=valor, exact=True)
+                ).to_have_count(1)
+                await page.keyboard.press("Escape")
+        else:
+            await expect(page.locator("#trip-reference")).to_have_count(0)
+            await expect(page.locator("#trip-standard-value")).to_have_count(0)
+
+        # Y sin salida de jornada desde aquí (FR-06).
+        await expect(page.get_by_role("button", name="End Work")).to_have_count(0)
+
+        await page.get_by_role("button", name="Back").click()
+        await expect(page.get_by_text("What's next?")).to_have_count(
+            1, timeout=20_000
+        )
+
+    assert await _contar_viajes(seeded.alpha.id) == 0, (
+        "recorrer el pre-viaje y volver no crea ningún viaje"
+    )
+
+
+# ── V3 · separación de navegación ───────────────────────────────────────────
+
+
+async def test_my_route_stays_visually_separate_from_configuration(
+    seeded, live_server,
+):
+    """V3, la mitad que mira al menú y no al workbench.
+
+    El realineamiento visual no puede reunir lo operativo con lo de
+    configuración: son dos grupos, y `My Route` vive en el primero. Se comprueba
+    en escritorio, que es el ancho donde el Administrador administra y donde el
+    lateral está desplegado.
+
+    Se mide sobre el Administrador porque es el único que ve los dos grupos: el
+    Supervisor no tiene capacidades de configuración y para él ese grupo no
+    existe, cosa que ya cubre el cierre 002.
+    """
+    administrador = seeded.alpha.users["route_admin"]
+
+    async with _movil(live_server, administrador.email, ESCRITORIO) as (_c, page):
+        await page.goto("/admin")
+
+        # Dos grupos distintos en el lateral, no uno que lo mezcle todo.
+        #
+        # Se ancla en el rol de botón —el desplegable del grupo— y no en el
+        # texto suelto: "CER Route" aparece además como título de la aplicación
+        # y como descripción de la tarjeta de inicio, así que buscarlo por texto
+        # devuelve tres cosas distintas y ninguna es el menú.
+        operativo = page.get_by_role("button", name="CER Route", exact=True)
+        configuracion = page.get_by_role(
+            "button", name="CER Route Configuration", exact=True
+        )
+        await expect(operativo).to_have_count(1, timeout=20_000)
+        await expect(configuracion).to_have_count(1)
+
+        # Y lo operativo no cuelga de configuración.
+        operativo = page.get_by_role("link", name="My Route").first
+        await expect(operativo).to_have_count(1)
+        await operativo.click()
+        await expect(
+            page.get_by_role("button", name="Start Work")
+        ).to_have_count(1, timeout=20_000)
+        assert page.url.endswith("/route"), page.url
