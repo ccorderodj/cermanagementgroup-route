@@ -115,7 +115,10 @@ async def _hasta_la_llegada(page, *, contexto_ui: str, valor: str | None = None)
     await page.get_by_role("button", name="Start Work").click()
     await expect(page.get_by_text("What's next?")).to_have_count(1, timeout=20_000)
 
-    await page.get_by_role("button", name=contexto_ui, exact=True).click()
+    # Sin `exact`: desde el cierre 004 la tarjeta del workbench lleva nombre
+    # **y** subetiqueta, así que su nombre accesible es "Client Visit Client /
+    # site". La subcadena sigue identificando una sola tarjeta.
+    await page.get_by_role("button", name=contexto_ui).first.click()
     if valor is not None:
         await page.locator("#trip-standard-value").click()
         await page.get_by_role("option", name=valor, exact=True).click()

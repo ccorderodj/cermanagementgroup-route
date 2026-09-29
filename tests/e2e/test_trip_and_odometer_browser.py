@@ -253,9 +253,9 @@ async def test_start_work_odometer_start_trip_change_plan_and_arrived(
             # reutiliza las mismas siete opciones del workbench.
             # `new expectation` — las opciones están **ya**, sin paso previo.
             await expect(
-                page.get_by_role("button", name="Client Visit", exact=True)
+                page.get_by_role("button", name="Client Visit")
             ).to_have_count(1, timeout=20_000)
-            await page.get_by_role("button", name="Client Visit", exact=True).click()
+            await page.get_by_role("button", name="Client Visit").click()
             await page.get_by_role("button", name="Update plan").click()
 
             await expect(page.get_by_text("Originally:")).to_have_count(

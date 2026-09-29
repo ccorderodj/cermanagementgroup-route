@@ -171,7 +171,7 @@ async def test_the_administrator_runs_the_whole_operational_journey(
             # workbench (PD-07), sin un "Change" intermedio.
             await page.get_by_role("button", name="Change Plan").click()
             await page.get_by_role(
-                "button", name="Client Visit", exact=True
+                "button", name="Client Visit"
             ).click()
             await page.get_by_role("button", name="Update plan").click()
             await expect(page.get_by_text("Originally:")).to_have_count(
