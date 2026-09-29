@@ -337,18 +337,36 @@ class ActivityService:
             company_id=company_id, value_id=outcome_id, list_code=OUTCOME_LIST
         )
 
+        # Quién recibió: obligatorio al **completar**, opcional al marcharse.
+        #
+        # Completar una entrega afirma que alguien la recibió, y esa afirmación
+        # sin nombre no es verificable. Marcharse afirma lo contrario —que no se
+        # pudo entregar—, y exigir un receptor ahí obligaría a inventarse uno
+        # para poder cerrar la parada: un dato fabricado para satisfacer una
+        # validación es peor que la ausencia del dato.
+        #
+        # La regla sale de la **acción**, nunca del resultado elegido. El
+        # catálogo de resultados es dato configurado por el tenant: ramificar
+        # sobre sus etiquetas ataría esta validación a un texto que un
+        # administrador puede renombrar esta tarde.
         recibido_por = None
         if viaje.current_purpose == TripPurpose.CHECK_DELIVERY.value:
             if received_by_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    detail="Record who received the delivery before finishing.",
+                if action == TerminalAction.COMPLETE.value:
+                    raise HTTPException(
+                        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                        detail=(
+                            "Record who received the delivery before completing."
+                        ),
+                    )
+            else:
+                # Si se registra al marcharse, se conserva y se valida igual:
+                # que sea opcional no lo hace menos verificable.
+                recibido_por = await ActivityService._valor_elegible(
+                    company_id=company_id,
+                    value_id=received_by_id,
+                    list_code=RECEIVED_BY_LIST,
                 )
-            recibido_por = await ActivityService._valor_elegible(
-                company_id=company_id,
-                value_id=received_by_id,
-                list_code=RECEIVED_BY_LIST,
-            )
         elif received_by_id is not None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,

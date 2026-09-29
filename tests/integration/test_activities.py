@@ -121,6 +121,17 @@ async def _estado_del_viaje(company_id: int, trip_id: int) -> str:
         )
 
 
+async def _estado_de_la_jornada(company_id: int, session_id: int) -> str:
+    async with async_session_maker() as session:
+        return await session.scalar(
+            text(
+                "SELECT status FROM work_session "
+                "WHERE id = :i AND company_id = :c"
+            ),
+            {"i": session_id, "c": company_id},
+        )
+
+
 # ── Casos 1-4: seleccionar, ejecutar, terminar ──────────────────────────────
 
 
@@ -329,16 +340,18 @@ async def test_contexts_that_already_asked_do_not_ask_again(
 
 
 async def test_check_delivery_records_who_received_it(seeded, alpha_client):
-    """Caso 7: `Received By` es post-llegada y obligatorio.
+    """Caso 7, y AC-01: al **completar**, `Received By` es obligatorio.
 
-    La obligatoriedad sale del mockup aprobado V0.7, donde los campos opcionales
-    llevan "· optional" y sólo las notas lo llevan. No se inventa aquí.
+    Completar una entrega afirma que alguien la recibió, y esa afirmación sin
+    nombre no es verificable. La obligatoriedad al completar es decisión
+    explícita de CER (cierre 002, Delta 1); el camino de marcharse la relaja y
+    lo cubre `test_leaving_a_check_delivery_needs_no_receiver`.
     """
     await _sembrar_valores(seeded.alpha.id)
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     tipo = await _id_de(alpha_client, "delivery_types", "Payroll Check")
 
-    _, viaje = await _llegar(
+    jornada, viaje = await _llegar(
         alpha_client, seeded, purpose="check_delivery", standard_value_id=tipo
     )
     await alpha_client.post(
@@ -369,6 +382,122 @@ async def test_check_delivery_records_who_received_it(seeded, alpha_client):
 
     assert fin["received_by_label"] == "Authorized Person"
     assert await _estado_del_viaje(seeded.alpha.id, viaje["id"]) == "closed"
+    assert await _estado_de_la_jornada(seeded.alpha.id, jornada["id"]) == "active"
+
+
+@pytest.mark.parametrize("con_receptor", [False, True], ids=["sin", "con"])
+async def test_leaving_a_check_delivery_needs_no_receiver(
+    seeded, alpha_client, con_receptor,
+):
+    """AC-02: marcharse de una entrega **no** exige receptor, y lo acepta.
+
+    Es el caso real que el cierre 002 corrige: el supervisor llega, no hay nadie
+    a quien entregar, y se marcha. Exigirle un receptor le obligaría a
+    inventarse uno para poder cerrar la parada — un dato fabricado para
+    satisfacer una validación es peor que la ausencia del dato.
+
+    Y si sí hubo alguien pero la entrega no se completó, se registra igual: que
+    sea opcional no lo hace menos verificable, así que se valida contra la lista
+    y el tenant como cualquier otro valor.
+    """
+    await _sembrar_valores(seeded.alpha.id)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    tipo = await _id_de(alpha_client, "delivery_types", "Payroll Check")
+
+    jornada, viaje = await _llegar(
+        alpha_client, seeded, purpose="check_delivery", standard_value_id=tipo
+    )
+    await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start", json={"activity_ids": []}
+    )
+
+    cuerpo = {
+        "action": "leave",
+        "outcome_id": await _id_de(alpha_client, "outcomes", "No Contact"),
+    }
+    if con_receptor:
+        cuerpo["received_by_id"] = await _id_de(
+            alpha_client, "received_by", "Office Staff"
+        )
+
+    respuesta = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/leave", json=cuerpo
+    )
+    assert respuesta.status_code == 200, respuesta.text
+    fin = respuesta.json()
+
+    assert fin["status"] == "left"
+    assert fin["terminal_action"] == "leave"
+    assert fin["outcome_label"] == "No Contact"
+    if con_receptor:
+        assert fin["received_by_label"] == "Office Staff", "si se eligió, se conserva"
+    else:
+        assert fin["received_by_standard_value_id"] is None
+        assert fin["received_by_label"] is None, "no se fabrica un receptor"
+
+    # AC-02: el viaje cierra y la jornada sigue abierta, igual que al completar.
+    assert await _estado_del_viaje(seeded.alpha.id, viaje["id"]) == "closed"
+    assert await _estado_de_la_jornada(seeded.alpha.id, jornada["id"]) == "active"
+
+
+async def test_leaving_a_check_delivery_still_requires_an_outcome(
+    seeded, alpha_client,
+):
+    """AC-03: relajar el receptor no relaja el resultado.
+
+    Son dos datos distintos y sólo uno cambió. Marcharse sigue siendo una salida
+    controlada: exige decir cómo fue.
+    """
+    await _sembrar_valores(seeded.alpha.id)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    tipo = await _id_de(alpha_client, "delivery_types", "Payroll Check")
+
+    _, viaje = await _llegar(
+        alpha_client, seeded, purpose="check_delivery", standard_value_id=tipo
+    )
+    await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start", json={"activity_ids": []}
+    )
+
+    respuesta = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/leave", json={"action": "leave"}
+    )
+    assert respuesta.status_code == 422, respuesta.text
+
+
+@pytest.mark.parametrize("accion", ["complete", "leave"])
+async def test_only_a_check_delivery_records_who_received_it(
+    seeded, alpha_client, accion,
+):
+    """Los demás contextos siguen rechazando el receptor, en las dos salidas.
+
+    La regla de Delta 1 relaja **cuándo** hace falta en Check Delivery; no
+    convierte el campo en un cajón de sastre para el resto. Una visita a un
+    cliente no tiene a quién entregar nada.
+    """
+    await _sembrar_valores(seeded.alpha.id)
+    _, viaje = await _llegar(alpha_client, seeded, purpose="client_visit")
+    actividad = await _id_de(alpha_client, "client_visit_activities", "Service Review")
+    await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start",
+        json={"activity_ids": [actividad]},
+    )
+
+    respuesta = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/{accion}",
+        json={
+            "action": accion,
+            "outcome_id": await _id_de(alpha_client, "outcomes", "Completed"),
+            "received_by_id": await _id_de(
+                alpha_client, "received_by", "Employee"
+            ),
+        },
+    )
+    assert respuesta.status_code == 422, respuesta.text
+    assert "check delivery" in respuesta.json()["detail"].lower()
+    assert await _estado_del_viaje(seeded.alpha.id, viaje["id"]) == "arrived", (
+        "un cierre rechazado no cierra el viaje"
+    )
 
 
 async def test_going_home_records_no_activity(seeded, alpha_client):

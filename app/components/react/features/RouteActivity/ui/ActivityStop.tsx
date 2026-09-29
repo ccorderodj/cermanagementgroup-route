@@ -13,7 +13,8 @@ import {
     queueStartActivity,
     queueTerminalizeActivity,
     requiereActividades,
-    requiereReceptor,
+    registraReceptor,
+    exigeReceptor,
     type ActivityExecution,
     type TerminalAction,
 } from '@/entities/RouteActivities';
@@ -108,7 +109,7 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
     useEffect(() => {
         if (!saliendo) return;
         fetchStandardValues(OUTCOME_LIST).then(setResultados).catch(() => setResultados([]));
-        if (requiereReceptor(purpose)) {
+        if (registraReceptor(purpose)) {
             fetchStandardValues(RECEIVED_BY_LIST)
                 .then(setReceptores)
                 .catch(() => setReceptores([]));
@@ -157,7 +158,10 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
         }
     };
 
-    const faltaAlgo = !resultado || (requiereReceptor(purpose) && !receptor);
+    // Al marcharse el receptor no bloquea, pero si se eligió se conserva y
+    // viaja igual: opcional no es lo mismo que descartable.
+    const faltaAlgo = !resultado
+        || (saliendo !== null && exigeReceptor(purpose, saliendo) && !receptor);
 
     /**
      * Sólo el reloj de la parada: quién es el destino ya lo dice la pantalla
@@ -256,9 +260,20 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
                         </Select>
                     </div>
 
-                    {requiereReceptor(purpose) && (
+                    {registraReceptor(purpose) && (
                         <div className="flex flex-col gap-1.5">
-                            <Label htmlFor="activity-received-by">Received by</Label>
+                            <Label htmlFor="activity-received-by">
+                                Received by
+                                {/* Sólo se marca donde de verdad es opcional:
+                                    al marcharse. Al completar va sin marca,
+                                    como el resultado, porque lo obligatorio es
+                                    el caso normal. */}
+                                {saliendo === 'leave' && (
+                                    <span className="ml-1 text-muted-foreground">
+                                        (optional)
+                                    </span>
+                                )}
+                            </Label>
                             <Select value={receptor} onValueChange={setReceptor}>
                                 <SelectTrigger id="activity-received-by" className="h-12">
                                     <SelectValue placeholder="Choose one" />
