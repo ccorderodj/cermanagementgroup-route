@@ -41,6 +41,17 @@ export interface ApiError {
     message: string;
     /** Errores por campo, cuando el backend devuelve validación de Pydantic. */
     fieldErrors?: Record<string, string>;
+    /**
+     * Código estable del conflicto, cuando el servidor lo nombra.
+     *
+     * Existe para que la pantalla **no tenga que leer la frase**. Reaccionar al
+     * texto funciona hasta que alguien mejora una redacción o traduce la
+     * interfaz, y entonces la recuperación desaparece sin que ningún test se
+     * queje. El código lo decide el servidor y no cambia con la copia.
+     */
+    code?: string;
+    /** Datos que el conflicto adjunta para poder actuar. Siempre del propio tenant. */
+    data?: Record<string, unknown>;
 }
 
 const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
@@ -62,18 +73,24 @@ function extractFieldErrors(detail: unknown): Record<string, string> | undefined
     return Object.keys(fields).length ? fields : undefined;
 }
 
-export function normalizeApiError(error: unknown): ApiError {
-    const axiosError = error as AxiosError<{ detail?: unknown }>;
-
-    if (!axiosError?.isAxiosError) {
-        return { status: null, message: GENERIC_MESSAGE };
-    }
-
-    const status = axiosError.response?.status ?? null;
-    const detail = axiosError.response?.data?.detail;
-
+function interpretarDetalle(detail: unknown, status: number | null): ApiError {
     if (typeof detail === 'string') {
         return { status, message: detail };
+    }
+
+    // Un conflicto con nombre: `{ code, message, ... }`. Se comprueba antes de
+    // los errores por campo porque aquélla es una lista y ésta un objeto, y
+    // porque un código es más específico que un mensaje.
+    if (detail && typeof detail === 'object' && !Array.isArray(detail)) {
+        const { code, message } = detail as { code?: unknown; message?: unknown };
+        if (typeof code === 'string') {
+            return {
+                status,
+                code,
+                message: typeof message === 'string' ? message : GENERIC_MESSAGE,
+                data: detail as Record<string, unknown>,
+            };
+        }
     }
 
     const fieldErrors = extractFieldErrors(detail);
@@ -85,11 +102,39 @@ export function normalizeApiError(error: unknown): ApiError {
         };
     }
 
+    return { status, message: GENERIC_MESSAGE };
+}
+
+/**
+ * Lo mismo, partiendo del cuerpo ya extraído.
+ *
+ * Los thunks de Redux rechazan con `error.response.data`, así que en el `catch`
+ * de un componente no llega un error de Axios sino el cuerpo pelado. Sin esto,
+ * quien lo recibía leía `(error as Error).message` —que no existe— y acababa
+ * mostrando un aviso genérico aunque el servidor hubiera explicado exactamente
+ * qué pasaba. Una misma interpretación para los dos caminos.
+ */
+export function normalizeRejectedPayload(payload: unknown): ApiError {
+    const cuerpo = payload as { detail?: unknown } | undefined;
+    if (!cuerpo || typeof cuerpo !== 'object' || !('detail' in cuerpo)) {
+        return { status: null, message: GENERIC_MESSAGE };
+    }
+    return interpretarDetalle(cuerpo.detail, null);
+}
+
+export function normalizeApiError(error: unknown): ApiError {
+    const axiosError = error as AxiosError<{ detail?: unknown }>;
+
+    if (!axiosError?.isAxiosError) {
+        return { status: null, message: GENERIC_MESSAGE };
+    }
+
+    const status = axiosError.response?.status ?? null;
     if (status === null) {
         return { status, message: 'The server is unreachable. Check your connection.' };
     }
 
-    return { status, message: GENERIC_MESSAGE };
+    return interpretarDetalle(axiosError.response?.data?.detail, status);
 }
 
 export const $api = axios.create({

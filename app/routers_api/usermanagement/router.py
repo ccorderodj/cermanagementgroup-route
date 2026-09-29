@@ -30,6 +30,7 @@ from app.routers_api.usermanagement.schemas import (
     UserManagementCreate,
     UserManagementRead,
     UserManagementUpdate,
+    UserReenrollment,
     UsersPaginationParams,
 )
 from app.routers_api.users.dependencies import get_current_user
@@ -218,6 +219,62 @@ async def set_user_access(
         changes={"is_active": {"old": not payload.is_active, "new": payload.is_active}},
     )
     return UserManagementRead.model_validate(updated)
+
+
+@router.post("/{user_id}/reenrollment")
+async def reenroll_user(
+    user_id: int,
+    payload: UserReenrollment,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["users.create"])),
+    company: TenantContext = Depends(get_company_required),
+) -> UserManagementRead:
+    """Devuelve el acceso a quien ya estuvo en esta compañía.
+
+    Es un endpoint aparte y no una rama de `create` a propósito: readmitir tiene
+    que ser **explícito**. La creación devuelve el conflicto con su código, la
+    pantalla pide confirmación, y sólo entonces se llama aquí. Un `create` que
+    readmitiera por su cuenta al detectar la historia sería justo el
+    restablecimiento silencioso que §10 prohíbe.
+
+    Exige `users.create`, la misma autoridad con la que se da acceso por primera
+    vez: es la misma decisión —esta persona entra a esta compañía— y no merece
+    una capacidad nueva.
+
+    El rol pasa por `ensure_assignable_role`, así que desde CER Route sólo se
+    puede aplicar Administrador o Supervisor, y da igual que la petición venga
+    de la pantalla o de `curl`.
+    """
+    await ensure_assignable_role(
+        role_id=payload.role_id,
+        company_id=company.id,
+        actor_user_id=current_user.id,
+    )
+
+    fila, membership_id, rol_previo = await UserManagementDAO.reenroll_membership(
+        user_id=user_id, company_id=company.id, role_id=payload.role_id
+    )
+
+    # La auditoría deja el antes y el después de la pertenencia, y **nada** de
+    # la credencial: ni la contraseña ni su hash son datos de auditoría.
+    await record_event(
+        company_id=company.id,
+        entity_type="user_company",
+        entity_id=membership_id,
+        action="reenroll",
+        actor_user_id=current_user.id,
+        summary=(
+            f"Tenant access restored for user "
+            f"{fila.get('email') or fila['username']}"
+        ),
+        changes={
+            "user_id": {"old": user_id, "new": user_id},
+            "membership": {"old": "removed", "new": "active"},
+            "role_id": {"old": rol_previo, "new": payload.role_id},
+        },
+    )
+
+    return UserManagementRead.model_validate(fila)
 
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)

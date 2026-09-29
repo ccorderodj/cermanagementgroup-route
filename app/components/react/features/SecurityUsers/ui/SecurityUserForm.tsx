@@ -24,10 +24,13 @@ import {
     SelectValue,
     ToastAction,
 } from '@/shared/ui/shadcn/new-york';
+import { normalizeRejectedPayload } from '@/shared/api';
+import { ConfirmDestructiveDialog } from '@/features/Common';
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch/useAppDispatch';
 import {
     createUserManagement,
+    reenrollUserManagement,
     fetchAssignableRoles,
     setUserAccess,
     updateUserManagement,
@@ -46,6 +49,17 @@ interface SecurityUserFormProps {
      */
     contract?: UserManagementContract;
 }
+
+/**
+ * El mínimo que exige el servidor, escrito una vez.
+ *
+ * El servidor es la autoridad —`MIN_PASSWORD_LENGTH` en
+ * `app/routers_api/users/schemas.py`— y esto es su reflejo. Estaba en 6
+ * mientras el servidor exigía 10, así que una contraseña de 6 a 9 caracteres
+ * pasaba el cliente y volvía como un fallo genérico sin decir qué corregir
+ * (D-A03-01).
+ */
+const MIN_PASSWORD = 10;
 
 const SecurityUserFormSchema = z.object({
     username: z.string({ required_error: 'Username is required' }).trim().min(1, 'Username is required'),
@@ -119,6 +133,18 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
         form.reset(defaultValues);
     }, [defaultValues, form]);
 
+    /**
+     * La readmisión esperando confirmación. `null` = ninguna.
+     *
+     * Vive en el cliente mientras se confirma: hasta que el administrador
+     * acepta, no se ha escrito nada en el servidor — Cancel no muta (§10).
+     */
+    const [readmision, setReadmision] = useState<{
+        userId: number;
+        nombre: string;
+        roleId: number;
+    } | null>(null);
+
     const onSubmit = useCallback(async (values: SecurityUserFormValues) => {
         const password = values.password?.trim() || '';
         const confirmPassword = values.confirm_password?.trim() || '';
@@ -129,8 +155,11 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
             return;
         }
 
-        if (isPasswordProvided && password.length < 6) {
-            form.setError('password', { type: 'manual', message: 'Password must be at least 6 characters' });
+        if (isPasswordProvided && password.length < MIN_PASSWORD) {
+            form.setError('password', {
+                type: 'manual',
+                message: `Password must be at least ${MIN_PASSWORD} characters`,
+            });
             return;
         }
 
@@ -202,15 +231,97 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 });
             }
         } catch (error) {
-            const errorMessage = (error as Error).message || `Could not ${isEditMode ? 'update' : 'create'} user`;
+            // Los thunks rechazan con el cuerpo de la respuesta, no con un
+            // `Error`: leer `.message` daba `undefined`, y de ahí salía el
+            // aviso genérico que no decía nada.
+            const fallo = normalizeRejectedPayload(error);
+
+            // Validación por campo: al campo, que es donde se corrige.
+            if (fallo.fieldErrors) {
+                const valores = form.getValues();
+                Object.entries(fallo.fieldErrors).forEach(([campo, mensaje]) => {
+                    if (campo in valores) {
+                        form.setError(campo as keyof SecurityUserFormValues, {
+                            type: 'server',
+                            message: mensaje,
+                        });
+                    }
+                });
+                toast({
+                    variant: 'destructive',
+                    title: fallo.message,
+                    description: 'Review the highlighted fields.',
+                });
+                return;
+            }
+
+            // Conflictos con nombre. Se decide por el **código**, nunca por el
+            // texto: reaccionar a la frase se rompe al mejorar una redacción o
+            // al traducir la interfaz.
+            if (fallo.code === 'same_tenant_removed') {
+                const userId = Number(fallo.data?.user_id);
+                if (Number.isFinite(userId)) {
+                    // Todavía no se restaura nada: se pide confirmación.
+                    setReadmision({
+                        userId,
+                        nombre: String(
+                            fallo.data?.display_name ?? values.username.trim(),
+                        ),
+                        roleId: Number(values.role_id),
+                    });
+                    return;
+                }
+            }
+
+            const campoDelConflicto: Record<string, keyof SecurityUserFormValues> = {
+                same_tenant_active: 'username',
+                same_tenant_inactive: 'username',
+                username_unavailable: 'username',
+                role_not_allowed: 'role_id',
+            };
+            const campo = fallo.code ? campoDelConflicto[fallo.code] : undefined;
+            if (campo) {
+                form.setError(campo, { type: 'server', message: fallo.message });
+            }
+
             toast({
                 variant: 'destructive',
-                title: errorMessage,
-                description: 'Submission failed',
+                title: fallo.message,
+                description: fallo.code
+                    ? undefined
+                    : `Could not ${isEditMode ? 'update' : 'create'} user`,
                 action: <ToastAction altText="Try again">Try again</ToastAction>,
             });
         }
     }, [contract, dispatch, form, getData, initialData, isEditMode, toast]);
+
+    /** Confirmada, se restaura el acceso y se refresca la lista. */
+    const confirmarReadmision = useCallback(async () => {
+        if (!readmision) return;
+        try {
+            const restaurado = await dispatch(reenrollUserManagement({
+                userId: readmision.userId,
+                roleId: readmision.roleId,
+                contract,
+            })).unwrap();
+            setReadmision(null);
+            getData(restaurado);
+            toast({
+                title: 'User Re-added Successfully',
+                description: 'Their access to this company has been restored.',
+            });
+        } catch (error) {
+            // Puede llegar `reenrollment_already_done`: otro administrador la
+            // readmitió mientras se miraba la confirmación. Se dice y se cierra.
+            const fallo = normalizeRejectedPayload(error);
+            setReadmision(null);
+            toast({
+                variant: 'destructive',
+                title: fallo.message,
+                action: <ToastAction altText="Try again">Try again</ToastAction>,
+            });
+        }
+    }, [contract, dispatch, getData, readmision, toast]);
 
     return (
         <Form {...form}>
@@ -323,6 +434,12 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                     </button>
                                 </div>
                                 <FormLabel>{isEditMode ? 'Password (optional)' : 'Password'}</FormLabel>
+                                {/* El requisito se dice **antes** de escribir,
+                                    no al fallar: el administrador no tiene por
+                                    qué descubrirlo probando. */}
+                                <p className="text-xs text-muted-foreground">
+                                    {`Minimum ${MIN_PASSWORD} characters`}
+                                </p>
                                 <FormMessage />
                             </FormItem>
                         )}
@@ -379,7 +496,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                         value={field.value}
                                         onValueChange={field.onChange}
                                     >
-                                        <SelectTrigger className="w-full">
+                                        <SelectTrigger id="security-user-gender" className="w-full">
                                             <SelectValue placeholder="Select gender" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -404,7 +521,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                         value={field.value}
                                         onValueChange={field.onChange}
                                     >
-                                        <SelectTrigger className="w-full">
+                                        <SelectTrigger id="security-user-status" className="w-full">
                                             <SelectValue placeholder="Select status" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -426,7 +543,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                             <FormItem className="flex flex-col">
                                 <FormControl>
                                     <Select value={field.value} onValueChange={field.onChange}>
-                                        <SelectTrigger className="w-full">
+                                        <SelectTrigger id="security-user-role" className="w-full">
                                             <SelectValue placeholder="Select role" />
                                         </SelectTrigger>
                                         <SelectContent>
@@ -456,6 +573,26 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                     </div>
                 </div>
             </form>
+
+            {/* La readmisión, confirmada a mano. Se identifica a la persona con
+                el nombre que esta compañía ya ve en su lista de usuarios, y se
+                dice el rol que va a aplicarse — nada de vocabulario interno
+                sobre pertenencias ni lápidas. */}
+            <ConfirmDestructiveDialog
+                open={readmision !== null}
+                onOpenChange={(abierto) => !abierto && setReadmision(null)}
+                title="Re-add user?"
+                description={(
+                    <>
+                        {`${readmision?.nombre ?? 'This user'} previously belonged to this company. `}
+                        Their access will be restored with the role selected in
+                        the form, and they will keep the password they already
+                        had.
+                    </>
+                )}
+                confirmLabel="Re-add user"
+                onConfirm={confirmarReadmision}
+            />
         </Form>
     );
 }

@@ -15,6 +15,12 @@ from sqlalchemy.exc import IntegrityError
 
 from app.core.dao.base import BaseDAO
 from app.core.db.session import db_session, transaction
+from app.routers_api.usermanagement.conflicts import (
+    UserConflict,
+    clasificar_nombre,
+    clasificar_nombre_por_id,
+    conflicto,
+)
 from app.routers_api.companies.models import UserCompany
 from app.routers_api.roles.models import Role
 from app.routers_api.users.auth import get_password_hash
@@ -199,6 +205,23 @@ class UserManagementDAO(BaseDAO):
         Antes eran dos operaciones con su propio commit cada una: si la segunda
         fallaba, quedaba un usuario huérfano sin compañía (AUD-BE-015).
         """
+        # Se clasifica **antes** de intentar escribir. Dejar fallar la
+        # restricción de la base sólo permitía decir "está tomado": un
+        # `IntegrityError` no distingue entre quien trabaja aquí, quien está
+        # suspendido y quien fue retirado, y esas tres cosas tienen tres
+        # salidas distintas (A03).
+        #
+        # La captura de `IntegrityError` se conserva debajo: entre clasificar y
+        # escribir cabe otra petición, y la base sigue siendo la que garantiza
+        # la unicidad.
+        estado = await clasificar_nombre(username=username, company_id=company_id)
+        if estado.conflicto is not None:
+            raise conflicto(
+                estado.conflicto,
+                user_id=estado.user_id,
+                nombre=estado.display_name,
+            )
+
         try:
             async with transaction() as session:
                 await cls._assert_role_of_company(
@@ -336,6 +359,88 @@ class UserManagementDAO(BaseDAO):
                 )
 
         return await cls.find_for_company(user_id=user_id, company_id=company_id)
+
+    @classmethod
+    async def reenroll_membership(
+        cls, *, user_id: int, company_id: int, role_id: int
+    ) -> tuple[dict, int, int | None]:
+        """Devuelve el acceso a quien ya estuvo en esta compañía.
+
+        Restaura **la misma fila**
+        --------------------------
+        `uq_user_company_user_company` es una restricción completa, no parcial,
+        y la migración 0004 dice por qué: dejarla parcial habilitaría una
+        reincorporación de identidad que A01 difirió expresamente. Así que la
+        fila con lápida sigue ahí, y readmitir es levantarle la lápida — no
+        insertar una segunda pertenencia para esquivar la restricción, que es lo
+        que FR-07 prohíbe.
+
+        La identidad de plataforma no se toca: mismo `user.id`, mismas
+        credenciales. Quien vuelve entra con la contraseña que ya tenía, porque
+        inventar un reseteo aquí sería inventar una política de seguridad que
+        nadie ha aprobado (FR-09).
+
+        Concurrencia
+        ------------
+        El `UPDATE` es condicional sobre la lápida. Si otro administrador
+        readmitió a la misma persona entre que se vio la confirmación y se
+        pulsó, esta petición no toca nada y responde 409 en vez de pisar el rol
+        que el otro acabó de aplicar.
+
+        Lo que **no** resucita: la designación de supervisor ni las asignaciones
+        de vehículo. Sus filas conservan su propia lápida y su propio ciclo de
+        vida, y ninguna regla certificada dice que readmitir a alguien le
+        devuelva el coche (§13 de A03).
+
+        Devuelve la fila resultante, el identificador de la pertenencia y el rol
+        anterior, que es lo que el router necesita para auditar el cambio.
+        """
+        estado = await clasificar_nombre_por_id(
+            user_id=user_id, company_id=company_id
+        )
+        if estado.conflicto is not UserConflict.SAME_TENANT_REMOVED:
+            # No hay nada que readmitir: o no estuvo aquí, o su acceso está
+            # vivo, o sólo está suspendido —y eso se reactiva, no se readmite.
+            raise conflicto(
+                estado.conflicto or UserConflict.USERNAME_UNAVAILABLE,
+                user_id=estado.user_id,
+                nombre=estado.display_name,
+            )
+
+        async with transaction() as session:
+            await cls._assert_role_of_company(
+                session, role_id=role_id, company_id=company_id
+            )
+            rol_previo = await session.scalar(
+                select(UserCompany.role_id).where(
+                    UserCompany.id == estado.membership_id
+                )
+            )
+
+            aplicado = await session.execute(
+                update(UserCompany)
+                .where(
+                    UserCompany.user_id == user_id,
+                    UserCompany.company_id == company_id,
+                    UserCompany.deleted_at.is_not(None),
+                )
+                .values(deleted_at=None, is_active=True, role_id=role_id)
+                .returning(UserCompany.id)
+            )
+            membership_id = aplicado.scalar_one_or_none()
+            if membership_id is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "reenrollment_already_done",
+                        "message": (
+                            "This user has already been re-added to the company."
+                        ),
+                    },
+                )
+
+        fila = await cls.find_for_company(user_id=user_id, company_id=company_id)
+        return fila, membership_id, rol_previo
 
     @classmethod
     async def delete_membership(cls, *, user_id: int, company_id: int) -> dict:
