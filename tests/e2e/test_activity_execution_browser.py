@@ -470,7 +470,11 @@ async def test_going_home_never_reaches_the_activity_screen(seeded, live_server)
         ).to_have_count(0)
 
         await page.get_by_role("button", name="End Work").click()
-        await expect(page.get_by_text("Ending your day…")).to_have_count(
+        # No se afirma "Ending your day…": es transitorio —`reconcile()` lo
+        # sustituye en cuanto el servidor confirma— y afirmar un estado que
+        # dura un viaje de red es una carrera, no una comprobación. Lo estable
+        # es dónde queda el supervisor: sin jornada abierta.
+        await expect(page.get_by_text("Ready to start your day?")).to_have_count(
             1, timeout=20_000
         )
 
@@ -647,7 +651,11 @@ async def test_end_work_is_blocked_while_the_execution_runs(seeded, live_server)
         ).to_have_count(1, timeout=20_000)
 
         await page.get_by_role("button", name="End Work").click()
-        await expect(page.get_by_text("Ending your day…")).to_have_count(
+        # No se afirma "Ending your day…": es transitorio —`reconcile()` lo
+        # sustituye en cuanto el servidor confirma— y afirmar un estado que
+        # dura un viaje de red es una carrera, no una comprobación. Lo estable
+        # es dónde queda el supervisor: sin jornada abierta.
+        await expect(page.get_by_text("Ready to start your day?")).to_have_count(
             1, timeout=20_000
         )
 

@@ -7,7 +7,8 @@ export {
     OUTCOME_LIST,
     RECEIVED_BY_LIST,
     requiereActividades,
-    requiereReceptor,
+    registraReceptor,
+    exigeReceptor,
 } from './model/types';
 export type {
     ActivityExecution,

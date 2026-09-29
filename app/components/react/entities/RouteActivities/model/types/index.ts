@@ -80,7 +80,22 @@ export const requiereActividades = (purpose: TripPurpose): boolean => (
     POSTARRIVAL_ACTIVITY_LIST[purpose] !== undefined
 );
 
-/** Si ese contexto exige registrar quién recibió antes de terminar. */
-export const requiereReceptor = (purpose: TripPurpose): boolean => (
+/** Si ese contexto **registra** quién recibió. Sólo Check Delivery. */
+export const registraReceptor = (purpose: TripPurpose): boolean => (
     purpose === 'check_delivery'
 );
+
+/**
+ * Si hay que registrarlo **para poder cerrar**.
+ *
+ * Completar una entrega afirma que alguien la recibió; marcharse afirma lo
+ * contrario. Exigir un receptor al marcharse obligaría a inventarse uno, y un
+ * dato fabricado para pasar una validación es peor que su ausencia.
+ *
+ * Depende de la acción, nunca del resultado elegido: el catálogo de resultados
+ * lo configura el tenant y puede renombrarlo esta tarde.
+ */
+export const exigeReceptor = (
+    purpose: TripPurpose,
+    action: TerminalAction,
+): boolean => registraReceptor(purpose) && action === 'complete';

@@ -1,6 +1,7 @@
 import {
     Building2,
     Car,
+    Route,
     Server,
     ShieldCheck,
 } from 'lucide-react';
@@ -34,11 +35,36 @@ import type { INavMainItem } from '@/widgets/Sidebar';
  */
 export const businessNavigation: INavMainItem[] = [
     {
+        // El trabajo de campo, **separado de la configuración y primero**.
+        //
+        // Las dos cosas estaban en un solo grupo y eso dejaba a `My Route`
+        // fuera del menú: los cinco destinos de configuración exigen
+        // capacidades de administración, así que el Supervisor —que sólo
+        // ejecuta— no veía ningún ítem, el grupo entero desaparecía por estar
+        // vacío, y a su propia pantalla sólo se llegaba escribiendo la URL.
+        //
+        // Un grupo aparte lo hace distinguible de la administración sin
+        // duplicar la experiencia: los dos roles abren la misma pantalla.
+        title: 'CER Route',
+        url: '#',
+        icon: Route,
+        items: [
+            {
+                // La capacidad con la que se ejecuta la jornada, el viaje y la
+                // parada. No hay una `route.myroute.read`: sería una segunda
+                // forma de autorizar lo mismo.
+                title: 'My Route',
+                url: '/route',
+                requiredPermission: 'route.worksession.execute',
+            },
+        ],
+    },
+    {
         // Configuración operativa de CER Route. Today/Live, Activity y Reports
         // **no** están aquí: sus módulos llegan en checkpoints posteriores, y
         // un encabezado con destinos que no existen es un enlace muerto
         // disfrazado de sección.
-        title: 'CER Route',
+        title: 'CER Route Configuration',
         url: '#',
         icon: Car,
         items: [

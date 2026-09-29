@@ -40,7 +40,8 @@ class ActivityTerminalize(BaseModel):
     outcome_id: int
     #: Opcional siempre. No sustituye a un dato estructurado que falte.
     notes: Optional[str] = Field(default=None, max_length=2000)
-    #: Sólo Check Delivery, y allí obligatorio.
+    #: Sólo Check Delivery. Obligatorio al completar, opcional al marcharse:
+    #: nadie pudo recibir lo que no se entregó.
     received_by_id: Optional[int] = None
 
     device_captured_at: Optional[datetime] = None
