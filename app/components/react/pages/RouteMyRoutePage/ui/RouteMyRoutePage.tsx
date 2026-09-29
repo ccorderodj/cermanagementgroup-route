@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/shared/ui/shadcn/new-york';
 import { ConfirmDestructiveDialog } from '@/features/Common';
 import { RouteMobileShell } from '@/widgets/RouteShell';
-import { TripContextPicker } from '@/features/RouteTrip';
+import { TripContextChoices, TripContextForm, TripContextPicker } from '@/features/RouteTrip';
 import { ActivityStop } from '@/features/RouteActivity';
 import type { ActivityExecution } from '@/entities/RouteActivities';
 import {
@@ -25,6 +25,7 @@ import {
     TRIP_CONTEXTS,
     type Trip,
     type TripPlanInput,
+    type TripPurpose,
 } from '@/entities/RouteTrips';
 import {
     fetchCurrentWorkSession,
@@ -41,6 +42,18 @@ import { listPendingActions } from '@/shared/lib/offlineQueue';
  * Una sola acción principal a la vez, sin cromo de administración y sin
  * vocabulario de máquina de estados: el supervisor lee "On route", no
  * `IN_TRANSIT`. Escribe lo mínimo, porque puede estar a punto de conducir.
+ *
+ * El workbench
+ * ------------
+ * `What's next?` es el estado de reposo de una jornada activa: se llega a él al
+ * empezar el día y se vuelve a él al cerrar cada parada. No hay una pantalla
+ * intermedia que anuncie que la jornada está abierta y ofrezca un botón para
+ * ver las opciones — eso era una pulsación que no añadía información.
+ *
+ * Es también el **único** sitio desde el que se termina el día. Preparar un
+ * viaje, conducir y ejecutar una parada no ofrecen esa salida: no porque el
+ * servidor no sepa rechazarla —sabe—, sino porque una salida a mitad de una
+ * decisión a medio tomar es ambigua para quien la pulsa.
  *
  * El servidor es la única autoridad
  * ----------------------------------
@@ -142,9 +155,14 @@ export const RouteMyRoutePage = () => {
     const [odometro, setOdometro] = useState<OdometerSessionState | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
-    // Elegir contexto y cambiar de plan usan el mismo formulario.
-    const [eligiendo, setEligiendo] = useState(false);
+    // El contexto elegido en el workbench, mientras se rellenan sus datos.
+    // Vive en el cliente y no en el servidor **a propósito**: hasta que no se
+    // pulsa `Start Trip` no existe ningún viaje, así que volver atrás no deja
+    // un viaje fantasma ni escribe historia falsa (FR-04).
+    const [preparando, setPreparando] = useState<TripPurpose | null>(null);
     const [cambiandoPlan, setCambiandoPlan] = useState(false);
+    // El plan elegido que espera a que se resuelva la lectura de inicio.
+    const [planPendiente, setPlanPendiente] = useState<TripPlanInput | null>(null);
     // El odómetro de inicio, abierto desde el aviso antes de elegir destino.
     const [capturandoInicio, setCapturandoInicio] = useState(false);
     // La revisión de End Work con un viaje en ruta (D-07).
@@ -152,7 +170,7 @@ export const RouteMyRoutePage = () => {
     const ultimaJornada = useRef<WorkSession | null>(null);
     // La última vista que el servidor confirmó. Es a la que se vuelve sin
     // red: ver la parada de hace un minuto es cierto, y ofrecer
-    // "Where to next?" con una llegada sin resolver no lo es (FR-01).
+    // el workbench con una llegada sin resolver no lo es (FR-01).
     const ultimaVista = useRef<Vista | null>(null);
 
     const detalleDeError = (err: unknown, porDefecto: string) => {
@@ -225,7 +243,7 @@ export const RouteMyRoutePage = () => {
                 setView({ phase: 'start-queued' });
             } else if (ultimaVista.current) {
                 // Lo último que el servidor dijo, no un estado más simple:
-                // colapsar a "Where to next?" con un viaje sin resolver
+                // colapsar al workbench con un viaje sin resolver
                 // ofrecía planificar un segundo viaje que el servidor va a
                 // rechazar —hay un único viaje vivo por jornada— y escondía
                 // el trabajo que quedaba en la parada.
@@ -269,11 +287,70 @@ export const RouteMyRoutePage = () => {
 
     const iniciarJornada = () => ejecutar(queueStartWork, 'Your workday could not be started.');
 
-    const planificar = async (plan: TripPlanInput) => {
-        const ok = await ejecutar(() => queuePlanTrip(plan), 'This trip could not be prepared.');
-        if (ok) setEligiendo(false);
+    // La evidencia de odómetro, derivada antes que las acciones porque
+    // `salirDeViaje` la consulta: sin lectura de inicio resuelta no se crea
+    // ningún viaje.
+    const inicio: OdometerEvidence | null = odometro?.start ?? null;
+    const faltaInicio = inicio !== null && !isOdometerResolved(inicio.status);
+    const capturandoOdometro = capturandoInicio && inicio !== null;
+    const distancia = readingAsNumber(odometro?.odometer_distance);
+
+    /**
+     * Preparar y salir, en una sola pulsación.
+     *
+     * El dominio sigue teniendo sus dos pasos —`PLANNING` y luego
+     * `IN_TRANSIT`— porque son estados certificados de RTE04 y no se tocan. Lo
+     * que desaparece es la pantalla intermedia: para el supervisor, elegir a
+     * dónde va y salir es una sola decisión (PD-05).
+     *
+     * El viaje **no se crea hasta aquí**. Mientras se rellena el formulario no
+     * hay nada escrito, así que volver atrás no deja un viaje fantasma.
+     *
+     * Si la lectura de odómetro está pendiente, se para antes de crear nada y
+     * se pide: así un bloqueo previsible no deja un `PLANNING` colgado que
+     * después nadie sabría cerrar.
+     */
+    const salirDeViaje = async (plan: TripPlanInput, yaCapturado = false) => {
+        // `yaCapturado` existe porque el estado de React no se ha actualizado
+        // todavía cuando se vuelve de resolver la lectura: leer `faltaInicio`
+        // aquí devolvería el valor viejo y mandaría a capturar otra vez, en
+        // bucle. Quien acaba de resolverla lo sabe y lo dice.
+        if (!yaCapturado && faltaInicio) {
+            setPreparando(null);
+            setCapturandoInicio(true);
+            setPlanPendiente(plan);
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+        try {
+            // Encolar no es enviar: la cola guarda la acción y la envía al
+            // vaciarse. Sin vaciarla aquí, el servidor todavía no tendría el
+            // viaje y no habría identificador con el que arrancarlo.
+            await queuePlanTrip(plan);
+            await syncPendingWorkSessionActions();
+
+            const tras = await fetchCurrentWorkSession();
+            const viaje = tras.current_trip;
+            if (viaje && viaje.status === 'planning') {
+                await queueStartTrip(viaje.id);
+                await syncPendingWorkSessionActions();
+            }
+            // Sin red no hay viaje que arrancar todavía: el plan se queda en la
+            // cola y se reanudará al reconectar, que es para lo que existe.
+            setPreparando(null);
+            setPlanPendiente(null);
+            await reconcile();
+        } catch (err) {
+            setError(detalleDeError(err, 'This trip could not be started.'));
+            await reconcile();
+        } finally {
+            setBusy(false);
+        }
     };
 
+    /** Reanudar un viaje que quedó preparado y sin salir (cola sin red). */
     const arrancarViaje = (trip: Trip) => ejecutar(() => queueStartTrip(trip.id), 'This trip could not be started.');
 
     const llegar = (trip: Trip) => ejecutar(() => queueArrive(trip.id), 'Your arrival could not be recorded.');
@@ -362,15 +439,35 @@ export const RouteMyRoutePage = () => {
         standard_value_id: trip.current_standard_value_id ?? null,
     });
 
-    const inicio: OdometerEvidence | null = odometro?.start ?? null;
-    const faltaInicio = inicio !== null && !isOdometerResolved(inicio.status);
-    const capturandoOdometro = capturandoInicio && inicio !== null;
-    const distancia = readingAsNumber(odometro?.odometer_distance);
-
     /** Vuelve al flujo que estaba en marcha, sin volver a elegir destino. */
+    /**
+     * Resuelta la lectura, se retoma lo que el supervisor estaba haciendo.
+     *
+     * Si había elegido un destino y el odómetro le interrumpió, el viaje sale
+     * ahora sin pedirle que vuelva a elegirlo: la interrupción fue nuestra, no
+     * suya.
+     */
     const odometroResuelto = async () => {
-        setCapturandoInicio(false);
+        const pendiente = planPendiente;
+
+        // Se reconcilia **antes** de cerrar la captura, y el orden importa: al
+        // revés, el workbench aparecía con la evidencia todavía sin refrescar y
+        // la primera pulsación de `Start Trip` devolvía a la lectura que acababa
+        // de resolverse. Mientras se consulta, el supervisor sigue viendo la
+        // captura — que es la verdad: aún no sabemos que quedó resuelta.
         await reconcile();
+        setCapturandoInicio(false);
+
+        if (pendiente) {
+            setPlanPendiente(null);
+            await salirDeViaje(pendiente, true);
+        }
+    };
+
+    /** Cancelar la captura devuelve al workbench, sin viaje empezado. */
+    const cancelarOdometro = () => {
+        setCapturandoInicio(false);
+        setPlanPendiente(null);
     };
 
     return (
@@ -433,7 +530,7 @@ export const RouteMyRoutePage = () => {
                         {/* El aviso, no un diálogo forzado: `Start Work` no es
                             `Start Driving`, y quien empieza el día con trabajo
                             de oficina no tiene por qué fotografiar nada. */}
-                        {faltaInicio && !capturandoInicio && !eligiendo && inicio && (
+                        {faltaInicio && !capturandoInicio && preparando === null && inicio && (
                             <OdometerPendingBanner
                                 status={inicio.status}
                                 disabled={busy}
@@ -448,33 +545,43 @@ export const RouteMyRoutePage = () => {
                                 evidence={inicio}
                                 onResolved={odometroResuelto}
                                 onChanged={reconcile}
-                                onCancel={() => setCapturandoInicio(false)}
+                                onCancel={cancelarOdometro}
                             />
                         )}
 
-                        {!capturandoOdometro && eligiendo && (
-                            <TripContextPicker
+                        {/* Elegido el contexto: sus datos y salir, en una
+                            pantalla. Sin `End Work` (FR-11): `Back` devuelve al
+                            workbench, que es donde se termina el día. */}
+                        {!capturandoOdometro && preparando !== null && (
+                            <TripContextForm
+                                purpose={preparando}
                                 busy={busy}
-                                confirmLabel="Prepare trip"
-                                onCancel={() => setEligiendo(false)}
-                                onConfirm={planificar}
+                                confirmLabel="Start Trip"
+                                onBack={() => setPreparando(null)}
+                                onConfirm={salirDeViaje}
                             />
                         )}
 
-                        {!capturandoOdometro && !eligiendo && (
+                        {/* El workbench. Las siete opciones **son** la pantalla
+                            de reposo: no hay un botón previo que las revele. */}
+                        {!capturandoOdometro && preparando === null && (
                             <>
+                                <p className="text-center text-base font-medium text-foreground">
+                                    What&apos;s next?
+                                </p>
+                                <TripContextChoices
+                                    busy={busy}
+                                    onSelect={setPreparando}
+                                />
+                                {/* Secundario a propósito: terminar el día no
+                                    compite con empezar la siguiente tarea, pero
+                                    tiene que estar — hay jornadas sin un solo
+                                    viaje y no se fabrica un viaje a casa falso
+                                    para poder cerrarlas (PD-02, A-1). */}
                                 <Button
+                                    variant="ghost"
                                     size="lg"
-                                    className="h-16 w-full text-lg"
-                                    disabled={busy}
-                                    onClick={() => setEligiendo(true)}
-                                >
-                                    Where to next?
-                                </Button>
-                                <Button
-                                    variant="outline"
-                                    size="lg"
-                                    className="h-14 w-full"
+                                    className="h-12 w-full"
                                     disabled={busy}
                                     onClick={() => cerrarJornada(view.session)}
                                 >
@@ -485,12 +592,14 @@ export const RouteMyRoutePage = () => {
                     </div>
                 )}
 
+                {/* Un viaje preparado y sin salir. En el camino normal no
+                    aparece —preparar y salir son una sola pulsación—, así que
+                    sólo se llega aquí si la salida se interrumpió: sin red, o
+                    con la aplicación cerrada en medio. No es una pantalla de
+                    confirmación, es reanudar lo que quedó a medias. */}
                 {view.phase === 'planning' && (
                     <div className="flex flex-col gap-6">
                         <Cabecera session={view.session} />
-                        {/* El plan se queda a la vista mientras se resuelve la
-                            lectura, y al confirmarla se vuelve exactamente a
-                            este mismo viaje: no se pierde lo ya elegido. */}
                         <Destino trip={view.trip} />
 
                         {faltaInicio && inicio ? (
@@ -511,20 +620,6 @@ export const RouteMyRoutePage = () => {
                                 Start Trip
                             </Button>
                         )}
-
-                        {/* Un viaje preparado no es un viaje empezado: desde
-                            aquí también se puede terminar el día. Sin esto,
-                            quien eligiera destino y no pudiera resolver el
-                            odómetro se quedaba sin salida en la pantalla. */}
-                        <Button
-                            variant="ghost"
-                            size="lg"
-                            className="h-12 w-full"
-                            disabled={busy}
-                            onClick={() => cerrarJornada(view.session)}
-                        >
-                            End Work
-                        </Button>
                     </div>
                 )}
 
@@ -562,15 +657,13 @@ export const RouteMyRoutePage = () => {
                                 >
                                     Change Plan
                                 </Button>
-                                <Button
-                                    variant="ghost"
-                                    size="lg"
-                                    className="h-12 w-full"
-                                    disabled={busy}
-                                    onClick={() => cerrarJornada(view.session)}
-                                >
-                                    End Work
-                                </Button>
+                                {/* Sin `End Work` aquí (PD-03). Conduciendo no
+                                    se termina el día: se llega —una llegada que
+                                    ocurrió— y se cierra desde el workbench. La
+                                    revisión de D-07 sigue existiendo para
+                                    cuando el cierre llega por un camino
+                                    legítimo, como una acción encolada o un
+                                    segundo dispositivo. */}
                             </>
                         )}
                     </div>
@@ -587,26 +680,10 @@ export const RouteMyRoutePage = () => {
                             onChanged={reconcile}
                         />
 
-                        {/* Con la parada en marcha, `End Work` no se ofrece
-                            (FR-14): la salida es terminar o marcharse, y las dos
-                            están ahí arriba. No es un callejón sin salida —hay
-                            dos puertas—, y ocultarlo evita ofrecer algo que el
-                            servidor va a rechazar de todos modos.
-
-                            Llegado sin empezar todavía sí lo ofrece: ahí lo que
-                            hace falta es que la pantalla devuelva al trabajo de
-                            la parada, no que esconda el fin de jornada. */}
-                        {view.execution?.status !== 'in_progress' && (
-                            <Button
-                                variant="ghost"
-                                size="lg"
-                                className="h-12 w-full"
-                                disabled={busy}
-                                onClick={() => cerrarJornada(view.session)}
-                            >
-                                End Work
-                            </Button>
-                        )}
+                        {/* Tampoco aquí (PD-03, FR-07). Llegado y sin
+                            resolver, lo que hace falta es resolver la parada:
+                            terminar o marcharse, las dos con resultado. Cerrado
+                            el viaje se vuelve al workbench, y allí sí. */}
                     </div>
                 )}
 

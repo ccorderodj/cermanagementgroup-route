@@ -145,20 +145,17 @@ async def test_the_administrator_runs_the_whole_operational_journey(
             # El aviso del odómetro aparece y **no** bloquea el trabajo.
             await expect(page.get_by_text("Odometer pending")).to_have_count(1)
             await expect(
-                page.get_by_role("button", name="Where to next?")
-            ).to_be_enabled()
+                page.get_by_text("What's next?")
+            ).to_have_count(1)
 
             # Leer los valores obligatorios: el Administrador los lee con
             # `route.standardvalues.read`, igual que el Supervisor.
-            await page.get_by_role("button", name="Where to next?").click()
             await page.get_by_role("button", name="Employee Visit").click()
             await page.get_by_role("combobox").click()
             await page.get_by_role("option", name="Attendance Issue").click()
-            await page.get_by_role("button", name="Prepare trip").click()
+            await page.get_by_role("button", name="Start Trip").click()
 
             await _capturar_odometro(page, "55000")
-
-            await page.get_by_role("button", name="Start Trip").click()
             await expect(
                 page.get_by_role("button", name="Change Plan")
             ).to_have_count(1, timeout=20_000)
@@ -170,9 +167,12 @@ async def test_the_administrator_runs_the_whole_operational_journey(
                         Trip.company_id == seeded.alpha.id
                     )
                 )
+            # Cambiar de plan abre directamente en las siete opciones del
+            # workbench (PD-07), sin un "Change" intermedio.
             await page.get_by_role("button", name="Change Plan").click()
-            await page.get_by_role("button", name="Change", exact=True).click()
-            await page.get_by_role("button", name="Client Visit").click()
+            await page.get_by_role(
+                "button", name="Client Visit", exact=True
+            ).click()
             await page.get_by_role("button", name="Update plan").click()
             await expect(page.get_by_text("Originally:")).to_have_count(
                 1, timeout=20_000
@@ -242,7 +242,6 @@ async def test_the_remaining_pretrip_values_load_persist_and_let_the_trip_start(
                 1, timeout=20_000
             )
 
-            await page.get_by_role("button", name="Where to next?").click()
             await page.get_by_role("button", name=contexto_ui).click()
 
             # 1) Las opciones cargan — un Supervisor las lee.
@@ -254,12 +253,9 @@ async def test_the_remaining_pretrip_values_load_persist_and_let_the_trip_start(
 
             # 2) La selección persiste en el formulario.
             await expect(page.get_by_text(valor, exact=True)).to_have_count(1)
-            await page.get_by_role("button", name="Prepare trip").click()
+            await page.get_by_role("button", name="Start Trip").click()
 
             await _capturar_odometro(page, "70000")
-
-            # 3) Start Trip la acepta.
-            await page.get_by_role("button", name="Start Trip").click()
             await expect(
                 page.get_by_role("button", name="Change Plan")
             ).to_have_count(1, timeout=20_000)
@@ -287,11 +283,26 @@ async def test_the_remaining_pretrip_values_load_persist_and_let_the_trip_start(
 async def test_continue_working_leaves_the_trip_exactly_as_it_was(
     seeded, alpha_client, live_server,
 ):
-    """Travesía 11: `End Work` con viaje en ruta, y el supervisor decide seguir.
+    """Travesía 11, con la expectativa que el cierre 003 sustituye.
 
-    Se había validado terminar de todos modos; esta es la otra opción, y la que
-    más importa que no toque nada: no crea otro viaje, no cambia su estado, y no
-    deja una acción esperando en la cola para cerrar el día más tarde.
+    `old expectation` — pulsar `End Work` en la pantalla de On Route, ver la
+    revisión de D-07 y elegir seguir trabajando.
+
+    `approved decision` — PD-03 del cierre 003: `End Work` no se expone como
+    atajo normal mientras el viaje está `IN_TRANSIT`. Conduciendo no se termina
+    el día; se llega —una llegada que de verdad ocurrió— y se cierra desde el
+    workbench, que es el único sitio canónico.
+
+    `new expectation` — el botón **no está** en On Route, y lo que sí está es lo
+    que FR-05 exige: el contexto, `Arrived` y `Change Plan`. Que el estado no se
+    mueva por mirar esa pantalla es lo que este test sigue comprobando, y es lo
+    que de verdad importaba de la travesía original: ningún viaje nuevo, ningún
+    cambio de estado, nada esperando en la cola para cerrar el día más tarde.
+
+    La regla de dominio de D-07 no cambió y sigue cubierta donde le corresponde:
+    `test_trips.py::test_end_work_anyway_interrupts_without_faking_an_arrival`,
+    más la propia revisión que la pantalla abre cuando el cierre llega por un
+    camino legítimo —una acción encolada o un segundo dispositivo—.
     """
     from playwright.async_api import async_playwright
 
@@ -306,11 +317,9 @@ async def test_continue_working_leaves_the_trip_exactly_as_it_was(
 
             await page.goto("/route")
             await page.get_by_role("button", name="Start Work").click()
-            await page.get_by_role("button", name="Where to next?").click()
             await page.get_by_role("button", name="Client Visit").click()
-            await page.get_by_role("button", name="Prepare trip").click()
-            await _capturar_odometro(page, "80000")
             await page.get_by_role("button", name="Start Trip").click()
+            await _capturar_odometro(page, "80000")
             await expect(
                 page.get_by_role("button", name="Change Plan")
             ).to_have_count(1, timeout=20_000)
@@ -327,17 +336,18 @@ async def test_continue_working_leaves_the_trip_exactly_as_it_was(
                     )
                 ).one()
 
-            # End Work abre la revisión…
-            await page.get_by_role("button", name="End Work").click()
-            await expect(
-                page.get_by_text("You are still on route")
-            ).to_have_count(1, timeout=20_000)
+            # Conduciendo no se ofrece terminar el día (PD-03), y tampoco se
+            # cuela el workbench por detrás mientras el viaje está vivo.
+            await expect(page.get_by_role("button", name="End Work")).to_have_count(0)
+            await expect(page.get_by_text("What's next?")).to_have_count(0)
 
-            # …y se elige seguir trabajando.
-            await page.get_by_role("button", name="Cancel").click()
+            # Lo que FR-05 exige que esté, está.
+            await expect(
+                page.get_by_role("button", name="Arrived", exact=True)
+            ).to_have_count(1)
             await expect(
                 page.get_by_role("button", name="Change Plan")
-            ).to_have_count(1, timeout=20_000)
+            ).to_have_count(1)
 
             async with async_session_maker() as session:
                 despues = (
@@ -382,6 +392,13 @@ async def test_a_rejected_end_work_does_not_come_back_from_the_queue(
     abandonó al elegir seguir trabajando se reenviaría solo y le cerraría el día
     sin que nadie lo pidiera.
 
+    `old expectation` — el rechazo se provocaba pulsando `End Work` con el viaje
+    en ruta. `approved decision` — PD-03 del cierre 003 retira ese atajo de la
+    pantalla de On Route. `new expectation` — el mismo rechazo definitivo se
+    provoca por un camino que la interfaz sigue ofreciendo: `End Work` desde el
+    workbench con la lectura de cierre pendiente. Lo que el test comprueba —que
+    un 4xx sale de la cola— no cambia; cambia por dónde se llega a él.
+
     Un 4xx sale de la cola. Se comprueba leyendo IndexedDB, no la pantalla, y se
     confirma después que la jornada sigue abierta.
     """
@@ -398,31 +415,34 @@ async def test_a_rejected_end_work_does_not_come_back_from_the_queue(
 
             await page.goto("/route")
             await page.get_by_role("button", name="Start Work").click()
-            await page.get_by_role("button", name="Where to next?").click()
-            await page.get_by_role("button", name="Client Visit").click()
-            await page.get_by_role("button", name="Prepare trip").click()
-            await _capturar_odometro(page, "90000")
-            await page.get_by_role("button", name="Start Trip").click()
-            await expect(
-                page.get_by_role("button", name="Change Plan")
-            ).to_have_count(1, timeout=20_000)
 
-            # `End Work` con el viaje en ruta: el servidor responde 409, que es un
-            # rechazo definitivo — reintentarlo diría lo mismo dentro de una hora.
+            # Volver a casa, que cierra su viaje al llegar y devuelve al
+            # workbench sin dejar parada que resolver.
+            await page.get_by_role("button", name="Return Home").click()
+            await page.get_by_role("button", name="Start Trip").click()
+            await _capturar_odometro(page, "90000")
+            await page.get_by_role("button", name="Arrived Home").click()
+            await expect(page.get_by_text("What's next?")).to_have_count(
+                1, timeout=20_000
+            )
+
+            # `End Work` desde el workbench con la lectura de cierre pendiente:
+            # el servidor responde 409, que es un rechazo definitivo —
+            # reintentarlo diría lo mismo dentro de una hora—, y la pantalla
+            # pide la lectura en vez de reintentar a ciegas.
             await page.get_by_role("button", name="End Work").click()
             await expect(
-                page.get_by_text("You are still on route")
+                page.get_by_text("One last thing before you finish.")
             ).to_have_count(1, timeout=20_000)
-            await page.get_by_role("button", name="Cancel").click()
 
             pendientes = await page.evaluate(LEER_COLA)
             assert pendientes == [], f"la cola tiene que quedar limpia: {pendientes}"
 
             # Recargar y reconectar no lo resucita.
             await page.reload()
-            await expect(
-                page.get_by_role("button", name="Change Plan")
-            ).to_have_count(1, timeout=20_000)
+            await expect(page.get_by_text("What's next?")).to_have_count(
+                1, timeout=20_000
+            )
             assert await page.evaluate(LEER_COLA) == []
 
             async with async_session_maker() as session:
