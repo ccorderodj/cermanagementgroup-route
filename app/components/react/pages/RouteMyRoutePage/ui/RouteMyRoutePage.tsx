@@ -297,10 +297,20 @@ export const RouteMyRoutePage = () => {
      */
     const iniciarJornada = async () => {
         const ok = await ejecutar(queueStartWork, 'Your workday could not be started.');
-        if (!ok) return false;
-        const actual = await fetchCurrentWorkSession().catch(() => null);
-        if (actual?.work_session) captureFor('start_work', actual.work_session.id);
-        return true;
+        if (ok) {
+            // Con el servidor delante se conoce el id y el punto se ata ya.
+            const actual = await fetchCurrentWorkSession().catch(() => null);
+            if (actual?.work_session) {
+                captureFor('start_work', actual.work_session.id);
+                return true;
+            }
+        }
+        // Sin red la jornada se quedó en la cola y **todavía no tiene id**, así
+        // que el punto se captura con el sujeto diferido y se ata al
+        // sincronizar. Capturar sólo cuando la acción confirma perdía la
+        // medición, que es el hueco que el cierre de RTE06 señaló.
+        captureFor('start_work', 0, 'work_session');
+        return ok;
     };
 
     // La evidencia de odómetro, derivada antes que las acciones porque

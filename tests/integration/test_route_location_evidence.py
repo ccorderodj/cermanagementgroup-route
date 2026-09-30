@@ -442,15 +442,31 @@ async def test_missing_is_created_once_and_fabricates_nothing(seeded, alpha_clie
     assert segundo.json()["replayed"] is True
     assert segundo.json()["id"] == primero.json()["id"]
 
+    # `notification_status` ya **no** es una columna de esta tabla.
+    #
+    # Expectativa anterior: el hecho llevaba `notification_status` y se leía de
+    #   aquí.
+    # Delta aprobado por CER: D-RTE06-MISSING-01 — el hecho es estrictamente
+    #   inmutable, así que el estado de entrega, que por definición avanza, se
+    #   muda a `missing_location_notification`.
+    # Expectativa nueva: el hecho no tiene la columna; el estado de entrega se
+    #   lee de su propia tabla, y la respuesta de la API lo sigue devolviendo
+    #   por comodidad del cliente.
     filas = await _filas(
-        "SELECT reason_code, notification_status, attempts, rejected_candidate, "
+        "SELECT reason_code, attempts, rejected_candidate, "
         "trip_id, occurred_at FROM missing_location_event WHERE company_id = :c",
         {"c": seeded.alpha.id},
     )
     assert len(filas) == 1
     fila = filas[0]
     assert fila["reason_code"] == "recovery_window_exhausted"
-    assert fila["notification_status"] == "pending"
+    assert primero.json()["notification_status"] == "pending"
+    entrega = await _filas(
+        "SELECT channel, status FROM missing_location_notification "
+        "WHERE company_id = :c",
+        {"c": seeded.alpha.id},
+    )
+    assert entrega == [{"channel": "in_platform", "status": "pending"}]
     assert fila["trip_id"] == viaje["id"]
     assert fila["attempts"][0]["stage"] == "current"
     # Del candidato rechazado se guarda edad y precisión, **nunca** dónde estaba.
@@ -610,14 +626,18 @@ async def test_location_evidence_is_append_only(seeded, alpha_client):
         assert "append-only" in str(fallo.value), sentencia
 
 
-async def test_only_the_notification_fields_of_a_missing_event_may_change(
-    seeded, alpha_client
-):
-    """El hecho es inmutable; el estado del aviso avanza.
+async def test_the_missing_fact_admits_no_update_at_all(seeded, alpha_client):
+    """El hecho es inmutable **sin excepciones de columna**.
 
-    §29 llama append-only a esta tabla y §30 obliga a conservar el estado de
-    notificación, que por definición cambia. El disparador por columnas es lo
-    que hace compatibles las dos cosas, y esto lo comprueba por los dos lados.
+    Expectativa anterior: el disparador permitía `UPDATE` de
+      `notification_status`, `notified_at`, `notes` y `updated_at`, porque el
+      estado de entrega vivía en esta fila.
+    Delta aprobado por CER: D-RTE06-MISSING-01 — un hecho "inmutable salvo
+      cuatro columnas" es un hecho mutable con pasos de más. El estado de
+      entrega se separa y el disparador pasa a ser el genérico del proyecto.
+    Expectativa nueva: ningún `UPDATE` y ningún `DELETE`, y la prueba de que el
+      aviso sí avanza está en `test_route_missing_immutability.py`, donde
+      corresponde ahora.
     """
     _, viaje = await _jornada_con_viaje(alpha_client, seeded)
     await alpha_client.post(
@@ -629,31 +649,17 @@ async def test_only_the_notification_fields_of_a_missing_event_may_change(
         },
     )
 
-    # El aviso sí puede avanzar: es lo que §30 pide poder registrar.
-    async with async_session_maker() as sesion:
-        await sesion.execute(
-            text(
-                "UPDATE missing_location_event SET notification_status = 'notified', "
-                "notified_at = now() WHERE company_id = :c"
-            ),
-            {"c": seeded.alpha.id},
-        )
-        await sesion.commit()
-
-    # El hecho, no.
     for sentencia in (
         "UPDATE missing_location_event SET reason_code = 'permission_denied' "
         "WHERE company_id = :c",
+        "UPDATE missing_location_event SET updated_at = now() WHERE company_id = :c",
         "DELETE FROM missing_location_event WHERE company_id = :c",
     ):
         async with async_session_maker() as sesion:
             with pytest.raises(Exception) as fallo:
                 await sesion.execute(text(sentencia), {"c": seeded.alpha.id})
                 await sesion.commit()
-        assert (
-            "append-only" in str(fallo.value)
-            or "only notification fields" in str(fallo.value)
-        ), sentencia
+        assert "append-only" in str(fallo.value), sentencia
 
 
 # ── L3 y L4: actividad ──────────────────────────────────────────────────────

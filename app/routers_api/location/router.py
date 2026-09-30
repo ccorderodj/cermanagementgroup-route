@@ -82,5 +82,13 @@ async def finalize_missing_location(
     fila, reenvio = await LocationEvidenceService.finalize_missing(
         company_id=company.id, user_id=current_user.id, payload=payload
     )
+    # El estado de entrega se lee de su propia tabla: el hecho ya no lo lleva
+    # (D-RTE06-MISSING-01). Se devuelve junto al hecho por comodidad del
+    # cliente, no porque sea parte de él.
+    entrega = await LocationEvidenceService.notification_status(
+        company_id=company.id, missing_location_event_id=fila.id
+    )
     respuesta = MissingLocationRead.model_validate(fila)
-    return respuesta.model_copy(update={"replayed": reenvio})
+    return respuesta.model_copy(
+        update={"replayed": reenvio, "notification_status": entrega}
+    )

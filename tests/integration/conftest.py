@@ -244,7 +244,9 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     # RTE05: la ejecución cuelga del viaje y de los valores configurados.
     # RTE06: el tramo cuelga del kilometraje, y el kilometraje del viaje. La
     # evidencia de ubicación cuelga de la jornada y del viaje, así que va antes
-    # que los dos.
+    # que los dos. El registro de entrega del aviso referencia el hecho con
+    # `RESTRICT`, así que se borra antes que él.
+    "missing_location_notification",
     "trip_mileage_segment",
     "trip_mileage",
     "location_fix",

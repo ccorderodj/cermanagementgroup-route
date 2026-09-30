@@ -129,5 +129,9 @@ class MissingLocationRead(BaseModel):
     subject_id: int
     reason_code: str
     occurred_at: datetime
-    notification_status: str
+    #: El estado de **entrega** del aviso, leído de
+    #: `missing_location_notification`. Se devuelve aquí por comodidad del
+    #: cliente; no es un campo del hecho, que es inmutable
+    #: (D-RTE06-MISSING-01).
+    notification_status: str = "pending"
     replayed: bool = False

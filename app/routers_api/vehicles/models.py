@@ -268,8 +268,14 @@ class VehicleAssignment(TimeStampedModel):
             unique=True,
             postgresql_where=text("effective_to IS NULL"),
         ),
+        # Estrictamente mayor, no `>=`. Un rango vacío —`to = from`— **no
+        # solapa con nada**, así que `EXCLUDE` no lo ve: dos reasignaciones
+        # concurrentes en el mismo instante dejaban una fila `[t, t)` y las dos
+        # peticiones tenían éxito. El vehículo vigente seguía siendo
+        # determinista, pero el registro quedaba con una fila que afirma una
+        # asignación de duración cero, y eso no es un hecho. Migración 0012.
         CheckConstraint(
-            "effective_to IS NULL OR effective_to >= effective_from",
+            "effective_to IS NULL OR effective_to > effective_from",
             name="ck_vehicle_assignment_period",
         ),
         Index(
