@@ -319,7 +319,7 @@ class SupervisorProfileService:
         que ya no es supervisor, que es un estado que nadie sabría interpretar.
         """
         if not is_active:
-            vigente = await VehicleAssignmentsDAO.current_for_supervisor(
+            vigente = await VehicleAssignmentsDAO.open_for_supervisor(
                 company_id=company_id,
                 supervisor_profile_id=supervisor_profile_id,
             )
@@ -396,7 +396,7 @@ class SupervisorProfileService:
         de alguien que ya no figura como supervisor, que es un estado que nadie
         sabría leer después.
         """
-        vigente = await VehicleAssignmentsDAO.current_for_supervisor(
+        vigente = await VehicleAssignmentsDAO.open_for_supervisor(
             company_id=company_id, supervisor_profile_id=supervisor_profile_id
         )
         if vigente is not None:
@@ -444,6 +444,43 @@ class SupervisorProfileService:
         )
 
 
+def _conflicto_de_asignacion(exc: IntegrityError) -> HTTPException:
+    """Traduce el rechazo de la base al mensaje que corresponde.
+
+    Se decide por el **código de error de PostgreSQL**, no por el texto:
+
+    * `23P01` exclusion_violation → el periodo pisa otro
+      (`ex_vehicle_assignment_no_overlap`);
+    * `23505` unique_violation → ya hay una asignación abierta
+      (`uq_vehicle_assignment_current`).
+
+    Los códigos son un contrato de PostgreSQL y no cambian; el texto del
+    mensaje sí cambia entre versiones. Y `constraint_name` no sirve aquí: el
+    dialecto asyncpg de SQLAlchemy envuelve la excepción original en su propio
+    `IntegrityError`, así que ese atributo no llega hasta `exc.orig` — sólo
+    `sqlstate` sobrevive. Medido, no supuesto.
+    """
+    codigo = getattr(getattr(exc, "orig", None), "sqlstate", None)
+
+    if codigo == "23P01":
+        detalle = (
+            "That period overlaps another vehicle assignment for this "
+            "supervisor. End the other one first, or pick a start date outside "
+            "it."
+        )
+    elif codigo == "23505":
+        detalle = (
+            "This supervisor already has a current vehicle assignment. "
+            "Reload and try again."
+        )
+    else:
+        # Una violación de integridad que este código no conoce. Se devuelve
+        # 409 igual, pero sin inventar la causa.
+        detalle = "That vehicle assignment conflicts with an existing one."
+
+    return HTTPException(status_code=status.HTTP_409_CONFLICT, detail=detalle)
+
+
 class VehicleAssignmentService:
     """Asignación efectiva de vehículo a supervisor, con su historia."""
 
@@ -477,19 +514,6 @@ class VehicleAssignmentService:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="A retired vehicle cannot be assigned.",
-            )
-
-        if await VehicleAssignmentsDAO.overlaps_existing(
-            company_id=company_id,
-            supervisor_profile_id=supervisor_profile_id,
-            effective_from=desde,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    "That start date falls inside a previous assignment period "
-                    "for this supervisor."
-                ),
             )
 
         async with transaction() as session:
@@ -532,16 +556,12 @@ class VehicleAssignmentService:
             try:
                 await session.flush()
             except IntegrityError as exc:
-                # El índice único parcial. Dos peticiones simultáneas llegan
-                # hasta aquí y sólo una sobrevive: la otra recibe 409 en vez de
-                # crear un segundo vehículo vigente.
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=(
-                        "This supervisor already has a current vehicle "
-                        "assignment. Reload and try again."
-                    ),
-                ) from exc
+                # La base rechaza dos cosas distintas aquí, y quien asigna tiene
+                # que saber cuál: un vehículo abierto que ya existe (índice
+                # parcial) o un periodo que pisa otro
+                # (`ex_vehicle_assignment_no_overlap`). Antes sólo existía la
+                # primera y el mensaje la nombraba siempre.
+                raise _conflicto_de_asignacion(exc) from exc
 
             asignacion_id = asignacion.id
 

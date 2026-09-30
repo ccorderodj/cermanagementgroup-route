@@ -34,6 +34,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.audit.service import record_event
+from app.routers_api.mileage.service import MileageService
 from app.core.db.session import transaction
 from app.routers_api.trips.dao import TripsDAO
 from app.routers_api.trips.models import (
@@ -453,6 +454,13 @@ class TripService:
             fila.version = fila.version + 1
             await session.flush()
 
+        # El viaje ya tiene los dos extremos, así que su kilometraje se puede
+        # pedir. Se crea **pendiente** y lo calcula el trabajo de fondo: la
+        # acción del supervisor no espera al routing (§36, sin spinner que
+        # bloquee). Crear la fila aquí es lo que garantiza que ningún viaje
+        # terminado se quede sin kilometraje que el sweeper pueda encontrar.
+        await MileageService.ensure_pending(company_id=company_id, trip_id=trip_id)
+
         await record_event(
             company_id=company_id,
             entity_type="trip",
@@ -506,6 +514,13 @@ class TripService:
             fila.ended_received_at = recibido
             fila.version = fila.version + 1
             await session.flush()
+
+        # Un viaje interrumpido también llega a un estado terminal de
+        # kilometraje, y el suyo es `not_calculable`: §19 prohíbe fabricar una
+        # llegada, usar End Work como destino o inferir un endpoint. Sin fila,
+        # el viaje simplemente no tendría kilometraje, y "no lo sabemos" no es
+        # lo mismo que "no se puede saber".
+        await MileageService.ensure_pending(company_id=company_id, trip_id=trip_id)
 
         await record_event(
             company_id=company_id,

@@ -134,6 +134,17 @@ class Settings(BaseSettings):
     #: Cuánto se recuerda una clave de idempotencia.
     IDEMPOTENCY_TTL_HOURS: int = Field(default=24, ge=1, le=24 * 30)
 
+    # ── Routing vial (RTE06) ───────────────────────────────────────────────
+    #: URL del motor de routing auto-alojado. Vacía = no hay motor, y el
+    #: kilometraje se queda pendiente diciéndolo, en vez de fallar (ver
+    #: `app/routers_api/mileage/routing.py`). No es un secreto: OSRM
+    #: auto-alojado no lleva credencial, y por eso no está cifrada.
+    ROUTE_ROUTING_URL: str = ""
+    #: Reserva: segundo motor, distinta implementación, mismos datos. §22 pide
+    #: estrategia de fallback y esto es la suya.
+    ROUTE_ROUTING_FALLBACK_URL: str = ""
+    ROUTE_ROUTING_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=60)
+
     # ── Correo ──────────────────────────────────────────────────────────────
     EMAIL_BACKEND: Literal["console", "memory", "smtp"] = "console"
     EMAIL_FROM: str = "no-reply@example.com"

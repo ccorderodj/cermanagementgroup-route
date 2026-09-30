@@ -37,6 +37,8 @@ from app.routers_api.vehicles.router import supervisors_router as router_supervi
 from app.routers_api.odometer.router import router as router_odometer
 from app.routers_api.trips.router import router as router_trips
 from app.routers_api.activities.router import router as router_activities
+from app.routers_api.location.router import router as router_location
+from app.routers_api.mileage.router import router as router_mileage
 from app.routers_api.worksessions.router import router as router_worksessions
 
 
@@ -92,6 +94,8 @@ api_router.include_router(router_vehicles)
 api_router.include_router(router_supervisors)
 api_router.include_router(router_standard_values)
 api_router.include_router(router_worksessions)
+api_router.include_router(router_location)
+api_router.include_router(router_mileage)
 api_router.include_router(router_trips)
 # La ejecución tras la llegada cuelga del viaje, que es a lo que pertenece.
 # Comparte prefijo con `trips` a propósito: es la misma parada.

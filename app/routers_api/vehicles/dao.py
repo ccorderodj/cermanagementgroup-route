@@ -295,7 +295,7 @@ class VehicleAssignmentsDAO(BaseDAO):
             )
 
     @classmethod
-    async def current_for_supervisor(
+    async def open_for_supervisor(
         cls, *, company_id: int, supervisor_profile_id: int
     ) -> VehicleAssignment | None:
         """La asignación **abierta**: la que no tiene fecha de fin.
@@ -307,6 +307,10 @@ class VehicleAssignmentsDAO(BaseDAO):
         **No** es la que decide el vehículo de una jornada: para eso está
         `effective_at`, porque una asignación futura existe en el registro y aun
         así no aplica todavía.
+
+        Se llamaba `current_for_supervisor`, y el nombre invitaba justo a la
+        confusión que §8.3 de RTE06 pide no dejar en pie: "current" sugería
+        vigente, y esto es otra cosa. El nombre dice ahora lo que hace.
         """
         async with db_session() as session:
             return await session.scalar(
@@ -407,30 +411,3 @@ class VehicleAssignmentsDAO(BaseDAO):
             )
             return list(filas.scalars().all())
 
-    @classmethod
-    async def overlaps_existing(
-        cls,
-        *,
-        company_id: int,
-        supervisor_profile_id: int,
-        effective_from: datetime,
-    ) -> bool:
-        """Si ya hay una asignación cerrada que cubre `effective_from`.
-
-        El índice único parcial impide dos **vigentes**; esto cubre el otro
-        caso: retroceder la fecha de inicio dentro de un periodo ya cerrado,
-        que produciría dos vehículos válidos a la vez en ese instante.
-        """
-        async with db_session() as session:
-            encontrada = await session.scalar(
-                select(VehicleAssignment.id)
-                .where(
-                    VehicleAssignment.company_id == company_id,
-                    VehicleAssignment.supervisor_profile_id == supervisor_profile_id,
-                    VehicleAssignment.effective_from <= effective_from,
-                    VehicleAssignment.effective_to.is_not(None),
-                    VehicleAssignment.effective_to > effective_from,
-                )
-                .limit(1)
-            )
-        return encontrada is not None

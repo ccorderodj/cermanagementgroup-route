@@ -32,6 +32,19 @@ EXPECTED_TRIGGERS: tuple[str, ...] = (
     "trg_platform_audit_event_no_truncate",
     "trg_platform_health_check_run_append_only",
     "trg_platform_health_check_run_no_truncate",
+    # RTE06. La evidencia de ubicación y la provenance de cada tramo son hechos
+    # medidos: si alguien desactivara estos disparadores, un kilometraje
+    # histórico se podría reescribir sin que nada protestara, que es justo lo
+    # que §27 prohíbe.
+    "trg_location_fix_append_only",
+    "trg_location_fix_no_truncate",
+    "trg_trip_mileage_segment_append_only",
+    "trg_trip_mileage_segment_no_truncate",
+    # El de `missing_location_event` no es el genérico: admite `UPDATE` de los
+    # campos de notificación y rechaza todo lo demás. Se vigila igual — que
+    # exista y esté activo es lo que garantiza que el hecho no se reescriba.
+    "trg_missing_location_event_append_only",
+    "trg_missing_location_event_no_truncate",
 )
 
 HEALTHY, DEGRADED, NOT_APPLICABLE = "healthy", "degraded", "not_applicable"
