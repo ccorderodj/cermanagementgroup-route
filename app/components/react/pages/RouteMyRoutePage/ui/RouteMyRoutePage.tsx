@@ -18,9 +18,8 @@ import {
     type OdometerSessionState,
 } from '@/entities/RouteOdometer';
 import {
-    changeTripPlan,
-    fetchPlanChanges,
     queueArrive,
+    queueChangePlan,
     queuePlanTrip,
     queueStartTrip,
     TRIP_CONTEXTS,
@@ -295,22 +294,26 @@ export const RouteMyRoutePage = () => {
      * la ubicación. Si el GPS tarda quince segundos, el supervisor ya está en
      * el workbench.
      */
+    /**
+     * Empezar el día, y situarlo sin que se note.
+     *
+     * El punto se identifica por la **clave de la acción**, con red o sin ella.
+     * Da igual que la jornada llegue a existir en el servidor durante esta
+     * pulsación o al reconectar dentro de una hora: la clave es la misma, el
+     * servidor la guarda en la fila al crearla, y el punto se ata a **esa**
+     * jornada y no a la que hubiera.
+     *
+     * Antes había dos caminos —id si confirmaba, sujeto diferido si no— y el
+     * segundo se negaba a atar cuando había dos acciones del mismo tipo
+     * pendientes. Un solo camino y ninguna deducción.
+     */
     const iniciarJornada = async () => {
-        const ok = await ejecutar(queueStartWork, 'Your workday could not be started.');
-        if (ok) {
-            // Con el servidor delante se conoce el id y el punto se ata ya.
-            const actual = await fetchCurrentWorkSession().catch(() => null);
-            if (actual?.work_session) {
-                captureFor('start_work', actual.work_session.id);
-                return true;
-            }
-        }
-        // Sin red la jornada se quedó en la cola y **todavía no tiene id**, así
-        // que el punto se captura con el sujeto diferido y se ata al
-        // sincronizar. Capturar sólo cuando la acción confirma perdía la
-        // medición, que es el hueco que el cierre de RTE06 señaló.
-        captureFor('start_work', 0, 'work_session');
-        return ok;
+        const accion = await queueStartWork();
+        captureFor('start_work', { clientActionKey: accion.id });
+        return ejecutar(
+            async () => accion,
+            'Your workday could not be started.',
+        );
     };
 
     // La evidencia de odómetro, derivada antes que las acciones porque
@@ -354,7 +357,12 @@ export const RouteMyRoutePage = () => {
             // Encolar no es enviar: la cola guarda la acción y la envía al
             // vaciarse. Sin vaciarla aquí, el servidor todavía no tendría el
             // viaje y no habría identificador con el que arrancarlo.
-            await queuePlanTrip(plan);
+            const accionDelPlan = await queuePlanTrip(plan);
+            // El waypoint de salida se identifica por la clave de **la acción
+            // que crea el viaje**, no por su id: sin red el id no existe, y con
+            // red la clave sigue siendo igual de válida. Se captura antes de
+            // enviar, así que una caída de red entre medias no pierde el punto.
+            captureFor('start_trip', { clientActionKey: accionDelPlan.id });
             await syncPendingWorkSessionActions();
 
             const tras = await fetchCurrentWorkSession();
@@ -362,8 +370,6 @@ export const RouteMyRoutePage = () => {
             if (viaje && viaje.status === 'planning') {
                 await queueStartTrip(viaje.id);
                 await syncPendingWorkSessionActions();
-                // El primer waypoint del kilometraje (§18). Sin `await`.
-                captureFor('start_trip', viaje.id);
             }
             // Sin red no hay viaje que arrancar todavía: el plan se queda en la
             // cola y se reanudará al reconectar, que es para lo que existe.
@@ -381,7 +387,9 @@ export const RouteMyRoutePage = () => {
     /** Reanudar un viaje que quedó preparado y sin salir (cola sin red). */
     const arrancarViaje = async (trip: Trip) => {
         const ok = await ejecutar(() => queueStartTrip(trip.id), 'This trip could not be started.');
-        if (ok) captureFor('start_trip', trip.id);
+        // Aquí el viaje **ya existe** en el servidor —se está reanudando uno que
+        // quedó preparado— así que su id es el identificador correcto.
+        if (ok) captureFor('start_trip', { subjectId: trip.id });
         return ok;
     };
 
@@ -390,27 +398,20 @@ export const RouteMyRoutePage = () => {
         // El waypoint final (§18). Si la llegada se encoló sin red, el punto no
         // podrá atarse todavía y lo cerrará el barrido del servidor: la captura
         // no puede retrasar la pantalla para esperarlo.
-        if (ok) captureFor('arrived', trip.id);
+        if (ok) captureFor('arrived', { subjectId: trip.id });
         return ok;
     };
 
     const cambiarPlan = async (trip: Trip, plan: TripPlanInput) => {
-        const ok = await ejecutar(() => changeTripPlan(trip.id, plan), 'The plan could not be changed.');
-        if (ok) {
-            // Cada Change Plan es un waypoint autoritativo (§16), y su sujeto es
-            // la **fila del cambio**, no el viaje: así varios cambios del mismo
-            // viaje quedan independientes y ordenados. `change-plan` devuelve el
-            // viaje, no el cambio, así que el id se lee del historial.
-            fetchPlanChanges(trip.id)
-                .then((cambios) => {
-                    const ultimo = cambios.at(-1);
-                    if (ultimo) captureFor('change_plan', ultimo.id);
-                })
-                .catch(() => {
-                    // Silencio (§12). Sin el id no se puede atar el punto, y el
-                    // barrido del servidor cerrará el evento al vencer la ventana.
-                });
-        }
+        // Change Plan pasa por la cola desde el cierre final de RTE06. Era la
+        // única acción del ciclo de vida que se llamaba directamente, y eso
+        // impedía las dos cosas que el cierre exige: que sobreviva a un corte de
+        // red, y que su punto se ate a **ese** cambio y no a otro del mismo
+        // viaje. Ya no hace falta leer el historial para saber a qué atarlo: la
+        // clave de la acción lo identifica.
+        const accion = await queueChangePlan(trip.id, plan);
+        captureFor('change_plan', { clientActionKey: accion.id });
+        const ok = await ejecutar(async () => accion, 'The plan could not be changed.');
         if (ok) setCambiandoPlan(false);
     };
 
@@ -431,7 +432,7 @@ export const RouteMyRoutePage = () => {
             // jornada esté ENDED: es la excepción acotada de §13, y el servidor
             // la admite sólo para este evento y dentro de la ventana. Se lanza
             // **antes** del envío para que la ventana empiece a contar ya.
-            captureFor('end_work', session.id);
+            captureFor('end_work', { subjectId: session.id });
             await queueEndWork(session.id, deTodosModos);
             const resultado = await syncPendingWorkSessionActions();
             const rechazo = resultado.rejected?.kind === 'worksession.end'

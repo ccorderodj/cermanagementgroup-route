@@ -147,6 +147,10 @@ class WorkSessionService:
         user_id: int,
         device_captured_at: datetime | None,
         utc_offset_minutes: int | None,
+        #: La clave durable de la acción del cliente. Se guarda en la fila
+        #: para que un punto capturado sin red pueda atarse a **esta**
+        #: jornada antes de que exista su `id` (cierre final, Item A).
+        client_action_key: str | None = None,
     ) -> tuple[WorkSession, bool]:
         """Empieza la jornada, o devuelve la que ya está vigente.
 
@@ -202,6 +206,7 @@ class WorkSessionService:
             async with transaction() as session:
                 jornada = WorkSession(
                     company_id=company_id,
+                    client_action_key=client_action_key,
                     user_id=user_id,
                     status=WorkSessionStatus.ACTIVE.value,
                     session_date=session_date,

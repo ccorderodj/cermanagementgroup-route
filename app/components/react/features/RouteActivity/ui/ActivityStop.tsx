@@ -160,7 +160,7 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
             // acción terminal guardada, así que mandar el otro se rechaza.
             captureFor(
                 saliendo === 'complete' ? 'activity_complete' : 'activity_leave',
-                execution.id,
+                { subjectId: execution.id },
             );
             await onChanged();
         } catch (err) {

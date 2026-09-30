@@ -51,11 +51,27 @@ export async function queueArrive(tripId: number): Promise<PendingAction> {
  * creyendo que cambió de destino para descubrir al reconectar que no. Es una
  * limitación honesta del alcance offline de RTE04, no un olvido.
  */
-export async function changeTripPlan(
+/**
+ * Encola un cambio de plan.
+ *
+ * Era la única acción del ciclo de vida que se enviaba directamente, sin cola y
+ * sin clave de idempotencia. Eso impedía dos cosas que el cierre final de RTE06
+ * exige: que un cambio de plan sobreviva a un corte de red como el resto de las
+ * acciones, y que su punto de ubicación se ate a **ese** cambio y no a otro del
+ * mismo viaje.
+ *
+ * El `id` de la acción viaja como `Idempotency-Key` y el servidor lo guarda en
+ * `trip_purpose_change.client_action_key`, que es lo que mantiene varios
+ * cambios individualmente distinguibles al sincronizarse juntos.
+ */
+export async function queueChangePlan(
     tripId: number,
     input: TripPlanInput,
-): Promise<void> {
-    await $api.post(`/trips/${tripId}/change-plan`, { ...input });
+): Promise<PendingAction> {
+    return enqueueAction('trip.change_plan', `/trips/${tripId}/change-plan`, {
+        ...input,
+        ...captureTimeEvidence(),
+    });
 }
 
 export async function fetchPlanChanges(

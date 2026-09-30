@@ -156,6 +156,16 @@ class Trip(TimeStampedModel, VersionedMixin):
         TripStatus.check("status", name="ck_trip_status"),
         TripPurpose.check("original_purpose", name="ck_trip_original_purpose"),
         TripPurpose.check("current_purpose", name="ck_trip_current_purpose"),
+        # Un reenvío no puede crear una segunda fila con la misma clave. Parcial
+        # porque las filas anteriores a 0013 no tienen clave y un único completo
+        # las haría colisionar entre sí.
+        Index(
+            "uq_trip_client_action_key",
+            "company_id",
+            "client_action_key",
+            unique=True,
+            postgresql_where=text("client_action_key IS NOT NULL"),
+        ),
         UniqueConstraint("id", "company_id", name="uq_trip_id_company"),
         # Diana de la FK compuesta y garantía de aislamiento: un viaje no puede
         # colgar de la jornada de otro tenant aunque el servicio se equivoque.
@@ -214,6 +224,22 @@ class Trip(TimeStampedModel, VersionedMixin):
     #: La jornada dueña. El supervisor se deriva de ella: no se copia aquí, que
     #: sería una segunda respuesta para la misma pregunta (invariante 9).
     work_session_id = Column(Integer, nullable=False, index=True)
+
+    #: La clave durable que el cliente asignó a la acción que creó esta fila.
+    #:
+    #: Es la misma que viaja como `Idempotency-Key`, y se guarda aquí para que
+    #: un punto de ubicación capturado **sin red** pueda decir a qué acción
+    #: pertenece antes de que exista este `id`. Sin ella, la evidencia de una
+    #: acción encolada no tenía a qué atarse y se resolvía adivinando o se
+    #: perdía (RTE06 cierre final, Item A).
+    #:
+    #: `NULL` en las filas anteriores a la migración 0013 y en cualquier
+    #: escritura que no traiga la cabecera: es lo cierto, no se inventa.
+    #:
+    #: **Identificador, no autoridad.** Resolver una fila por esta clave no
+    #: concede nada: la comprobación de propiedad se aplica después, igual que
+    #: cuando el cliente manda un id.
+    client_action_key = Column(String(64), nullable=True)
 
     #: Orden del viaje dentro de la jornada, empezando en 1.
     sequence = Column(Integer, nullable=False)
@@ -276,6 +302,16 @@ class TripPurposeChange(TimeStampedModel):
             name="fk_trip_purpose_change_trip_same_company",
             ondelete="CASCADE",
         ),
+        # Un reenvío no puede crear una segunda fila con la misma clave. Parcial
+        # porque las filas anteriores a 0013 no tienen clave y un único completo
+        # las haría colisionar entre sí.
+        Index(
+            "uq_trip_purpose_change_client_action_key",
+            "company_id",
+            "client_action_key",
+            unique=True,
+            postgresql_where=text("client_action_key IS NOT NULL"),
+        ),
         Index(
             "ix_trip_purpose_change_trip",
             "company_id",
@@ -292,6 +328,22 @@ class TripPurposeChange(TimeStampedModel):
         index=True,
     )
     trip_id = Column(Integer, nullable=False, index=True)
+
+    #: La clave durable que el cliente asignó a la acción que creó esta fila.
+    #:
+    #: Es la misma que viaja como `Idempotency-Key`, y se guarda aquí para que
+    #: un punto de ubicación capturado **sin red** pueda decir a qué acción
+    #: pertenece antes de que exista este `id`. Sin ella, la evidencia de una
+    #: acción encolada no tenía a qué atarse y se resolvía adivinando o se
+    #: perdía (RTE06 cierre final, Item A).
+    #:
+    #: `NULL` en las filas anteriores a la migración 0013 y en cualquier
+    #: escritura que no traiga la cabecera: es lo cierto, no se inventa.
+    #:
+    #: **Identificador, no autoridad.** Resolver una fila por esta clave no
+    #: concede nada: la comprobación de propiedad se aplica después, igual que
+    #: cuando el cliente manda un id.
+    client_action_key = Column(String(64), nullable=True)
 
     from_purpose = Column(String(30), nullable=False)
     from_context_reference = Column(Text, nullable=True)

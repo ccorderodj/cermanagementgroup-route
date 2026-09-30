@@ -106,6 +106,16 @@ class WorkSession(TimeStampedModel, VersionedMixin):
             "ended_at IS NULL OR ended_at >= started_at",
             name="ck_work_session_end_after_start",
         ),
+        # Un reenvío no puede crear una segunda fila con la misma clave. Parcial
+        # porque las filas anteriores a 0013 no tienen clave y un único completo
+        # las haría colisionar entre sí.
+        Index(
+            "uq_work_session_client_action_key",
+            "company_id",
+            "client_action_key",
+            unique=True,
+            postgresql_where=text("client_action_key IS NOT NULL"),
+        ),
         UniqueConstraint("id", "company_id", name="uq_work_session_id_company"),
         ForeignKeyConstraint(
             ["vehicle_id", "company_id"],
@@ -148,6 +158,22 @@ class WorkSession(TimeStampedModel, VersionedMixin):
 
     #: Fecha del calendario **local** en `Start Work` (D-10). Inmutable tras la
     #: creación — ningún código de este módulo la vuelve a escribir.
+    #: La clave durable que el cliente asignó a la acción que creó esta fila.
+    #:
+    #: Es la misma que viaja como `Idempotency-Key`, y se guarda aquí para que
+    #: un punto de ubicación capturado **sin red** pueda decir a qué acción
+    #: pertenece antes de que exista este `id`. Sin ella, la evidencia de una
+    #: acción encolada no tenía a qué atarse y se resolvía adivinando o se
+    #: perdía (RTE06 cierre final, Item A).
+    #:
+    #: `NULL` en las filas anteriores a la migración 0013 y en cualquier
+    #: escritura que no traiga la cabecera: es lo cierto, no se inventa.
+    #:
+    #: **Identificador, no autoridad.** Resolver una fila por esta clave no
+    #: concede nada: la comprobación de propiedad se aplica después, igual que
+    #: cuando el cliente manda un id.
+    client_action_key = Column(String(64), nullable=True)
+
     session_date = Column(Date, nullable=False)
 
     #: **Cuándo ocurrió** el `Start Work`: el instante en el que el supervisor

@@ -309,6 +309,56 @@ class SubjectsDAO:
             occurred_at=bloque.ended_at,
         )
 
+    @classmethod
+    async def resolve_by_action_key(
+        cls,
+        *,
+        company_id: int,
+        event_kind: LocationEventKind,
+        client_action_key: str,
+        work_session_id: int,
+    ) -> SujetoResuelto | None:
+        """El sujeto, encontrado por la clave de la acción que lo creó.
+
+        Es el camino de la evidencia capturada sin red: el punto no sabe el
+        `id` de su fila —no existía cuando se midió— pero sí la clave de la
+        acción que iba a crearla.
+
+        **La clave no concede nada.** Se traduce a un `subject_id` y a partir
+        de ahí se aplica exactamente la misma resolución que para un id
+        enviado por el cliente, con su comprobación de compañía y de jornada.
+        Una clave de otro tenant no encuentra fila: el `WHERE company_id` está
+        en las tres consultas.
+        """
+        clase = subject_kind_for(event_kind)
+        tabla = {
+            LocationSubjectKind.WORK_SESSION: "work_session",
+            LocationSubjectKind.TRIP: "trip",
+            LocationSubjectKind.TRIP_PURPOSE_CHANGE: "trip_purpose_change",
+        }.get(clase)
+        if tabla is None:
+            # `activity_execution` no lleva clave: su acción no se encola sin
+            # red, así que no hay evidencia offline que correlacionar.
+            return None
+
+        async with db_session() as sesion:
+            subject_id = await sesion.scalar(
+                text(
+                    f"SELECT id FROM {tabla} "
+                    "WHERE company_id = :c AND client_action_key = :k"
+                ),
+                {"c": company_id, "k": client_action_key},
+            )
+        if subject_id is None:
+            return None
+
+        return await cls.resolve(
+            company_id=company_id,
+            event_kind=event_kind,
+            subject_id=subject_id,
+            work_session_id=work_session_id,
+        )
+
     @staticmethod
     async def _momento_de_jornada(
         *, company_id: int, work_session_id: int, event_kind: LocationEventKind

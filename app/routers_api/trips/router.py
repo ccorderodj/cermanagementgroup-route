@@ -78,6 +78,7 @@ async def plan_trip(
         standard_value_id=payload.standard_value_id,
         device_captured_at=payload.device_captured_at,
         utc_offset_minutes=payload.utc_offset_minutes,
+        client_action_key=idempotency_key,
     )
     resultado = TripRead.model_validate(viaje)
 
@@ -144,10 +145,15 @@ async def start_trip(
     return resultado
 
 
+_SCOPE_CHANGE_PLAN = "route.trip.change_plan"
+
+
 @router.post("/{trip_id}/change-plan")
 async def change_plan(
     trip_id: int,
+    request: Request,
     payload: TripPlan,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
     company: TenantContext = Depends(get_company_required),
@@ -156,7 +162,31 @@ async def change_plan(
 
     Cada llamada apila una fila de historial. El plan original no se toca
     nunca, y por eso después se puede reconstruir la secuencia completa.
+
+    `Idempotency-Key` desde el cierre final de RTE06
+    -------------------------------------------------
+    Antes era la única acción del ciclo de vida que se llamaba directamente, sin
+    cola y sin clave. Eso impedía dos cosas que el cierre exige: que un cambio
+    de plan sobreviva a un corte de red, y que su punto de ubicación se ate a
+    **ese** cambio y no a otro del mismo viaje.
+
+    La clave se guarda en `trip_purpose_change.client_action_key`, que es lo que
+    mantiene varios cambios individualmente distinguibles al sincronizarse
+    juntos. El reenvío no apila una segunda fila: lo impide el índice único
+    parcial, no una comprobación previa.
     """
+    cuerpo = await request.body()
+
+    if idempotency_key:
+        previa = await idempotency.claim(
+            scope=_SCOPE_CHANGE_PLAN,
+            company_id=company.id,
+            key=idempotency_key,
+            request_body=cuerpo,
+        )
+        if previa.replay:
+            return JSONResponse(status_code=previa.status, content=previa.body)
+
     viaje = await TripService.change_plan(
         company_id=company.id,
         user_id=current_user.id,
@@ -165,8 +195,21 @@ async def change_plan(
         context_reference=payload.context_reference,
         standard_value_id=payload.standard_value_id,
         device_captured_at=payload.device_captured_at,
+        client_action_key=idempotency_key,
     )
-    return TripRead.model_validate(viaje)
+    resultado = TripRead.model_validate(viaje)
+
+    if idempotency_key:
+        await idempotency.remember(
+            scope=_SCOPE_CHANGE_PLAN,
+            company_id=company.id,
+            key=idempotency_key,
+            request_body=cuerpo,
+            status_code=200,
+            body=resultado.model_dump(mode="json"),
+        )
+
+    return resultado
 
 
 @router.get("/{trip_id}/plan-changes")

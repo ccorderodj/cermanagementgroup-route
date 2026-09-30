@@ -36,10 +36,42 @@ migran como `pending`, y **se cuentan** en el log de la migracion. No deberia
 haber ninguna —el `CHECK` anterior lo impedia—, pero si apareciera, dejarla
 caer en silencio seria perder el dato.
 
-Un `notes` con contenido **no** se migra a ninguna parte: no hay destino para
-el en el modelo nuevo y no se inventa uno. Si hubiera filas con `notes` no
-vacio, la migracion las cuenta y lo dice, para que la decision de que hacer con
-ese texto sea de quien la lea y no de esta migracion.
+Notas historicas: la migracion **se detiene**, no las descarta
+-------------------------------------------------------------
+La primera version contaba las filas con `notes` no vacio y las dejaba caer al
+borrar la columna, confiando en que el numero en el log bastara. CER lo rechazo,
+y con razon: contar algo antes de destruirlo no es preservarlo.
+
+Ahora, si existe **una sola** fila con `notes` no vacio, la migracion **falla**
+antes de tocar el esquema y dice exactamente que filas son. El principio es el
+de la instruccion de cierre: si no se puede preservar el significado del
+contenido sin inventar un modelo de producto nuevo, hay que **fallar de forma
+segura y exigir revision explicita** en vez de destruirlo.
+
+* **count = 0** — el caso normal, y el unico en este repositorio: la migracion
+  sigue, mueve el estado de notificacion y borra las tres columnas.
+* **count > 0** — `RuntimeError` con el numero de filas y la consulta para
+  verlas. Alembic corre en una transaccion, asi que **no queda estado a
+  medias**: ni la tabla nueva, ni las columnas borradas, ni el disparador
+  cambiado.
+
+Como identifica el operador las filas afectadas:
+
+    SELECT id, company_id, event_kind, subject_id, occurred_at, notes
+    FROM missing_location_event
+    WHERE notes IS NOT NULL AND btrim(notes) <> ''
+    ORDER BY company_id, occurred_at;
+
+Como se reanuda: el operador decide que hacer con ese texto —exportarlo, pegarlo
+en un `audit_event`, o descartarlo a conciencia—, lo vacia, y vuelve a lanzar la
+migracion. En cuanto no queda ninguna nota, el camino es el de `count = 0`. No
+hay que deshacer nada porque nada se aplico.
+
+Lo que **no** se hace, y es deliberado: no se crea una funcion de notas
+editables para salvar el campo viejo, y no se mete el texto en
+`failure_detail` de la tabla de avisos. Eso ultimo seria transformar texto libre
+historico en un campo con otro significado, que es justo lo que la instruccion
+prohibe.
 """
 from typing import Sequence, Union
 
@@ -88,13 +120,53 @@ def upgrade() -> None:
     op.create_index(op.f('ix_missing_location_notification_id'), 'missing_location_notification', ['id'], unique=False)
     op.drop_index(op.f('ix_missing_location_pending_notice'), table_name='missing_location_event')
     op.create_index('ix_missing_location_session', 'missing_location_event', ['company_id', 'work_session_id'], unique=False)
-    op.drop_constraint(op.f('ck_missing_location_notification'), 'missing_location_event', type_='check')
+    # `IF EXISTS` y no `op.drop_constraint`: esta restricción la creó 0010 y su
+    # presencia depende del camino por el que la base llegó hasta aquí. Una
+    # migración que se cae porque algo que iba a borrar ya no está es frágil sin
+    # ganar nada: lo que importa es que después no exista, y eso se cumple igual.
+    op.execute(
+        "ALTER TABLE missing_location_event "
+        "DROP CONSTRAINT IF EXISTS ck_missing_location_notification"
+    )
     # ── Los datos, antes de borrar las columnas ────────────────────────────
     #
     # Una fila de entrega por hecho existente, con su estado tal como estaba.
     # `in_platform` porque es el unico canal que el esquema anterior podia
     # representar; inventar `email` seria inventar un hecho.
     conexion = op.get_bind()
+
+    # ── Preflight: nada se toca si hay contenido historico que perder ──────
+    #
+    # Va antes de la primera escritura a proposito. Alembic corre en una
+    # transaccion, asi que fallar aqui deja la base exactamente como estaba.
+    con_notas = conexion.execute(
+        sa.text(
+            "SELECT count(*) FROM missing_location_event "
+            "WHERE notes IS NOT NULL AND btrim(notes) <> ''"
+        )
+    ).scalar()
+
+    if con_notas:
+        raise RuntimeError(
+            "\n".join(
+                (
+                    f"0011 ABORTADA: {con_notas} fila(s) de "
+                    "missing_location_event tienen `notes` con contenido, y el "
+                    "modelo nuevo no tiene destino para ese texto.",
+                    "",
+                    "Nada se ha modificado. Para verlas:",
+                    "  SELECT id, company_id, event_kind, subject_id, "
+                    "occurred_at, notes",
+                    "  FROM missing_location_event",
+                    "  WHERE notes IS NOT NULL AND btrim(notes) <> ''",
+                    "  ORDER BY company_id, occurred_at;",
+                    "",
+                    "Decide que hacer con ese texto -exportarlo, registrarlo en "
+                    "audit_event, o descartarlo a conciencia-, vacia la columna "
+                    "y vuelve a lanzar la migracion. No hay nada que deshacer.",
+                )
+            )
+        )
 
     raros = conexion.execute(
         sa.text(
@@ -144,8 +216,7 @@ def upgrade() -> None:
 
     print(
         f"0011 | missing_location_event -> notification: {migradas} migradas, "
-        f"{raros} con estado desconocido migradas como pending, "
-        f"{con_notas} con notas que NO tienen destino en el modelo nuevo"
+        f"{raros} con estado desconocido migradas como pending"
     )
 
     op.drop_column('missing_location_event', 'notes')
@@ -206,7 +277,6 @@ def downgrade() -> None:
     op.add_column('missing_location_event', sa.Column('notification_status', sa.VARCHAR(length=20), server_default=sa.text("'pending'::character varying"), autoincrement=False, nullable=False))
     op.add_column('missing_location_event', sa.Column('notes', sa.TEXT(), autoincrement=False, nullable=True))
     op.create_check_constraint(op.f('ck_missing_location_notification'), 'missing_location_event', "notification_status::text = ANY (ARRAY['pending'::character varying, 'notified'::character varying, 'suppressed'::character varying]::text[])")
-    op.drop_constraint('uq_missing_location_event_id_company', 'missing_location_event', type_='unique')
     op.drop_index('ix_missing_location_session', table_name='missing_location_event')
     op.create_index(op.f('ix_missing_location_pending_notice'), 'missing_location_event', ['company_id', 'notification_status'], unique=False)
     op.drop_index(op.f('ix_missing_location_notification_id'), table_name='missing_location_notification')
@@ -226,4 +296,13 @@ def downgrade() -> None:
         """
     )
     op.drop_table('missing_location_notification')
+    # El único compuesto, **al final**: mientras la tabla de avisos exista,
+    # su clave foránea depende de él y PostgreSQL rechaza el `DROP`
+    # (`DependentObjectsStillExistError`). El autogenerate lo ponía antes, y
+    # eso hacía imposible bajar de 0011 — lo encontró el test M4.
+    op.drop_constraint(
+        'uq_missing_location_event_id_company',
+        'missing_location_event',
+        type_='unique',
+    )
     # ### end Alembic commands ###

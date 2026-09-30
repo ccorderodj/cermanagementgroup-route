@@ -176,6 +176,10 @@ class TripService:
         standard_value_id: int | None,
         device_captured_at: datetime | None,
         utc_offset_minutes: int | None,
+        #: Clave durable de la acción que crea este viaje. Es la que la
+        #: evidencia de `Start Trip` y de `Arrived` usará para atarse a él
+        #: cuando se capture sin red.
+        client_action_key: str | None = None,
     ) -> tuple[Trip, bool]:
         """Crea el viaje en planificación, o devuelve el que ya estaba vivo.
 
@@ -204,6 +208,7 @@ class TripService:
             async with transaction() as session:
                 viaje = Trip(
                     company_id=company_id,
+                    client_action_key=client_action_key,
                     work_session_id=jornada.id,
                     sequence=secuencia,
                     status=TripStatus.PLANNING.value,
@@ -341,6 +346,10 @@ class TripService:
         context_reference: str | None,
         standard_value_id: int | None,
         device_captured_at: datetime | None,
+        #: Clave durable del cambio. Cada `Change Plan` tiene la suya, y es
+        #: lo que mantiene varios cambios del mismo viaje individualmente
+        #: distinguibles cuando se sincronizan juntos (§5.6).
+        client_action_key: str | None = None,
     ) -> Trip:
         """Cambia el plan **sin borrar el anterior**.
 
@@ -374,6 +383,7 @@ class TripService:
             session.add(
                 TripPurposeChange(
                     company_id=company_id,
+                    client_action_key=client_action_key,
                     trip_id=trip_id,
                     from_purpose=anterior_purpose,
                     from_context_reference=anterior_ref,

@@ -174,8 +174,19 @@ function aPayload(punto: PuntoCrudo) {
  * duplicar: la idempotencia empieza en el dispositivo y no depende de que el
  * servidor la arregle después.
  */
-function llaveDe(eventKind: LocationEventKind, subjectId: number): string {
-    return `${eventKind}:${subjectId}`;
+export type Sujeto = { subjectId: number } | { clientActionKey: string };
+
+function llaveDe(eventKind: LocationEventKind, subject: Sujeto): string {
+    return 'clientActionKey' in subject
+        ? `${eventKind}:key:${subject.clientActionKey}`
+        : `${eventKind}:${subject.subjectId}`;
+}
+
+/** Lo que va en el cuerpo. El servidor exige exactamente una de las dos formas. */
+function identidadDe(subject: Sujeto): Record<string, unknown> {
+    return 'clientActionKey' in subject
+        ? { client_action_key: subject.clientActionKey }
+        : { subject_id: subject.subjectId };
 }
 
 /**
@@ -193,24 +204,21 @@ function llaveDe(eventKind: LocationEventKind, subjectId: number): string {
  */
 async function enviarPunto(
     eventKind: LocationEventKind,
-    subjectId: number,
+    subject: Sujeto,
     nivel: 'fresh' | 'degraded_cached' | 'recovered',
     punto: PuntoCrudo,
     permiso: EstadoDelPermiso,
     edadSegundos?: number,
-    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
-    const llave = subjectPending
-        ? `${eventKind}:pending:${subjectPending}`
-        : llaveDe(eventKind, subjectId);
+    const llave = llaveDe(eventKind, subject);
     await enqueueLocationEvidence(llave, '/location/evidence', {
         event_kind: eventKind,
-        subject_id: subjectId,
+        ...identidadDe(subject),
         evidence_level: nivel,
         ...aPayload(punto),
         ...(nivel === 'degraded_cached' ? { source_age_seconds: edadSegundos } : {}),
         permission_state: permiso,
-    }, subjectPending);
+    });
     await flushPendingLocationEvidence();
 }
 
@@ -225,19 +233,16 @@ async function enviarPunto(
  */
 async function declararMissing(
     eventKind: LocationEventKind,
-    subjectId: number,
+    subject: Sujeto,
     razon: string,
     intentos: Intento[],
     permiso: EstadoDelPermiso,
     rechazado?: { age_seconds?: number; accuracy_m?: number },
-    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
-    const llave = subjectPending
-        ? `${eventKind}:pending:${subjectPending}`
-        : llaveDe(eventKind, subjectId);
+    const llave = llaveDe(eventKind, subject);
     await enqueueLocationEvidence(llave, '/location/missing', {
         event_kind: eventKind,
-        subject_id: subjectId,
+        ...identidadDe(subject),
         reason_code: razon,
         permission_state: permiso,
         attempts: intentos.slice(0, 20),
@@ -247,7 +252,7 @@ async function declararMissing(
         ...(rechazado?.accuracy_m !== undefined
             ? { rejected_accuracy_m: rechazado.accuracy_m.toFixed(2) }
             : {}),
-    }, subjectPending);
+    });
     await flushPendingLocationEvidence();
 }
 
@@ -266,8 +271,7 @@ function razonDe(codigo: number | undefined): string {
 
 async function capturar(
     eventKind: LocationEventKind,
-    subjectId: number,
-    subjectPending: 'work_session' | 'trip' | null = null,
+    subject: Sujeto,
 ): Promise<void> {
     const permiso = await leerPermiso();
     const intentos: Intento[] = [];
@@ -289,12 +293,10 @@ async function capturar(
         if (aceptable) {
             await enviarPunto(
                 eventKind,
-                subjectId,
+                subject,
                 'fresh',
                 punto,
                 permiso,
-                undefined,
-                subjectPending,
             );
             return;
         }
@@ -321,12 +323,10 @@ async function capturar(
             // puede funcionar.
             await declararMissing(
                 eventKind,
-                subjectId,
+                subject,
                 'permission_denied',
                 intentos,
                 permiso,
-                undefined,
-                subjectPending,
             );
             return;
         }
@@ -349,12 +349,11 @@ async function capturar(
         if (suficiente) {
             await enviarPunto(
                 eventKind,
-                subjectId,
+                subject,
                 'degraded_cached',
                 punto,
                 permiso,
                 edad,
-                subjectPending,
             );
             return;
         }
@@ -395,12 +394,10 @@ async function capturar(
         // no cuándo ocurrió el evento (§11).
         await enviarPunto(
             eventKind,
-            subjectId,
+            subject,
             'recovered',
             punto,
             permiso,
-            undefined,
-            subjectPending,
         );
     } catch (error) {
         const fallo = error as GeolocationPositionError;
@@ -413,12 +410,11 @@ async function capturar(
         });
         await declararMissing(
             eventKind,
-            subjectId,
+            subject,
             razonDe(fallo?.code),
             intentos,
             permiso,
             rechazado,
-            subjectPending,
         );
     }
 }
@@ -434,23 +430,20 @@ const enCurso = new Set<string>();
  * tampoco se puede llegar al servidor — y en ese caso el barrido del servidor
  * lo cerrará al vencer la ventana, que es el tercer camino de §11.
  */
-export function captureFor(
-    eventKind: LocationEventKind,
-    subjectId: number,
-    subjectPending: 'work_session' | 'trip' | null = null,
-): void {
-    // Con sujeto diferido el id todavía no existe, así que la llave usa el tipo
-    // de sujeto. Una sola entrada diferida por tipo: si hubiera dos, no se
-    // podría demostrar cuál va con cuál y el emisor se niega a atarlas.
-    const llave = subjectPending
-        ? `${eventKind}:pending:${subjectPending}`
-        : `${eventKind}:${subjectId}`;
+export function captureFor(eventKind: LocationEventKind, subject: Sujeto): void {
+    // La llave del almacén sale de lo que identifique al sujeto. Con la clave
+    // de acción es única por acción, así que **dos acciones offline del mismo
+    // tipo no colisionan** — que es exactamente lo que el mecanismo anterior no
+    // podía garantizar, y por eso se negaba a atar.
+    const llave = 'clientActionKey' in subject
+        ? `${eventKind}:key:${subject.clientActionKey}`
+        : `${eventKind}:${subject.subjectId}`;
     if (enCurso.has(llave)) return;
     enCurso.add(llave);
 
     (async () => {
         try {
-            await capturar(eventKind, subjectId, subjectPending);
+            await capturar(eventKind, subject);
         } catch {
             // Silencio deliberado (§12). Si ni la captura ni el aviso de Missing
             // llegaron, el sweeper del servidor cierra el evento al vencer la

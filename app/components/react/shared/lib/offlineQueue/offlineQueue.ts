@@ -162,17 +162,6 @@ export interface PendingLocationEvidence {
     createdAt: string;
     attempts: number;
     lastError?: string;
-    /**
-     * Qué fila resolver cuando el `subject_id` todavía no existe.
-     *
-     * Se rellena cuando la acción que **crea** esa fila aún está en la cola:
-     * sin red, `Start Work` no tiene `work_session.id` y `Start Trip` no tiene
-     * `trip.id`. El punto se guarda igual y se ata al sincronizar.
-     *
-     * `null` —lo normal— significa que el `subject_id` del `payload` ya es el
-     * definitivo y no hay nada que resolver.
-     */
-    subjectPending?: 'work_session' | 'trip' | null;
 }
 
 /** Guarda o reemplaza la evidencia pendiente de un evento. */
@@ -180,7 +169,6 @@ export async function enqueueLocationEvidence(
     id: string,
     endpoint: string,
     payload: Record<string, unknown>,
-    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
     const existente = await withNamedStore<PendingLocationEvidence | undefined>(
         LOCATION_STORE,
@@ -195,7 +183,6 @@ export async function enqueueLocationEvidence(
         // capturó, no cuándo se reintentó.
         createdAt: existente?.createdAt ?? new Date().toISOString(),
         attempts: existente?.attempts ?? 0,
-        subjectPending,
     };
     await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(entrada));
 }
