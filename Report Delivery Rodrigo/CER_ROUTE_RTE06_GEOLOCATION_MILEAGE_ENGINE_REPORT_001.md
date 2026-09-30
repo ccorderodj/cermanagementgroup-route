@@ -3,7 +3,7 @@
 ## Instruction: `CER_ROUTE_RTE06_GEOLOCATION_MILEAGE_ENGINE_INSTRUCTIONS_002.md` (Revision 002)
 
 **Proposed status:** `COMPLETED WITH PENDING VALIDATION`
-**Date:** 2026-09-29
+**Date:** 2026-09-30
 **Branch:** `feature/rte06-geolocation-mileage`
 
 ---
@@ -933,7 +933,9 @@ live routing test, which skips when no engine is configured and says so.
 | RTE05 workbench | 24 | **0 failures** | 0 |
 | Activity execution + RTE05 closure | 21 | **0 failures** | 0 |
 | **RTE06 silent capture (new)** | **2** | **0 failures** | 0 |
-| Route access, admin lifecycle, user creation, odometer | *reported below* | *reported below* | *reported below* |
+| Route access, admin lifecycle, user creation, odometer | 38 | **0 failures** | 0 |
+
+**Total: 85 browser journeys, 0 failures, every batch exit 0.**
 
 The RTE05 journeys matter most here: the capture is wired into six of their
 actions, so their staying green is the evidence that §36's "no extra step, no
@@ -1138,8 +1140,9 @@ platform was created.** D-01 notification delivery is **not** claimed complete.
 
 All 40 acceptance criteria are implemented with named evidence (§35). Checkpoints
 CP0, CP1, CP2 and CP3 are complete; CP4's validation is complete except for the
-four items in §36.1, three of which require devices or field data and one of
-which requires a running container.
+four `PENDING VALIDATION` items in §36.1 — three needing devices or field data,
+one needing a running container — **and V-4, which is `PARTIAL`**: replay,
+duplicate and concurrent submission are proven, an extended soak is not.
 
 **This is not a proposal to certify RTE06 as fully validated.** Per the
 instruction's own §38 and §44, RTE06 is not Completed merely because automated
@@ -1153,7 +1156,7 @@ production".
 |---|---|---|
 | **Provision the OSRM container** and set `ROUTE_ROUTING_URL` | without it every trip's mileage stays `pending_calculation` and then terminalises by bounded retry. The tests are green either way — this is the gap between local and deployed | DevOps, shared environment |
 | **Provision Valhalla** as the fallback | §22's fallback strategy is not in effect until the second engine exists | DevOps |
-| **Run migration `0010`** | four new tables and three triggers | deploy |
+| **Run migration `0010`** | four new tables and **six** append-only triggers over three of them | deploy |
 | Confirm `btree_gist` privileges for migration `0009` | carried over from CP0; trusted on PG13+, so database owner suffices | deploy |
 | **Produce V-1, V-2, V-5** | real-device and field evidence | CER / pilot |
 | Review the §36.3 interpretation | a data-model call I made rather than escalating | CER |
