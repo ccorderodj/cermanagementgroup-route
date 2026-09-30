@@ -17,10 +17,44 @@ Dos grupos, y la diferencia importa:
 | **Invariante** (`0`) | cero filas | **Un hallazgo.** Algo que no deberia poder pasar, paso |
 | **Informe** | cualquiera | Estado para leer; no hay respuesta "mala" *a priori* |
 
-Las de invariante se pueden correr como una sola puerta: cualquier resultado no
-vacio es un fallo. Estan juntas en [`sql/route_invariantes.sql`](sql/route_invariantes.sql).
-Las de informe, en [`sql/route_informes.sql`](sql/route_informes.sql), llevan
-`:company_id`.
+### Elige el fichero segun con que lo vayas a correr
+
+Hay cinco, y **no son alternativas de gusto**: los de `psql` no funcionan en un
+cliente grafico y viceversa.
+
+| Fichero | Para | Que devuelve |
+|---|---|---|
+| [`sql/route_invariantes_una_consulta.sql`](sql/route_invariantes_una_consulta.sql) | **Cualquier cliente.** Lo mas practico | UNA sentencia -> 57 filas, una por invariante, con su cuenta |
+| [`sql/route_invariantes_cliente.sql`](sql/route_invariantes_cliente.sql) | DBeaver, DataGrip, pgAdmin | 57 sentencias sueltas |
+| [`sql/route_informes_cliente.sql`](sql/route_informes_cliente.sql) | DBeaver, DataGrip, pgAdmin | 32 sentencias, con `:company_id` |
+| [`sql/route_invariantes.sql`](sql/route_invariantes.sql) | **Solo `psql`** | 57 sentencias con etiquetas `\echo` |
+| [`sql/route_informes.sql`](sql/route_informes.sql) | **Solo `psql`** | 32 sentencias, `-v company_id=N` |
+
+**Si un cliente grafico da
+`SQL Error [42601]: syntax error at or near "\"`**, es esto: `\echo` es un
+meta-comando de `psql`, no SQL. Un cliente JDBC lo manda al servidor, que no sabe
+que es. Usa los ficheros `_cliente` o el de una sola consulta.
+
+### La forma recomendada
+
+`route_invariantes_una_consulta.sql` se pega y se ejecuta, sin parametros ni
+meta-comandos, y devuelve esto:
+
+```
+ id   | flujo                  | invariante                                  | filas
+------+------------------------+---------------------------------------------+-------
+ L-06 | Evidencia de ubicacion | Punto atado a una fila que no existe        |     1
+ A-01 | Aislamiento de tenant  | Pertenencia con rol de otra empresa         |     0
+ ...
+```
+
+Se lee de una vez: **`filas = 0` en las 57 es correcto; cualquier fila con
+`filas > 0` es un hallazgo**, y sale arriba porque el orden es descendente. Se
+verifico que senala: inyectando un punto huerfano, la puerta marco `L-06` en 1 y
+**los otros 56 siguieron en 0** —detecta sin dar falsos positivos—.
+
+Los ficheros de sentencias sueltas siguen siendo utiles cuando ya hay un hallazgo
+y hace falta ver *que filas* son, no cuantas.
 
 ## Lo que respalda cada consulta de invariante
 
