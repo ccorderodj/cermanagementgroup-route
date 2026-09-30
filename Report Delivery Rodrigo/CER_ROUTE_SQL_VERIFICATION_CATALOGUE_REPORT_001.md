@@ -225,10 +225,10 @@ dependen del supuesto.
 |---|---|
 | Rama | `feature/sql-verification-catalogue` |
 | Base | `dev` |
-| Commits | 1 |
+| Commits | 2 (uno vacio: `glab` no esta en este entorno y el MR se abre con opciones de push) |
 | Push | si |
 | Arbol | limpio |
-| MR | ver §9 |
+| MR | **!30** — https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/30 |
 | Fusionado | **no** — espera certificacion de CER |
 
 ---
