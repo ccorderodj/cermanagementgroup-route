@@ -117,3 +117,17 @@ class UsersPaginationParams(schema.CommonQueryParams):
         super().__init__(page=page, page_size=page_size)
         self.q = (q or "").strip() or None
         self.is_active = is_active
+
+
+class UserReenrollment(BaseModel):
+    """Readmitir a alguien que ya estuvo en esta compañía.
+
+    Sólo el rol: la identidad ya existe y no se vuelve a describir. Pedir aquí
+    nombre, correo o contraseña invitaría a pisar datos de una persona que ya
+    está en la plataforma, y la readmisión es sobre el **acceso**, no sobre
+    quién es.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    role_id: int
