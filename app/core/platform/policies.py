@@ -95,6 +95,20 @@ class RouteMileagePolicy(BaseModel):
       esto no es un problema de latencia, es un proveedor caído.
     """
 
+    #: Hasta dónde puede el motor ajustar una coordenada a la carretera más
+    #: cercana antes de decir que no hay ruta.
+    #:
+    #: Medido contra OSRM real: **sin este límite el motor ajusta cualquier
+    #: coordenada** al grafo que tenga cargado. Con un extracto de Mónaco
+    #: desplegado, dos puntos de Berlín devolvieron 10,1 km de "ruta" — un
+    #: número plausible de un sitio que no es. Es el modo de fallo que no rompe
+    #: nada y miente.
+    #:
+    #: 1.000 m es holgado a propósito: una parada en un aparcamiento grande o en
+    #: una zona rural puede estar legítimamente lejos de la vía cartografiada, y
+    #: un radio agresivo convertiría paradas reales en `Not Calculable`. El
+    #: muestreo de campo (Item E) es lo que debe afinar este número.
+    snap_radius_m: int = Field(default=1_000, ge=10, le=100_000)
     segment_max_meters: int = Field(default=800_000, ge=1_000, le=20_000_000)
     implied_speed_max_kmh: int = Field(default=160, ge=10, le=1_000)
     plausibility_enabled: bool = True

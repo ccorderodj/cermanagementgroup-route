@@ -32,6 +32,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.audit.service import record_event
@@ -44,6 +45,8 @@ from app.routers_api.location.dao import (
 )
 from app.routers_api.location.models import (
     LocationEventKind,
+    MissingLocationNotification,
+    NotificationChannel,
     LocationEvidenceLevel,
     LocationFix,
     MissingLocationEvent,
@@ -265,6 +268,31 @@ class LocationEvidenceService:
                 detail="That cached point is less accurate than this company allows.",
             )
 
+    @staticmethod
+    async def notification_status(
+        *, company_id: int, missing_location_event_id: int
+    ) -> str:
+        """En qué punto está la entrega del aviso de este hecho.
+
+        Se consulta el canal `in_platform`, que es el que D-01 exige. Si no hay
+        fila —no debería pasar, el hecho y su registro nacen juntos— se
+        responde `pending`: es lo cierto desde el punto de vista de la entrega,
+        y no inventa un estado más avanzado.
+        """
+        from app.core.db.session import db_session as _db
+
+        async with _db() as sesion:
+            estado = await sesion.scalar(
+                select(MissingLocationNotification.status).where(
+                    MissingLocationNotification.company_id == company_id,
+                    MissingLocationNotification.missing_location_event_id
+                    == missing_location_event_id,
+                    MissingLocationNotification.channel
+                    == NotificationChannel.IN_PLATFORM.value,
+                )
+            )
+        return estado or MissingNotificationStatus.PENDING.value
+
     @classmethod
     async def finalize_missing(
         cls,
@@ -351,13 +379,24 @@ class LocationEvidenceService:
             attempts=attempts,
             permission_state=permission_state,
             rejected_candidate=rejected,
-            notification_status=MissingNotificationStatus.PENDING.value,
         )
         try:
             async with transaction() as sesion:
                 sesion.add(fila)
                 await sesion.flush()
                 nuevo_id = fila.id
+                # El registro de entrega, en la **misma** transacción: un hecho
+                # sin su fila de aviso quedaría invisible para quien entregue
+                # los avisos, y no habría forma de descubrirlo después salvo
+                # comparando las dos tablas.
+                sesion.add(
+                    MissingLocationNotification(
+                        company_id=company_id,
+                        missing_location_event_id=nuevo_id,
+                        channel=NotificationChannel.IN_PLATFORM.value,
+                        status=MissingNotificationStatus.PENDING.value,
+                    )
+                )
         except IntegrityError:
             existente = await MissingLocationEventsDAO.find_for_event(
                 company_id=company_id,
@@ -483,9 +522,27 @@ async def sweep_unreported_windows(*, limit: int = 200) -> int:
                     # el dispositivo: el cliente no volvió a decir nada (§29).
                     reason_code=MissingLocationReason.NO_CLIENT_REPORT.value,
                     attempts=[],
-                    notification_status=MissingNotificationStatus.PENDING.value,
                 )
             )
+            await sesion.flush()
+            # Igual que en el camino del cliente: el hecho y su registro de
+            # entrega nacen juntos.
+            creado = await sesion.scalar(
+                _text(
+                    "SELECT id FROM missing_location_event WHERE company_id = :c "
+                    "AND event_kind = :e AND subject_id = :s"
+                ),
+                {"c": fila.company_id, "e": fila.event_kind, "s": fila.subject_id},
+            )
+            if creado is not None:
+                sesion.add(
+                    MissingLocationNotification(
+                        company_id=fila.company_id,
+                        missing_location_event_id=creado,
+                        channel=NotificationChannel.IN_PLATFORM.value,
+                        status=MissingNotificationStatus.PENDING.value,
+                    )
+                )
         cerrados += 1
 
     return cerrados

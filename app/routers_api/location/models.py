@@ -59,6 +59,8 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 
@@ -121,15 +123,35 @@ class LocationPermissionState(BusinessEnum):
 
 
 class MissingNotificationStatus(BusinessEnum):
-    """Si el aviso de §30 ya salió.
+    """En qué punto está la **entrega** del aviso.
 
-    RTE06 **persiste** el estado y expone el contrato; no entrega el aviso ni
+    Vive en `missing_location_notification`, no en el hecho. D-RTE06-MISSING-01
+    lo dice sin ambigüedad: el estado de entrega no es parte del hecho
+    inmutable. La primera versión lo guardaba en la misma fila y eso obligaba a
+    un disparador que permitiera `UPDATE` de algunas columnas — un hecho
+    "inmutable con excepciones", que es un hecho mutable con más pasos.
+
+    RTE06 **registra** el estado y expone el contrato; no entrega el aviso ni
     construye un buzón dentro de Route, que es lo que §30 prohíbe.
     """
 
     PENDING = "pending"
     NOTIFIED = "notified"
+    FAILED = "failed"
     SUPPRESSED = "suppressed"
+
+
+class NotificationChannel(BusinessEnum):
+    """Por dónde sale el aviso.
+
+    `in_platform` es el que D-01 exige; `email` es opcional. Los dos existen
+    desde el principio para que añadir un canal no sea una migración de
+    esquema — que es lo que §3 pide al hablar de compatibilidad con canales
+    futuros.
+    """
+
+    IN_PLATFORM = "in_platform"
+    EMAIL = "email"
 
 
 class MissingLocationReason(BusinessEnum):
@@ -289,6 +311,20 @@ class MissingLocationEvent(TimeStampedModel):
     Nunca se crea para un evento que no pasó: §19 lo dice de `Arrived` en un
     viaje interrumpido, y la regla vale en general. Esta fila significa "esto
     ocurrió y no pudimos situarlo", no "esto no ocurrió".
+
+    Estrictamente inmutable (D-RTE06-MISSING-01)
+    --------------------------------------------
+    Ni `UPDATE`, ni `DELETE`, ni `TRUNCATE`, sin excepción de columnas. La
+    versión anterior guardaba aquí el estado del aviso, que por definición
+    avanza, y eso obligaba a un disparador que permitiera actualizar unas
+    columnas y no otras. CER resolvió la ambigüedad hacia el lado estricto: un
+    hecho histórico no se reinterpreta después, y "inmutable salvo estas cuatro
+    columnas" es mutable con pasos de más.
+
+    La entrega del aviso vive en `missing_location_notification`, que sí es
+    operacional y sí cambia. Tampoco hay un campo `notes` genérico: un texto
+    libre editable sobre un hecho histórico es exactamente la reinterpretación
+    que D-RTE06-MISSING-01 prohíbe.
     """
 
     __tablename__ = "missing_location_event"
@@ -298,11 +334,13 @@ class MissingLocationEvent(TimeStampedModel):
             "subject_kind", name="ck_missing_location_subject_kind"
         ),
         MissingLocationReason.check("reason_code", name="ck_missing_location_reason"),
-        MissingNotificationStatus.check(
-            "notification_status", name="ck_missing_location_notification"
-        ),
         _check_pareja_evento_sujeto("ck_missing_location_event_subject"),
         CheckConstraint("subject_id > 0", name="ck_missing_location_subject_id"),
+        # Para que el registro de entrega pueda referenciar el hecho con clave
+        # compuesta y no pueda colgarse del hecho de otro tenant.
+        UniqueConstraint(
+            "id", "company_id", name="uq_missing_location_event_id_company"
+        ),
         ForeignKeyConstraint(
             ["work_session_id", "company_id"],
             ["work_session.id", "work_session.company_id"],
@@ -325,11 +363,7 @@ class MissingLocationEvent(TimeStampedModel):
             "subject_id",
             unique=True,
         ),
-        Index(
-            "ix_missing_location_pending_notice",
-            "company_id",
-            "notification_status",
-        ),
+        Index("ix_missing_location_session", "company_id", "work_session_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
@@ -366,15 +400,101 @@ class MissingLocationEvent(TimeStampedModel):
     #: conservar una ubicación que el sistema decidió no usar.
     rejected_candidate = Column(JSONB, nullable=True)
 
-    #: Estado de aviso. §30 pide persistirlo y exponer un contrato limpio, sin
-    #: construir una plataforma de notificaciones dentro de Route.
-    notification_status = Column(String(20), nullable=False, server_default="pending")
-    notified_at = Column(DateTime(timezone=True), nullable=True)
-
-    notes = Column(Text, nullable=True)
-
     def __repr__(self) -> str:
         return (
             f"<MissingLocationEvent {self.event_kind}/{self.subject_id} "
             f"{self.reason_code}>"
+        )
+
+
+class MissingLocationNotification(TimeStampedModel):
+    """El envío del aviso de un Missing. **Operacional, no histórico.**
+
+    Separada del hecho porque tiene un ciclo de vida propio: se intenta, falla,
+    se reintenta, se entrega. Meter eso en la fila del hecho fue el error que
+    D-RTE06-MISSING-01 corrige.
+
+    Qué **no** es
+    -------------
+    No es un buzón de notificaciones de Route: §30 y §3 lo prohíben
+    expresamente. Es el registro de entrega de un aviso que otro componente
+    —el de plataforma, cuando exista— realizará. Por eso lleva `channel` desde
+    el principio: añadir `in_platform` junto a `email` no debe ser una
+    migración.
+
+    Una fila por canal
+    ------------------
+    `uq_missing_location_notification_channel` deja una sola fila por hecho y
+    canal. Así un reintento avanza la que hay en vez de apilar intentos, y
+    "¿se avisó por plataforma?" tiene una única respuesta.
+    """
+
+    __tablename__ = "missing_location_notification"
+    __table_args__ = (
+        MissingNotificationStatus.check(
+            "status", name="ck_missing_location_notification_status"
+        ),
+        NotificationChannel.check(
+            "channel", name="ck_missing_location_notification_channel_value"
+        ),
+        UniqueConstraint(
+            "missing_location_event_id",
+            "channel",
+            name="uq_missing_location_notification_channel",
+        ),
+        # Compuesta con `company_id`: el registro de entrega de otro tenant no
+        # se puede referenciar aunque el servicio se equivoque.
+        ForeignKeyConstraint(
+            ["missing_location_event_id", "company_id"],
+            ["missing_location_event.id", "missing_location_event.company_id"],
+            name="fk_missing_location_notification_event_same_company",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "attempt_count >= 0", name="ck_missing_location_notification_attempts"
+        ),
+        # `delivered` exige fecha de entrega; lo demás exige que no la haya. Sin
+        # esto, una fila podría decir "pendiente" con fecha de entrega puesta.
+        CheckConstraint(
+            "(status = 'notified' AND delivered_at IS NOT NULL) "
+            "OR (status <> 'notified' AND delivered_at IS NULL)",
+            name="ck_missing_location_notification_delivered",
+        ),
+        Index(
+            "ix_missing_location_notification_due",
+            "company_id",
+            "status",
+            postgresql_where=text("status = 'pending'"),
+        ),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    company_id = Column(
+        Integer,
+        ForeignKey("company.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    #: `RESTRICT` en la FK: el registro de entrega no puede sobrevivir al hecho,
+    #: pero tampoco puede llevárselo por delante. El hecho no se borra nunca.
+    missing_location_event_id = Column(Integer, nullable=False)
+
+    channel = Column(String(20), nullable=False)
+    status = Column(
+        String(20),
+        nullable=False,
+        server_default=MissingNotificationStatus.PENDING.value,
+    )
+    attempt_count = Column(Integer, nullable=False, server_default="0")
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    delivered_at = Column(DateTime(timezone=True), nullable=True)
+    #: Código del fallo, no una frase: la interfaz decide qué enseñar, igual que
+    #: con los conflictos de usuario.
+    failure_code = Column(String(40), nullable=True)
+    failure_detail = Column(Text, nullable=True)
+
+    def __repr__(self) -> str:
+        return (
+            f"<MissingLocationNotification event={self.missing_location_event_id} "
+            f"{self.channel}/{self.status}>"
         )

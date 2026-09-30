@@ -44,8 +44,30 @@
  */
 
 const DATABASE_NAME = 'cer-route-offline';
-const DATABASE_VERSION = 1;
+/**
+ * 2 desde RTE06: se añadió el almacén de evidencia de ubicación.
+ *
+ * Misma base y mismo módulo a propósito. §7 de RTE06 prohíbe una segunda cola,
+ * y esto no lo es: es el mismo mecanismo de durabilidad con **dos carriles**,
+ * porque los dos datos tienen semánticas de orden distintas y meterlos en el
+ * mismo carril rompería una de las dos.
+ *
+ * `onupgradeneeded` crea lo que falte y no toca lo que hay, así que un
+ * dispositivo con la versión 1 y acciones pendientes las conserva.
+ */
+const DATABASE_VERSION = 2;
 const STORE_NAME = 'pending_actions';
+/**
+ * Evidencia de ubicación pendiente de enviar.
+ *
+ * Carril aparte del de acciones por una razón concreta: el de acciones se
+ * **detiene** en el primer fallo para no aplicar un `Arrived` antes que su
+ * `Start Trip`. La ubicación no tiene ese requisito —cada punto va atado a su
+ * evento por la tupla de correlación, y el servidor lo rechaza si el evento no
+ * existe— y si compartieran carril, un punto que el servidor rechaza bloquearía
+ * las acciones operativas que van detrás.
+ */
+const LOCATION_STORE = 'pending_location_evidence';
 
 export type PendingActionStatus = 'pending' | 'failed';
 
@@ -80,6 +102,13 @@ function openDatabase(): Promise<IDBDatabase> {
                 const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
                 store.createIndex('by_sequence', 'sequence', { unique: true });
             }
+            if (!db.objectStoreNames.contains(LOCATION_STORE)) {
+                // `id` es la tupla de correlación, así que guardar dos veces el
+                // mismo evento **sobrescribe** en vez de duplicar: la
+                // idempotencia empieza en el dispositivo y no depende de que el
+                // servidor la arregle después.
+                db.createObjectStore(LOCATION_STORE, { keyPath: 'id' });
+            }
         };
 
         request.onsuccess = () => resolve(request.result);
@@ -89,19 +118,122 @@ function openDatabase(): Promise<IDBDatabase> {
     return dbPromise;
 }
 
-async function withStore<T>(
+async function withNamedStore<T>(
+    nombre: string,
     mode: IDBTransactionMode,
     run: (store: IDBObjectStore) => IDBRequest<T>,
 ): Promise<T> {
     const db = await openDatabase();
     return new Promise((resolve, reject) => {
-        const tx = db.transaction(STORE_NAME, mode);
-        const store = tx.objectStore(STORE_NAME);
+        const tx = db.transaction(nombre, mode);
+        const store = tx.objectStore(nombre);
         const request = run(store);
 
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
     });
+}
+
+async function withStore<T>(
+    mode: IDBTransactionMode,
+    run: (store: IDBObjectStore) => IDBRequest<T>,
+): Promise<T> {
+    return withNamedStore(STORE_NAME, mode, run);
+}
+
+/**
+ * Un punto de ubicación esperando a poder enviarse.
+ *
+ * `id` es la tupla de correlación —`{event_kind}:{subject_id}`— y no un
+ * identificador propio. Eso hace que reintentar el mismo evento reemplace la
+ * entrada en vez de apilar otra, y que dos capturas del mismo evento en el
+ * mismo dispositivo no puedan producir dos envíos.
+ *
+ * `payload` se guarda **tal cual se midió**, incluido `evidence_level` y
+ * `device_captured_at`. Es lo que garantiza que un punto cacheado no se
+ * convierta en fresco por subirse más tarde: nada recalcula esos campos al
+ * enviar.
+ */
+export interface PendingLocationEvidence {
+    id: string;
+    /** `/location/evidence` o `/location/missing`. */
+    endpoint: string;
+    payload: Record<string, unknown>;
+    createdAt: string;
+    attempts: number;
+    lastError?: string;
+    /**
+     * Qué fila resolver cuando el `subject_id` todavía no existe.
+     *
+     * Se rellena cuando la acción que **crea** esa fila aún está en la cola:
+     * sin red, `Start Work` no tiene `work_session.id` y `Start Trip` no tiene
+     * `trip.id`. El punto se guarda igual y se ata al sincronizar.
+     *
+     * `null` —lo normal— significa que el `subject_id` del `payload` ya es el
+     * definitivo y no hay nada que resolver.
+     */
+    subjectPending?: 'work_session' | 'trip' | null;
+}
+
+/** Guarda o reemplaza la evidencia pendiente de un evento. */
+export async function enqueueLocationEvidence(
+    id: string,
+    endpoint: string,
+    payload: Record<string, unknown>,
+    subjectPending: 'work_session' | 'trip' | null = null,
+): Promise<void> {
+    const existente = await withNamedStore<PendingLocationEvidence | undefined>(
+        LOCATION_STORE,
+        'readonly',
+        (store) => store.get(id) as IDBRequest<PendingLocationEvidence | undefined>,
+    );
+    const entrada: PendingLocationEvidence = {
+        id,
+        endpoint,
+        payload,
+        // Se conserva la fecha del primer intento: lo que importa es cuándo se
+        // capturó, no cuándo se reintentó.
+        createdAt: existente?.createdAt ?? new Date().toISOString(),
+        attempts: existente?.attempts ?? 0,
+        subjectPending,
+    };
+    await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(entrada));
+}
+
+export async function listPendingLocationEvidence(): Promise<
+    PendingLocationEvidence[]
+    > {
+    const filas = await withNamedStore<PendingLocationEvidence[]>(
+        LOCATION_STORE,
+        'readonly',
+        (store) => store.getAll() as IDBRequest<PendingLocationEvidence[]>,
+    );
+    // Por fecha de captura, que es el orden en que ocurrieron. No es un
+    // requisito del dominio —el servidor correlaciona por la tupla, no por el
+    // orden de llegada— pero hace el reenvío predecible y los logs legibles.
+    return filas.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+}
+
+export async function removeLocationEvidence(id: string): Promise<void> {
+    await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.delete(id));
+}
+
+export async function markLocationEvidenceFailed(
+    id: string,
+    error: string,
+): Promise<void> {
+    const entrada = await withNamedStore<PendingLocationEvidence | undefined>(
+        LOCATION_STORE,
+        'readonly',
+        (store) => store.get(id) as IDBRequest<PendingLocationEvidence | undefined>,
+    );
+    if (!entrada) return;
+    const actualizada: PendingLocationEvidence = {
+        ...entrada,
+        attempts: entrada.attempts + 1,
+        lastError: error.slice(0, 300),
+    };
+    await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(actualizada));
 }
 
 export async function listPendingActions(): Promise<PendingAction[]> {

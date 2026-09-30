@@ -468,6 +468,15 @@ def _conflicto_de_asignacion(exc: IntegrityError) -> HTTPException:
             "supervisor. End the other one first, or pick a start date outside "
             "it."
         )
+    elif codigo == "23514":
+        # `check_violation`. En este servicio sólo puede venir de
+        # `ck_vehicle_assignment_period`: alguien intentó cerrar una asignación
+        # en su propio instante de inicio, que es lo que ocurre cuando dos
+        # reasignaciones llegan a la vez con la misma fecha.
+        detalle = (
+            "Another change to this supervisor's vehicle happened at the same "
+            "moment. Reload and try again."
+        )
     elif codigo == "23505":
         detalle = (
             "This supervisor already has a current vehicle assignment. "

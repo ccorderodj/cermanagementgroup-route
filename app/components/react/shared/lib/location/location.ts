@@ -41,7 +41,8 @@
  * bloquear a nadie.
  */
 
-import { $api } from '@/shared/api';
+import { enqueueLocationEvidence } from '@/shared/lib/offlineQueue';
+import { flushPendingLocationEvidence } from '@/shared/lib/offlineQueue/sync';
 
 /** Los siete eventos de §10. `start_activity` no está, y es deliberado. */
 export type LocationEventKind =
@@ -166,6 +167,30 @@ function aPayload(punto: PuntoCrudo) {
     };
 }
 
+/**
+ * La llave de correlación, igual que la del servidor.
+ *
+ * Es lo que hace que guardar dos veces el mismo evento **reemplace** en vez de
+ * duplicar: la idempotencia empieza en el dispositivo y no depende de que el
+ * servidor la arregle después.
+ */
+function llaveDe(eventKind: LocationEventKind, subjectId: number): string {
+    return `${eventKind}:${subjectId}`;
+}
+
+/**
+ * Guarda el punto **antes** de intentar enviarlo, y luego intenta.
+ *
+ * Éste es el cambio que exige el cierre de RTE06. Antes se llamaba a `$api`
+ * directamente: sin red, la promesa se rechazaba, el `catch` de arriba la
+ * tragaba en silencio y la evidencia **se perdía** — un punto que el
+ * dispositivo sí había medido. Ahora se escribe en IndexedDB primero, así que
+ * el peor caso es que se envíe más tarde.
+ *
+ * El `payload` se guarda tal cual se midió, `evidence_level` y
+ * `device_captured_at` incluidos. Nada los recalcula al enviar, que es lo que
+ * garantiza que un punto cacheado no se convierta en fresco por subirse tarde.
+ */
 async function enviarPunto(
     eventKind: LocationEventKind,
     subjectId: number,
@@ -173,17 +198,31 @@ async function enviarPunto(
     punto: PuntoCrudo,
     permiso: EstadoDelPermiso,
     edadSegundos?: number,
+    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
-    await $api.post('/location/evidence', {
+    const llave = subjectPending
+        ? `${eventKind}:pending:${subjectPending}`
+        : llaveDe(eventKind, subjectId);
+    await enqueueLocationEvidence(llave, '/location/evidence', {
         event_kind: eventKind,
         subject_id: subjectId,
         evidence_level: nivel,
         ...aPayload(punto),
         ...(nivel === 'degraded_cached' ? { source_age_seconds: edadSegundos } : {}),
         permission_state: permiso,
-    });
+    }, subjectPending);
+    await flushPendingLocationEvidence();
 }
 
+/**
+ * Declara Missing, también de forma durable.
+ *
+ * Con la misma llave que el punto: si el punto llega después —porque la
+ * recuperación tuvo éxito en otro intento— reemplaza al Missing en el almacén
+ * en vez de coexistir con él. El servidor rechazaría el Missing de todas formas
+ * (el punto manda), pero dejar los dos en el dispositivo enviaría una petición
+ * que se sabe que va a fallar.
+ */
 async function declararMissing(
     eventKind: LocationEventKind,
     subjectId: number,
@@ -191,8 +230,12 @@ async function declararMissing(
     intentos: Intento[],
     permiso: EstadoDelPermiso,
     rechazado?: { age_seconds?: number; accuracy_m?: number },
+    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
-    await $api.post('/location/missing', {
+    const llave = subjectPending
+        ? `${eventKind}:pending:${subjectPending}`
+        : llaveDe(eventKind, subjectId);
+    await enqueueLocationEvidence(llave, '/location/missing', {
         event_kind: eventKind,
         subject_id: subjectId,
         reason_code: razon,
@@ -204,7 +247,8 @@ async function declararMissing(
         ...(rechazado?.accuracy_m !== undefined
             ? { rejected_accuracy_m: rechazado.accuracy_m.toFixed(2) }
             : {}),
-    });
+    }, subjectPending);
+    await flushPendingLocationEvidence();
 }
 
 /**
@@ -223,6 +267,7 @@ function razonDe(codigo: number | undefined): string {
 async function capturar(
     eventKind: LocationEventKind,
     subjectId: number,
+    subjectPending: 'work_session' | 'trip' | null = null,
 ): Promise<void> {
     const permiso = await leerPermiso();
     const intentos: Intento[] = [];
@@ -242,7 +287,15 @@ async function capturar(
         const aceptable = precision === null
             || precision <= politica.freshMaxAccuracyM;
         if (aceptable) {
-            await enviarPunto(eventKind, subjectId, 'fresh', punto, permiso);
+            await enviarPunto(
+                eventKind,
+                subjectId,
+                'fresh',
+                punto,
+                permiso,
+                undefined,
+                subjectPending,
+            );
             return;
         }
         // Se midió ahora pero con demasiado error. No es fresco utilizable, y
@@ -266,7 +319,15 @@ async function capturar(
             // Permiso denegado: pedir la caché daría el mismo error. Se salta
             // a Missing sin gastar la ventana de recuperación en algo que no
             // puede funcionar.
-            await declararMissing(eventKind, subjectId, 'permission_denied', intentos, permiso);
+            await declararMissing(
+                eventKind,
+                subjectId,
+                'permission_denied',
+                intentos,
+                permiso,
+                undefined,
+                subjectPending,
+            );
             return;
         }
     }
@@ -286,7 +347,15 @@ async function capturar(
             || punto.accuracy <= politica.cachedMaxAccuracyM;
         const suficiente = dentroDeEdad && dentroDePrecision;
         if (suficiente) {
-            await enviarPunto(eventKind, subjectId, 'degraded_cached', punto, permiso, edad);
+            await enviarPunto(
+                eventKind,
+                subjectId,
+                'degraded_cached',
+                punto,
+                permiso,
+                edad,
+                subjectPending,
+            );
             return;
         }
         // Había punto y no valía. Se guarda **su edad y su precisión**, nunca
@@ -324,7 +393,15 @@ async function capturar(
         // Se envía con **su** hora de captura, que es posterior al evento. Es
         // correcto y es el punto de `recovered`: la hora dice cuándo se midió,
         // no cuándo ocurrió el evento (§11).
-        await enviarPunto(eventKind, subjectId, 'recovered', punto, permiso);
+        await enviarPunto(
+            eventKind,
+            subjectId,
+            'recovered',
+            punto,
+            permiso,
+            undefined,
+            subjectPending,
+        );
     } catch (error) {
         const fallo = error as GeolocationPositionError;
         intentos.push({
@@ -341,6 +418,7 @@ async function capturar(
             intentos,
             permiso,
             rechazado,
+            subjectPending,
         );
     }
 }
@@ -356,14 +434,23 @@ const enCurso = new Set<string>();
  * tampoco se puede llegar al servidor — y en ese caso el barrido del servidor
  * lo cerrará al vencer la ventana, que es el tercer camino de §11.
  */
-export function captureFor(eventKind: LocationEventKind, subjectId: number): void {
-    const llave = `${eventKind}:${subjectId}`;
+export function captureFor(
+    eventKind: LocationEventKind,
+    subjectId: number,
+    subjectPending: 'work_session' | 'trip' | null = null,
+): void {
+    // Con sujeto diferido el id todavía no existe, así que la llave usa el tipo
+    // de sujeto. Una sola entrada diferida por tipo: si hubiera dos, no se
+    // podría demostrar cuál va con cuál y el emisor se niega a atarlas.
+    const llave = subjectPending
+        ? `${eventKind}:pending:${subjectPending}`
+        : `${eventKind}:${subjectId}`;
     if (enCurso.has(llave)) return;
     enCurso.add(llave);
 
     (async () => {
         try {
-            await capturar(eventKind, subjectId);
+            await capturar(eventKind, subjectId, subjectPending);
         } catch {
             // Silencio deliberado (§12). Si ni la captura ni el aviso de Missing
             // llegaron, el sweeper del servidor cierra el evento al vencer la
