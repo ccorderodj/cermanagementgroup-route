@@ -226,14 +226,24 @@ HAVING count(*) > 1;
 SELECT id, company_id, trip_id, status, terminal_action, ended_at,
        outcome_standard_value_id, outcome_label
 FROM activity_execution
-WHERE status IN ('completed', 'left')
-  AND (ended_at IS NULL OR (outcome_standard_value_id IS NULL AND outcome_label IS NULL));
+WHERE (status IN ('completed', 'left')
+       AND (ended_at IS NULL OR terminal_action IS NULL
+            OR outcome_standard_value_id IS NULL))
+   OR (status = 'in_progress'
+       AND (ended_at IS NOT NULL OR terminal_action IS NOT NULL
+            OR outcome_standard_value_id IS NOT NULL));
 
 -- == C-05 [Actividades] Bloque cuyo viaje no habia llegado
 SELECT ae.id, ae.trip_id, ae.started_at, t.status, t.arrived_at
 FROM activity_execution ae
 JOIN trip t ON t.id = ae.trip_id AND t.company_id = ae.company_id
 WHERE t.arrived_at IS NULL OR ae.started_at < t.arrived_at;
+
+-- == C-06 [Actividades] La misma actividad etiquetada dos veces en un bloque
+SELECT activity_execution_id, standard_value_id, count(*) AS cuantas
+FROM activity_execution_activity
+GROUP BY activity_execution_id, standard_value_id
+HAVING count(*) > 1;
 
 -- == L-01 [Evidencia de ubicacion] Mas de un punto autoritativo por evento
 SELECT company_id, event_kind, subject_kind, subject_id, count(*) AS puntos

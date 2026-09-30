@@ -68,11 +68,13 @@ cosas muy distintas, y confundirlas es peligroso:
   la consulta la encontro. Aqui la consulta **es** la unica defensa, y por eso su
   correccion importa tanto.
 
-Las 24 de la tabla siguiente se verificaron inyectando la violacion en una
+Las 26 de la tabla siguiente se verificaron inyectando la violacion en una
 transaccion que despues se revento. Ninguna resulto ciega.
 
 | Consulta | Veredicto | Lo que rechazo la escritura | sqlstate |
 |---|---|---|---|
+| `C-02` Bloque terminal sin hora de fin o sin resultado | RECHAZA | `ck_activity_execution_terminal_facts` | `23514` |
+| `C-06` La misma actividad etiquetada dos veces en un bloque | RECHAZA | `uq_activity_execution_value` | `23505` |
 | `D-02` Coordenadas filtradas en la traza de auditoria | DETECTA | *nada: la consulta es la defensa* | — |
 | `H-01` Hechos append-only modificados despues de crearse | RECHAZA | `trg_location_fix_append_only` | `P0001` |
 | `J-01` Mas de una jornada ACTIVA por supervisor | RECHAZA | `uq_work_session_one_active` | `23505` |
@@ -100,16 +102,16 @@ transaccion que despues se revento. Ninguna resulto ciega.
 
 ## Inventario
 
-**89 consultas** en 12 flujos: 57 de invariante y 32 de informe. Las 89 se ejecutaron contra PostgreSQL 16.4 con el esquema en `0013_client_action_key`: **0 errores de SQL**.
+**90 consultas** en 12 flujos: 58 de invariante y 32 de informe. Las 90 se ejecutaron contra PostgreSQL 16.4 con el esquema en `0013_client_action_key`: **0 errores de SQL**.
 
 Los dos ficheros ejecutables se pasaron ademas por `psql` con `ON_ERROR_STOP=1`, que es como los correra quien valide:
 
 | Fichero | exit | Consultas | Resultado |
 |---|---|---|---|
-| `route_invariantes.sql` | `0` | 57 | las 57 vacias: **ningun hallazgo en este entorno** |
+| `route_invariantes.sql` | `0` | 58 | las 58 vacias: **ningun hallazgo en este entorno** |
 | `route_informes.sql` | `0` | 32 | 20 vacias, 12 con filas |
 
-Una advertencia sobre ese cero, porque es facil leerlo como mas de lo que es: **el entorno donde se ejecuto tiene muy pocos datos**, asi que la mayoria de las 57 devuelve cero por falta de filas que examinar, no porque se haya demostrado nada sobre datos de produccion. Lo que hace util al cero es la verificacion por inyeccion de la seccion anterior; correr la puerta contra un entorno con trafico real es un paso que **no** se ha hecho y queda como accion operativa.
+Una advertencia sobre ese cero, porque es facil leerlo como mas de lo que es: **el entorno donde se ejecuto tiene muy pocos datos**, asi que la mayoria de las 58 devuelve cero por falta de filas que examinar, no porque se haya demostrado nada sobre datos de produccion. Lo que hace util al cero es la verificacion por inyeccion de la seccion anterior; correr la puerta contra un entorno con trafico real es un paso que **no** se ha hecho y queda como accion operativa.
 
 | Flujo | Consultas | Invariante | Informe |
 |---|---|---|---|
@@ -119,7 +121,7 @@ Una advertencia sobre ese cero, porque es facil leerlo como mas de lo que es: **
 | Vigencia de vehiculo | 5 | 3 | 2 |
 | Viajes | 8 | 7 | 1 |
 | Odometro | 6 | 4 | 2 |
-| Actividades | 5 | 3 | 2 |
+| Actividades | 6 | 4 | 2 |
 | Evidencia de ubicacion | 15 | 11 | 4 |
 | Kilometraje | 14 | 10 | 4 |
 | Correlacion offline | 3 | 1 | 2 |
@@ -720,14 +722,19 @@ HAVING count(*) > 1
 
 **Invariante** — debe devolver cero filas
 
-Terminar exige hora Y resultado. Un bloque terminal sin resultado seria el hecho fabricado que RTE05 prohibe, y `ck_activity_execution_terminal_facts` lo impide.
+Las dos mitades de `ck_activity_execution_terminal_facts`. Terminar exige hora, accion terminal **y** `outcome_standard_value_id`: el resultado siempre referencia un valor de lista, y `outcome_label` es solo la copia legible. Y al contrario: un `in_progress` no puede tener ninguno de los tres. Un bloque terminal sin resultado seria el hecho fabricado que RTE05 prohibe.  
+*Verificado inyectando la violacion:* la base la **rechazo** con `23514` por `ck_activity_execution_terminal_facts`. La garantia es esa restriccion; la consulta confirma que sigue puesta.
 
 ```sql
 SELECT id, company_id, trip_id, status, terminal_action, ended_at,
        outcome_standard_value_id, outcome_label
 FROM activity_execution
-WHERE status IN ('completed', 'left')
-  AND (ended_at IS NULL OR (outcome_standard_value_id IS NULL AND outcome_label IS NULL))
+WHERE (status IN ('completed', 'left')
+       AND (ended_at IS NULL OR terminal_action IS NULL
+            OR outcome_standard_value_id IS NULL))
+   OR (status = 'in_progress'
+       AND (ended_at IS NOT NULL OR terminal_action IS NOT NULL
+            OR outcome_standard_value_id IS NOT NULL))
 ```
 ### C-03 — Bloque sin ninguna actividad etiquetada
 
@@ -767,6 +774,19 @@ SELECT ae.id, ae.trip_id, ae.started_at, t.status, t.arrived_at
 FROM activity_execution ae
 JOIN trip t ON t.id = ae.trip_id AND t.company_id = ae.company_id
 WHERE t.arrived_at IS NULL OR ae.started_at < t.arrived_at
+```
+### C-06 — La misma actividad etiquetada dos veces en un bloque
+
+**Invariante** — debe devolver cero filas
+
+Un bloque puede llevar varias actividades, pero no la misma repetida: contarla dos veces inflaria cualquier metrica de que se hizo en la parada. Lo impide `uq_activity_execution_value`.  
+*Verificado inyectando la violacion:* la base la **rechazo** con `23505` por `uq_activity_execution_value`. La garantia es esa restriccion; la consulta confirma que sigue puesta.
+
+```sql
+SELECT activity_execution_id, standard_value_id, count(*) AS cuantas
+FROM activity_execution_activity
+GROUP BY activity_execution_id, standard_value_id
+HAVING count(*) > 1
 ```
 
 ---

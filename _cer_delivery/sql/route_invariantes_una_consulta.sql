@@ -293,8 +293,12 @@ SELECT 'C-02' AS id, 'Actividades' AS flujo, 'Bloque terminal sin hora de fin o 
 SELECT id, company_id, trip_id, status, terminal_action, ended_at,
        outcome_standard_value_id, outcome_label
 FROM activity_execution
-WHERE status IN ('completed', 'left')
-  AND (ended_at IS NULL OR (outcome_standard_value_id IS NULL AND outcome_label IS NULL))
+WHERE (status IN ('completed', 'left')
+       AND (ended_at IS NULL OR terminal_action IS NULL
+            OR outcome_standard_value_id IS NULL))
+   OR (status = 'in_progress'
+       AND (ended_at IS NOT NULL OR terminal_action IS NOT NULL
+            OR outcome_standard_value_id IS NOT NULL))
        ) AS q) AS filas
 UNION ALL
 SELECT 'C-05' AS id, 'Actividades' AS flujo, 'Bloque cuyo viaje no habia llegado' AS invariante,
@@ -303,6 +307,14 @@ SELECT ae.id, ae.trip_id, ae.started_at, t.status, t.arrived_at
 FROM activity_execution ae
 JOIN trip t ON t.id = ae.trip_id AND t.company_id = ae.company_id
 WHERE t.arrived_at IS NULL OR ae.started_at < t.arrived_at
+       ) AS q) AS filas
+UNION ALL
+SELECT 'C-06' AS id, 'Actividades' AS flujo, 'La misma actividad etiquetada dos veces en un bloque' AS invariante,
+       (SELECT count(*) FROM (
+SELECT activity_execution_id, standard_value_id, count(*) AS cuantas
+FROM activity_execution_activity
+GROUP BY activity_execution_id, standard_value_id
+HAVING count(*) > 1
        ) AS q) AS filas
 UNION ALL
 SELECT 'L-01' AS id, 'Evidencia de ubicacion' AS flujo, 'Mas de un punto autoritativo por evento' AS invariante,
