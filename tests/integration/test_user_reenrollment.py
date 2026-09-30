@@ -572,3 +572,56 @@ async def test_the_platform_superuser_still_only_assigns_route_roles(
         json={"role_id": seeded.alpha.roles["owner"]},
     )
     assert respuesta.status_code == 403, respuesta.text
+
+
+async def test_a_duplicate_create_is_consistent(seeded, alpha_client):
+    """§13.12 y §15: dos envíos idénticos dan un resultado y un conflicto.
+
+    El doble clic existe. El segundo envío no puede crear una segunda identidad
+    ni una segunda pertenencia: encuentra a la persona que el primero acaba de
+    crear y devuelve el conflicto que corresponde a su estado, que es activo.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    primero = await _crear(alpha_client, seeded, username="doblenvio")
+    assert primero.status_code in (200, 201), primero.text
+
+    segundo = await _crear(alpha_client, seeded, username="doblenvio")
+    assert segundo.status_code == 409, segundo.text
+    assert segundo.json()["detail"]["code"] == "same_tenant_active"
+
+    async with async_session_maker() as session:
+        identidades = await session.scalar(
+            text('SELECT count(*) FROM "user" WHERE username = :n'),
+            {"n": "doblenvio"},
+        )
+    assert identidades == 1, "una sola identidad"
+    assert len(await _pertenencias(seeded.alpha.id, primero.json()["id"])) == 1
+
+
+async def test_two_simultaneous_creates_produce_one_user(seeded, alpha_client):
+    """El mismo caso, de verdad concurrente.
+
+    La clasificación previa mejora el mensaje; no sustituye a la restricción.
+    Dos peticiones a la vez pasan las dos la clasificación —el nombre está libre
+    en ese instante— y es la base la que impide la segunda. Por eso la captura
+    de `IntegrityError` sigue estando debajo.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    a, b = await asyncio.gather(
+        _crear(alpha_client, seeded, username="carreracrear"),
+        _crear(alpha_client, seeded, username="carreracrear"),
+        return_exceptions=True,
+    )
+    codigos = sorted(
+        r.status_code for r in (a, b) if not isinstance(r, BaseException)
+    )
+    assert sum(1 for c in codigos if c in (200, 201)) == 1, codigos
+
+    async with async_session_maker() as session:
+        identidades = await session.scalar(
+            text('SELECT count(*) FROM "user" WHERE username = :n'),
+            {"n": "carreracrear"},
+        )
+    assert identidades == 1, "la base impide la segunda, aunque ambas clasifiquen"

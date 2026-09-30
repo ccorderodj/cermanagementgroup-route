@@ -33,6 +33,8 @@ pytest.importorskip("playwright", reason="playwright no está instalado")
 
 ESCRITORIO = {"width": 1280, "height": 900}
 BUENA = "Contrasena10"
+# El respaldo del cliente cuando el cuerpo del error no dice nada utilizable.
+RESPALDO = 'Something went wrong. Please try again.'
 
 
 @asynccontextmanager
@@ -290,3 +292,127 @@ async def test_the_route_form_offers_only_the_two_product_roles(
             await expect(
                 page.get_by_role("option", name=prohibido, exact=True)
             ).to_have_count(0)
+
+
+# ── FR-02 y §13.19-20: lo que el cliente no puede provocar por sí solo ──────
+
+
+def _solo_al_crear(estado: int, cuerpo: str):
+    """Responde `cuerpo` al POST de creación y deja pasar todo lo demás.
+
+    El filtro por método no es cosmético: la misma URL sirve el listado del
+    panel, y capturarlo también dejaría la pantalla sin datos por una razón que
+    no tiene nada que ver con lo que se está probando.
+    """
+
+    async def manejar(ruta):
+        if ruta.request.method != "POST":
+            await ruta.fallback()
+            return
+        await ruta.fulfill(
+            status=estado, content_type="application/json", body=cuerpo
+        )
+
+    return manejar
+
+
+async def test_a_server_validation_error_lands_on_its_field(seeded, live_server):
+    """FR-02 y AC-05: un 422 del servidor llega **al campo que nombra**.
+
+    Hay que interceptar la petición, y no es un atajo. El cliente valida la
+    longitud antes de enviar —FR-01—, así que el 422 de contraseña del servidor
+    es inalcanzable desde la pantalla: probar sólo el camino alcanzable dejaría
+    el **mapeo** sin evidencia, y el mapeo es lo que FR-02 pide. El cuerpo que
+    se devuelve es el que Pydantic emite de verdad, con su `loc`.
+    """
+    administrador = seeded.alpha.users["route_admin"]
+
+    async with _navegador(live_server, administrador.email) as (contexto, page):
+        await _abrir_alta(page)
+        await contexto.route(
+            "**/api/route/users",
+            _solo_al_crear(
+                422,
+                '{"detail":[{"loc":["body","password"],'
+                '"msg":"String should have at least 10 characters",'
+                '"type":"string_too_short"}]}',
+            ),
+        )
+
+        await _rellenar(page, username="mapeada", password=BUENA, rol="Supervisor")
+        await _enviar(page).click()
+
+        # El mensaje del servidor, junto al campo del servidor.
+        mensaje = page.get_by_text("String should have at least 10 characters")
+        await expect(mensaje).to_have_count(1, timeout=20_000)
+        # Y el aviso dirige a los campos, en vez de repetir el fallo.
+        await expect(
+            page.get_by_text("Please review the highlighted fields.")
+        ).to_have_count(1)
+        # Nada de `loc` ni de JSON crudo en pantalla.
+        await expect(page.get_by_text('"loc"')).to_have_count(0)
+
+
+def _reintento_del_aviso(page):
+    """El botón `Try again` del aviso, localizado **dentro** del aviso.
+
+    No por rol, y la razón es del producto, no del test: mientras el diálogo de
+    creación está abierto, Radix marca `aria-hidden="true"` todo lo que queda
+    fuera de él, y el avisador se monta en la raíz. El botón se ve y se pulsa
+    —`is_visible()` es cierto—, pero sale del árbol de accesibilidad:
+    `get_by_role` devuelve 0 y con `include_hidden=True` devuelve 1. Es un hueco
+    de accesibilidad real, ajeno al alcance de A03, y queda reportado como
+    hallazgo incidental en vez de corregido de tapadillo.
+    """
+    return page.locator("li[data-state=open]").filter(
+        has_text=RESPALDO
+    ).locator("button", has_text="Try again")
+
+
+@pytest.mark.parametrize(
+    "estado,cuerpo,caso",
+    [
+        (500, '{"detail":"Internal Server Error"}', "inesperado"),
+        (422, '{"detail":{"unexpected":"shape"}}', "malformado"),
+    ],
+    ids=["error-inesperado", "validacion-malformada"],
+)
+async def test_an_unexpected_or_malformed_error_falls_back_safely(
+    seeded, live_server, estado, cuerpo, caso,
+):
+    """§13.19 y §13.20: el respaldo no deja la pantalla muda ni rota.
+
+    Un 500 y un 422 con una forma que nadie previó. Los dos acaban en el mismo
+    respaldo, y por caminos distintos: el 422 malformado no trae `code` ni la
+    lista de Pydantic, así que `interpretarDetalle` cae en el mensaje genérico;
+    el 500 no llega siquiera como cuerpo —`handleAsyncError` sólo reenvía el del
+    servidor para 400, 401, 403, 404, 409 y 422, y para el resto rechaza con la
+    cadena `Request failed with status 500`—, que tampoco tiene `detail`.
+
+    Que el 500 **no** enseñe `Internal Server Error` es lo correcto: el texto
+    interno del servidor no es un mensaje para el administrador.
+    """
+    administrador = seeded.alpha.users["route_admin"]
+    nombre = f"respaldo{caso}"
+
+    async with _navegador(live_server, administrador.email) as (contexto, page):
+        await _abrir_alta(page)
+        await contexto.route("**/api/route/users", _solo_al_crear(estado, cuerpo))
+
+        await _rellenar(page, username=nombre, password=BUENA, rol="Supervisor")
+        await _enviar(page).click()
+
+        # Hay aviso, y dice qué no se pudo hacer.
+        await expect(page.get_by_text(RESPALDO)).to_have_count(1, timeout=20_000)
+        await expect(page.get_by_text("Could not create user")).to_have_count(1)
+        # Ofrece salida, visible y pulsable.
+        await expect(_reintento_del_aviso(page)).to_be_visible()
+        # Sin filtraciones: ni el texto interno del 500 ni las claves del cuerpo.
+        await expect(page.get_by_text("Internal Server Error")).to_have_count(0)
+        await expect(page.get_by_text("unexpected")).to_have_count(0)
+        # Y el formulario sigue en pie, con lo escrito: se puede reintentar.
+        await expect(page.locator("#security-user-username")).to_have_value(nombre)
+
+    assert await _pertenencias(seeded.alpha.id, nombre) == [], (
+        "un error no puede crear nada"
+    )
