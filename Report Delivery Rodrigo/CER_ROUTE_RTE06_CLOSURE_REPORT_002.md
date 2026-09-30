@@ -679,13 +679,21 @@ says `valhalla` years later.
 
 | Batch | Tests | Result | Exit |
 |---|---|---|---|
-| RTE06 core: location evidence, mileage engine, Missing immutability, CP0 overlap, platform diagnostics | *see §21.1* | *see §21.1* | *see §21.1* |
-| Remaining `tests/integration` + page/navigation/permission/public-surface nets | *see §21.1* | *see §21.1* | *see §21.1* |
-| Offline soak | 1 | **0 failures** | 0 |
-| Live routing (both engines) | 10 | **0 failures** | 0 |
-| Browser: offline durability | 6 | **0 failures** | 0 |
+| RTE06 core: location evidence, mileage engine, Missing immutability, CP0 overlap, platform diagnostics | **80** | **0 failures** | 0 |
+| Remaining `tests/integration`, first half | **207** | **0 failures** | 0 |
+| Remaining `tests/integration`, second half + page wiring + navigation wiring + permission catalog + public surface | **463** | **0 failures** | 0 |
+| Offline soak | **1** | **0 failures** | 0 |
+| Live routing, both real engines | **10** | **0 failures** | 0 |
 
-*(Filled in §21.1 with measured figures.)*
+**Total: 761 integration tests, 0 failures, every batch exit 0**, plus 91 browser journeys in §22 — **852 in all**.
+
+### Why the suite ran in batches, declared
+
+Two attempts at larger runs were **stopped by the harness at its 30-minute
+background limit** — the first with 467 tests and 0 failures recorded, the second
+with 437. Neither is reported as a pass: a stopped run is not a result. The suite
+was split by file until every batch finished on its own, and those are the
+figures above.
 
 ### One batch stopped by the harness, declared
 
@@ -713,11 +721,20 @@ it.
 
 ## 22. Browser Evidence
 
-| Suite | Journeys | Result | Exit |
+Every browser suite was re-run after the frontend changes, because the capture
+module, the queue and the workbench were all touched.
+
+| Batch | Journeys | Result | Exit |
 |---|---|---|---|
-| **Offline durability (new)** | **6** | **0 failures** | 0 |
-| RTE06 silent capture | 2 | *see §21.1* | *see §21.1* |
-| RTE05 workbench, activity, closure, access, admin, user creation, odometer | *see §21.1* | *see §21.1* | *see §21.1* |
+| RTE05 workbench + RTE06 silent capture + **RTE06 offline durability (new)** + RTE03 work-session offline | **33** | **0 failures** | 0 |
+| Activity execution, RTE05 closure, Route access, admin lifecycle, user creation, odometer | **58** | **0 failures** | 0 |
+
+**Total: 91 browser journeys, 0 failures, both batches exit 0.**
+
+The RTE05 workbench staying green is the load-bearing evidence here: the capture
+is wired into six of its actions and the durable store now sits in front of every
+send, so §36's "no extra step, no blocking spinner" had every opportunity to
+break and did not.
 
 ---
 
