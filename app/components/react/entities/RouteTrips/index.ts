@@ -17,7 +17,7 @@ export {
     queuePlanTrip,
     queueStartTrip,
     queueArrive,
-    changeTripPlan,
+    queueChangePlan,
     fetchPlanChanges,
     parseTrip,
 } from './model/services/tripsService';

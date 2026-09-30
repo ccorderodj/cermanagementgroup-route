@@ -80,7 +80,7 @@ class LocationEvidenceService:
         company_id: int,
         user_id: int,
         event_kind: LocationEventKind,
-        subject_id: int,
+        subject_id: int | None,
     ) -> WorkSession:
         """La jornada a la que esta evidencia puede pertenecer.
 
@@ -103,6 +103,13 @@ class LocationEvidenceService:
                 detail="Location evidence requires an active work session.",
             )
 
+        if subject_id is None:
+            # `end_work` sin red: la jornada se identifica por la clave de la
+            # acción que la creó, no por un id que el cliente no tiene.
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Location evidence requires an active work session.",
+            )
         cerrada = await WorkSessionsDAO.get_for_company_and_owner(
             session_id=subject_id, company_id=company_id, user_id=user_id
         )
@@ -125,6 +132,36 @@ class LocationEvidenceService:
             )
         return cerrada
 
+    @staticmethod
+    async def _resolver_sujeto(
+        *,
+        company_id: int,
+        event_kind: LocationEventKind,
+        subject_id: int | None,
+        client_action_key: str | None,
+        work_session_id: int,
+    ):
+        """Por id si se conoce, por clave de acción si no.
+
+        El schema garantiza que llega exactamente una de las dos, así que aquí
+        no hay caso ambiguo que resolver. Los dos caminos acaban en la misma
+        `SubjectsDAO.resolve`, con su comprobación de compañía y de jornada:
+        la clave sólo cambia **cómo se encuentra** la fila, no qué se le exige.
+        """
+        if client_action_key is not None:
+            return await SubjectsDAO.resolve_by_action_key(
+                company_id=company_id,
+                event_kind=event_kind,
+                client_action_key=client_action_key,
+                work_session_id=work_session_id,
+            )
+        return await SubjectsDAO.resolve(
+            company_id=company_id,
+            event_kind=event_kind,
+            subject_id=subject_id,
+            work_session_id=work_session_id,
+        )
+
     @classmethod
     async def record(
         cls,
@@ -141,10 +178,11 @@ class LocationEvidenceService:
             event_kind=payload.event_kind,
             subject_id=payload.subject_id,
         )
-        sujeto = await SubjectsDAO.resolve(
+        sujeto = await cls._resolver_sujeto(
             company_id=company_id,
             event_kind=payload.event_kind,
             subject_id=payload.subject_id,
+            client_action_key=payload.client_action_key,
             work_session_id=jornada.id,
         )
         if sujeto is None:
@@ -157,10 +195,15 @@ class LocationEvidenceService:
         )
         cls._validar_calidad(payload)
 
+        # Con el `subject_id` **resuelto**, no el del cuerpo: por el camino de
+        # la clave de acción el cuerpo no trae id, y buscar por `None` no
+        # encontraba el punto que ya estaba. El insert chocaba entonces contra
+        # el índice único y devolvía 409 por un reenvío que había hecho todo
+        # bien.
         ya = await LocationFixesDAO.find_for_event(
             company_id=company_id,
             event_kind=payload.event_kind,
-            subject_id=payload.subject_id,
+            subject_id=sujeto.subject_id,
         )
         if ya is not None:
             # Reenvío de la cola. No se sobrescribe: el primer punto es el que
@@ -197,7 +240,7 @@ class LocationEvidenceService:
             existente = await LocationFixesDAO.find_for_event(
                 company_id=company_id,
                 event_kind=payload.event_kind,
-                subject_id=payload.subject_id,
+                subject_id=sujeto.subject_id,
             )
             if existente is None:
                 raise
@@ -313,10 +356,11 @@ class LocationEvidenceService:
             event_kind=payload.event_kind,
             subject_id=payload.subject_id,
         )
-        sujeto = await SubjectsDAO.resolve(
+        sujeto = await cls._resolver_sujeto(
             company_id=company_id,
             event_kind=payload.event_kind,
             subject_id=payload.subject_id,
+            client_action_key=payload.client_action_key,
             work_session_id=jornada.id,
         )
         if sujeto is None:
@@ -327,7 +371,7 @@ class LocationEvidenceService:
         punto = await LocationFixesDAO.find_for_event(
             company_id=company_id,
             event_kind=payload.event_kind,
-            subject_id=payload.subject_id,
+            subject_id=sujeto.subject_id,
         )
         if punto is not None:
             raise HTTPException(

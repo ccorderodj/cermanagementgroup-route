@@ -36,50 +36,6 @@ function esRechazoDefinitivoDeEvidencia(error: unknown): boolean {
  * continúa tras un fallo. Un punto que el servidor rechaza no puede bloquear a
  * los demás, porque entre ellos no hay dependencia de orden.
  */
-/**
- * Ata una entrada con sujeto pendiente a la fila que ya existe en el servidor.
- *
- * Devuelve el `payload` listo para enviar, o `null` si **no se puede
- * demostrar** a qué fila pertenece. Nunca adivina: §4 prohíbe atar por
- * proximidad, y "el que había" es una forma de proximidad.
- *
- * La condición para atar es estrecha a propósito: sólo si hay **una sola**
- * entrada pendiente de ese tipo de sujeto. Si el supervisor hizo dos viajes sin
- * red, dos puntos de `start_trip` competirían por el mismo `trip.id` y
- * cualquiera de los dos podría ser el equivocado; en ese caso no se ata
- * ninguno y el barrido del servidor los declara Missing, que es la respuesta
- * veraz.
- */
-async function resolverSujeto(
-    entrada: PendingLocationEvidence,
-    pendientes: PendingLocationEvidence[],
-): Promise<Record<string, unknown> | null> {
-    if (!entrada.subjectPending) return entrada.payload;
-
-    const competidoras = pendientes.filter(
-        (otra) => otra.subjectPending === entrada.subjectPending,
-    ).length;
-    if (competidoras > 1) return null;
-
-    let actual: {
-        work_session?: { id: number } | null;
-        current_trip?: { id: number } | null;
-    };
-    try {
-        actual = (await $api.get('/worksessions/current')).data;
-    } catch {
-        // Sin servidor no se puede resolver todavía. Se deja pendiente.
-        return null;
-    }
-
-    const fila = entrada.subjectPending === 'work_session'
-        ? actual?.work_session
-        : actual?.current_trip;
-    if (!fila?.id) return null;
-
-    return { ...entrada.payload, subject_id: fila.id };
-}
-
 async function enviarEvidencia(
     pendientes: PendingLocationEvidence[],
     indice: number,
@@ -90,14 +46,14 @@ async function enviarEvidencia(
         return { synced: sincronizadas, failed: fallidas };
     }
     const entrada = pendientes[indice];
-    const resuelto = await resolverSujeto(entrada, pendientes);
-    if (resuelto === null) {
-        // Todavía no se puede atar. Se conserva y se reintenta al siguiente
-        // vaciado; no se descarta y no se ata a lo que no se puede probar.
-        return enviarEvidencia(pendientes, indice + 1, sincronizadas, fallidas + 1);
-    }
+    // Ya no hay nada que resolver aquí. El `payload` trae la identidad del
+    // sujeto desde que se capturó —un `subject_id` si se conocía, o la clave de
+    // la acción que lo crea— así que enviar es enviar. La versión anterior
+    // intentaba deducir el sujeto al vaciar y se negaba a atar cuando había dos
+    // acciones del mismo tipo pendientes, lo que convertía puntos válidos en
+    // Missing por ambigüedad. Esa deducción ya no existe.
     try {
-        await $api.post(entrada.endpoint, resuelto);
+        await $api.post(entrada.endpoint, entrada.payload);
         await removeLocationEvidence(entrada.id);
         return enviarEvidencia(pendientes, indice + 1, sincronizadas + 1, fallidas);
     } catch (error) {

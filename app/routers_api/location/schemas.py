@@ -55,7 +55,16 @@ class LocationEvidenceIn(BaseModel):
     event_kind: LocationEventKind
     #: La fila de dominio a la que pertenece el evento. Qué tabla es lo decide
     #: `event_kind`, no el cliente: ver `subject_kind_for`.
-    subject_id: int = Field(gt=0)
+    #:
+    #: Opcional desde el cierre final: sin red el id **todavía no existe**, y
+    #: entonces se identifica el sujeto por `client_action_key`.
+    subject_id: int | None = Field(default=None, gt=0)
+    #: La clave durable de la acción que **creó** la fila del sujeto.
+    #:
+    #: Es lo que hace que un punto capturado sin red se ate después a su acción
+    #: exacta: el servidor busca la fila con esa clave. Un identificador, no
+    #: autoridad — la comprobación de propiedad se aplica igual (§12).
+    client_action_key: str | None = Field(default=None, max_length=64)
 
     evidence_level: LocationEvidenceLevel
     latitude: Decimal = Field(ge=-90, le=90, decimal_places=6)
@@ -68,6 +77,20 @@ class LocationEvidenceIn(BaseModel):
     #: Sólo para `degraded_cached`, y obligatoria ahí.
     source_age_seconds: int | None = Field(default=None, ge=0, le=86_400 * 30)
     permission_state: LocationPermissionState | None = None
+
+    @model_validator(mode="after")
+    def _identifica_el_sujeto(self) -> LocationEvidenceIn:
+        """Exactamente una forma de identificar el sujeto, nunca ninguna ni dos.
+
+        Dos formas a la vez permitirían que el cliente mandara un id de una
+        fila y la clave de otra, y el servidor tendría que decidir cuál cree.
+        Esa decisión no debe existir.
+        """
+        if (self.subject_id is None) == (self.client_action_key is None):
+            raise ValueError(
+                "provide exactly one of subject_id or client_action_key"
+            )
+        return self
 
     @model_validator(mode="after")
     def _coherencia_del_nivel(self) -> LocationEvidenceIn:
@@ -89,7 +112,9 @@ class MissingLocationIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     event_kind: LocationEventKind
-    subject_id: int = Field(gt=0)
+    subject_id: int | None = Field(default=None, gt=0)
+    #: Igual que en la evidencia: sin red el id no existe todavía.
+    client_action_key: str | None = Field(default=None, max_length=64)
     reason_code: MissingLocationReason
     permission_state: LocationPermissionState | None = None
     attempts: list[LocationAttempt] = Field(default_factory=list, max_length=20)
@@ -99,6 +124,14 @@ class MissingLocationIn(BaseModel):
     #: ubicación que el sistema decidió no usar.
     rejected_age_seconds: int | None = Field(default=None, ge=0)
     rejected_accuracy_m: Decimal | None = Field(default=None, ge=0)
+
+    @model_validator(mode="after")
+    def _identifica_el_sujeto(self) -> MissingLocationIn:
+        if (self.subject_id is None) == (self.client_action_key is None):
+            raise ValueError(
+                "provide exactly one of subject_id or client_action_key"
+            )
+        return self
 
 
 class LocationEvidenceRead(BaseModel):
