@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { captureFor } from '@/shared/lib/location';
 import {
     Button, Checkbox, Label, Select, SelectContent, SelectItem,
     SelectTrigger, SelectValue, Textarea,
@@ -140,7 +141,11 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
     };
 
     const terminar = async () => {
-        if (!saliendo || !resultado) return;
+        // `execution` se comprueba aquí y no sólo en el render: esta función la
+        // captura el closure, así que el `if (!execution)` de más abajo no le
+        // dice nada al tipo. Sin bloque no hay nada que terminar ni nada a lo
+        // que atar la ubicación.
+        if (!saliendo || !resultado || !execution) return;
         setBusy(true);
         setError(null);
         try {
@@ -150,6 +155,13 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
                 notes: nota,
                 receivedById: receptor ? Number(receptor) : null,
             });
+            // El evento tiene que ser el que de verdad pasó: completar y dejar
+            // son dos hechos distintos y el servidor los comprueba contra la
+            // acción terminal guardada, así que mandar el otro se rechaza.
+            captureFor(
+                saliendo === 'complete' ? 'activity_complete' : 'activity_leave',
+                execution.id,
+            );
             await onChanged();
         } catch (err) {
             fallo(err);

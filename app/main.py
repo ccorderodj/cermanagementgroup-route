@@ -124,7 +124,10 @@ async def _platform_config_startup() -> None:
     asyncio.get_running_loop().create_task(listen_for_changes(_config_listener_stop))
     if settings.PLATFORM_SCHEDULER_ENABLED:
         from app.core.platform.scheduler import platform_scheduler
+        from app.routers_api.mileage.jobs import register_route_jobs
 
+        # Antes de arrancar: `register` solo se lee en `start()`.
+        register_route_jobs()
         await platform_scheduler.start()
 
 

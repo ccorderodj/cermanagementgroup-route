@@ -19,6 +19,7 @@ import {
 } from '@/entities/RouteOdometer';
 import {
     changeTripPlan,
+    fetchPlanChanges,
     queueArrive,
     queuePlanTrip,
     queueStartTrip,
@@ -35,6 +36,7 @@ import {
     type WorkSession,
 } from '@/entities/RouteWorkSessions';
 import { listPendingActions } from '@/shared/lib/offlineQueue';
+import { captureFor } from '@/shared/lib/location';
 
 /**
  * La jornada del supervisor, de principio a fin.
@@ -285,7 +287,21 @@ export const RouteMyRoutePage = () => {
         }
     };
 
-    const iniciarJornada = () => ejecutar(queueStartWork, 'Your workday could not be started.');
+    /**
+     * Empezar el día, y situarlo sin que se note.
+     *
+     * La captura va **después** de reconciliar porque el id de la jornada sale
+     * de ahí, y se lanza sin `await`: §11 y §36 prohíben que la acción espere a
+     * la ubicación. Si el GPS tarda quince segundos, el supervisor ya está en
+     * el workbench.
+     */
+    const iniciarJornada = async () => {
+        const ok = await ejecutar(queueStartWork, 'Your workday could not be started.');
+        if (!ok) return false;
+        const actual = await fetchCurrentWorkSession().catch(() => null);
+        if (actual?.work_session) captureFor('start_work', actual.work_session.id);
+        return true;
+    };
 
     // La evidencia de odómetro, derivada antes que las acciones porque
     // `salirDeViaje` la consulta: sin lectura de inicio resuelta no se crea
@@ -336,6 +352,8 @@ export const RouteMyRoutePage = () => {
             if (viaje && viaje.status === 'planning') {
                 await queueStartTrip(viaje.id);
                 await syncPendingWorkSessionActions();
+                // El primer waypoint del kilometraje (§18). Sin `await`.
+                captureFor('start_trip', viaje.id);
             }
             // Sin red no hay viaje que arrancar todavía: el plan se queda en la
             // cola y se reanudará al reconectar, que es para lo que existe.
@@ -351,12 +369,38 @@ export const RouteMyRoutePage = () => {
     };
 
     /** Reanudar un viaje que quedó preparado y sin salir (cola sin red). */
-    const arrancarViaje = (trip: Trip) => ejecutar(() => queueStartTrip(trip.id), 'This trip could not be started.');
+    const arrancarViaje = async (trip: Trip) => {
+        const ok = await ejecutar(() => queueStartTrip(trip.id), 'This trip could not be started.');
+        if (ok) captureFor('start_trip', trip.id);
+        return ok;
+    };
 
-    const llegar = (trip: Trip) => ejecutar(() => queueArrive(trip.id), 'Your arrival could not be recorded.');
+    const llegar = async (trip: Trip) => {
+        const ok = await ejecutar(() => queueArrive(trip.id), 'Your arrival could not be recorded.');
+        // El waypoint final (§18). Si la llegada se encoló sin red, el punto no
+        // podrá atarse todavía y lo cerrará el barrido del servidor: la captura
+        // no puede retrasar la pantalla para esperarlo.
+        if (ok) captureFor('arrived', trip.id);
+        return ok;
+    };
 
     const cambiarPlan = async (trip: Trip, plan: TripPlanInput) => {
         const ok = await ejecutar(() => changeTripPlan(trip.id, plan), 'The plan could not be changed.');
+        if (ok) {
+            // Cada Change Plan es un waypoint autoritativo (§16), y su sujeto es
+            // la **fila del cambio**, no el viaje: así varios cambios del mismo
+            // viaje quedan independientes y ordenados. `change-plan` devuelve el
+            // viaje, no el cambio, así que el id se lee del historial.
+            fetchPlanChanges(trip.id)
+                .then((cambios) => {
+                    const ultimo = cambios.at(-1);
+                    if (ultimo) captureFor('change_plan', ultimo.id);
+                })
+                .catch(() => {
+                    // Silencio (§12). Sin el id no se puede atar el punto, y el
+                    // barrido del servidor cerrará el evento al vencer la ventana.
+                });
+        }
         if (ok) setCambiandoPlan(false);
     };
 
@@ -373,6 +417,11 @@ export const RouteMyRoutePage = () => {
         setBusy(true);
         setError(null);
         try {
+            // La recuperación de End Work puede terminar después de que la
+            // jornada esté ENDED: es la excepción acotada de §13, y el servidor
+            // la admite sólo para este evento y dentro de la ventana. Se lanza
+            // **antes** del envío para que la ventana empiece a contar ya.
+            captureFor('end_work', session.id);
             await queueEndWork(session.id, deTodosModos);
             const resultado = await syncPendingWorkSessionActions();
             const rechazo = resultado.rejected?.kind === 'worksession.end'

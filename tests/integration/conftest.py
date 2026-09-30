@@ -223,6 +223,13 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "integration_event",
     "platform_audit_event",
     "platform_health_check_run",
+    # RTE06: la evidencia de ubicación y la provenance de los tramos son hechos
+    # observados. `missing_location_event` sólo admite `UPDATE` de los campos
+    # de notificación, así que su disparador también hay que desactivarlo para
+    # poder borrar entre tests.
+    "location_fix",
+    "missing_location_event",
+    "trip_mileage_segment",
 )
 
 #: Todas las tablas con datos, hijos antes que padres. `region` se siembra en
@@ -235,6 +242,13 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     # RTE04: hijos antes que padres. `trip_purpose_change` referencia a
     # `trip`, y `trip` a `work_session` y a `standard_value`.
     # RTE05: la ejecución cuelga del viaje y de los valores configurados.
+    # RTE06: el tramo cuelga del kilometraje, y el kilometraje del viaje. La
+    # evidencia de ubicación cuelga de la jornada y del viaje, así que va antes
+    # que los dos.
+    "trip_mileage_segment",
+    "trip_mileage",
+    "location_fix",
+    "missing_location_event",
     "activity_execution_activity",
     "activity_execution",
     # RTE04: la evidencia de odometro referencia jornada y vehiculo.
