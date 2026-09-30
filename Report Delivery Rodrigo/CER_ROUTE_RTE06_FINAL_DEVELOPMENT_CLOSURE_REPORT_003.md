@@ -400,10 +400,19 @@ Also asserted: identifying the subject **neither** way, or **both** ways, is a
 | Batch | Tests | Result | Exit |
 |---|---|---|---|
 | RTE06 core: exact correlation, migration safety, location evidence, Missing immutability, mileage engine, CP0 overlap, platform diagnostics | **101** | **0 failures** | 0 |
-| RTE03/RTE04/RTE05: odometer ×3, trips, activities, Route foundation, Route access | *§15.1* | *§15.1* | *§15.1* |
-| Browser suites | *§15.1* | *§15.1* | *§15.1* |
+| RTE03/RTE04/RTE05: odometer ×3, trips, activities, Route foundation, Route access | **227** | **0 failures** | 0 |
+| Browser: RTE06 offline durability, RTE06 silent capture, RTE05 workbench, RTE03 work-session offline | **33** | **0 failures** | 0 |
 
-*(Completed in §15.1 with measured figures.)*
+**Total: 328 tests and browser journeys re-run for this delta, 0 failures, every
+batch exit 0.**
+
+Batched by file because the harness stops a background run at 30 minutes —
+measured in Report 002, unchanged here. A stopped run is not reported as a pass.
+
+The browser batch matters most for this delta: the capture module, the queue and
+the workbench were all touched by the correlation change, and the RTE05 workbench
+journeys staying green is the evidence that §36's "no extra step, no blocking
+spinner" survived it.
 
 **No test was weakened, skipped or xfailed.** Two tests changed for the approved
 delta in Report 002 remain as documented there; this delta changed no existing
