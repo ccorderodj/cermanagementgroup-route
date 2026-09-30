@@ -13,6 +13,13 @@ Todo lo que sigue se midió contra el repositorio, no contra un resumen.
 
 ### CP0 — lo que ya existe y funciona
 
+> **Actualización — CP0 cerrado.** La unidad 1 de §E está entregada: migración
+> `0009_assignment_no_overlap`, restricción `EXCLUDE` en producción del esquema,
+> `overlaps_existing()` borrado, 8 tests de E5 en verde y regresión de odómetro /
+> viajes / configuración de Route sin fallos. El detalle está en el reporte de
+> RTE06. Lo que sigue en esta sección es la auditoría tal como se encontró, que
+> es lo que explica **por qué** la restricción quedó así.
+
 | Requisito §8 | Estado | Dónde |
 |---|---|---|
 | `effective_from` en el modelo | **existe** | `vehicles/models.py:269` |
@@ -280,9 +287,20 @@ datos, no un servicio nuevo: sin contenedor, sin coste.
 
 - borrar `overlaps_existing()` y su llamada — la base ya lo garantiza, y dejar la
   comprobación en Python sería el código muerto que la regla general 2 prohíbe;
-- capturar `IntegrityError` **fuera** de `async with transaction()` y devolver 409
-  con mensaje legible. Dentro, la sesión queda en rollback y `commit()` lanza
-  `PendingRollbackError` → HTTP 500. Ya ha pasado dos veces en este proyecto;
+- mapear el `IntegrityError` a un 409 legible. **Corrección a lo que decía este
+  documento en su primera versión:** afirmaba que la captura tiene que estar
+  *fuera* de `async with transaction()`. Es demasiado tajante. La regla real es
+  **no tragárselo y seguir dentro de la transacción**: eso deja la sesión en
+  rollback y `commit()` lanza `PendingRollbackError` → HTTP 500, que es lo que
+  pasó dos veces en este proyecto. Capturarlo dentro y **relanzar** —como ya
+  hacía `assign()`— es correcto: la excepción sale del gestor de contexto, que
+  hace rollback y no intenta commit. Así que aquí no se reestructuró nada;
+- distinguir las dos violaciones por el **código de PostgreSQL**, no por el
+  texto ni por `constraint_name`: `23P01` (exclusion_violation) es el solape y
+  `23505` (unique_violation) es la asignación abierta duplicada. `constraint_name`
+  **no sirve**: el dialecto asyncpg de SQLAlchemy envuelve la excepción original,
+  así que ese atributo no llega a `exc.orig` — sólo `sqlstate` sobrevive. Medido
+  en este entorno, no supuesto;
 - corregir el docstring de `VehicleAssignment`, que hoy afirma algo falso;
 - renombrar `current_for_supervisor` → `open_for_supervisor`.
 

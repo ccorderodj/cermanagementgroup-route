@@ -24,8 +24,10 @@ from sqlalchemy import (
     Numeric,
     String,
     UniqueConstraint,
+    literal_column,
     text,
 )
+from sqlalchemy.dialects.postgresql import ExcludeConstraint
 
 from app.core.enums import BusinessEnum
 from app.core.models.IsActiveMixin import IsActiveMixin
@@ -201,15 +203,25 @@ class VehicleAssignment(TimeStampedModel):
     nueva; la fila antigua se queda para que una jornada de marzo siga sabiendo
     con qué vehículo se hizo.
 
-    La regla que la base garantiza
-    ------------------------------
+    Las reglas que la base garantiza
+    -------------------------------
+    `ex_vehicle_assignment_no_overlap` es la que importa: **ninguna pareja de
+    asignaciones del mismo supervisor puede estar vigente en el mismo instante**.
+    Es una restricción `EXCLUDE` sobre `tstzrange(effective_from, effective_to,
+    '[)')`, así que cubre cualquier forma de solape y no sólo las que a alguien
+    se le ocurriera comprobar.
+
+    El intervalo es semiabierto a propósito: reasignar cierra la anterior en
+    `effective_to = desde` y abre la nueva en `effective_from = desde`, y con
+    `[)` esos dos intervalos se tocan sin solaparse.
+
     `uq_vehicle_assignment_current` es un índice único **parcial**
-    (`WHERE effective_to IS NULL`): un supervisor no puede tener dos
-    asignaciones vigentes a la vez. Dos peticiones simultáneas que intenten
-    asignarle vehículo no producen dos filas actuales — la segunda choca contra
-    el índice. Comprobarlo en Python sólo funciona mientras nadie se olvide y
-    mientras no haya concurrencia real; comprobarlo en la base funciona siempre
-    (invariante 6).
+    (`WHERE effective_to IS NULL`) y sigue siendo útil, pero es más estrecho:
+    sólo impide dos asignaciones **abiertas**. Antes era la única protección de
+    la base y por eso se colaba este caso — una cerrada `[Mar 1, Abr 1)` más una
+    nueva abierta desde el Feb 1 solapan y ninguna de las dos tiene
+    `effective_to IS NULL`. Lo tapaba una comprobación en Python que ni cubría
+    todos los casos ni era atómica; ahora lo garantiza la base (invariante 6).
 
     Lo que **no** se restringe: que un vehículo lo conduzcan varios supervisores.
     CER no aprobó esa exclusividad, así que no se inventa aquí.
@@ -236,8 +248,19 @@ class VehicleAssignment(TimeStampedModel):
             name="fk_vehicle_assignment_vehicle_same_company",
             ondelete="RESTRICT",
         ),
-        # Una sola asignación vigente por supervisor. Parcial a propósito: las
-        # cerradas pueden repetirse cuantas veces haga falta.
+        # Ninguna pareja vigente en el mismo instante, sea abierta o cerrada.
+        # La declara la migración 0009 en SQL: `ExcludeConstraint` necesita la
+        # extensión `btree_gist`, y el orden —extensión primero, restricción
+        # después— sólo se puede garantizar allí.
+        ExcludeConstraint(
+            ("company_id", "="),
+            ("supervisor_profile_id", "="),
+            (literal_column("tstzrange(effective_from, effective_to, '[)')"), "&&"),
+            name="ex_vehicle_assignment_no_overlap",
+            using="gist",
+        ),
+        # Una sola asignación **abierta** por supervisor. Más estrecha que la
+        # anterior y parcial a propósito: las cerradas pueden repetirse.
         Index(
             "uq_vehicle_assignment_current",
             "company_id",
