@@ -303,6 +303,86 @@ _CLOUDMERSIVE = Provider(
 )
 
 
+# ── Routing vial (RTE06) ────────────────────────────────────────────────────
+#
+# Los dos primeros son auto-alojados y no llevan credencial: por eso su URL
+# vive en `ROUTE_ROUTING_URL` sin cifrar. El tercero es comercial y **sí** la
+# lleva, así que su clave va por la ranura cifrada como cualquier otra.
+
+_OSRM = Provider(
+    key="osrm",
+    title="OSRM (self-hosted)",
+    summary="Open Source Routing Machine on CER's own infrastructure. No credential, no per-request cost.",
+    who="Whoever administers CER's infrastructure.",
+    recommended=True,
+    steps=(
+        GuideStep("Download an OSM extract that covers the operating area.",
+                  "https://download.geofabrik.de/"),
+        GuideStep("Preprocess it with osrm-extract, osrm-partition and osrm-customize."),
+        GuideStep("Serve it with osrm-routed --algorithm mld, reachable only from the application."),
+        GuideStep("Set ROUTE_ROUTING_URL to its base URL and restart the application."),
+    ),
+    fields=(
+        ProviderField("base_url", "Base URL", FieldKind.ENDPOINT,
+                      source="The OSRM instance", format="http://host:5000"),
+    ),
+    warnings=(
+        "OSRM has no authentication. Keep it on a private network and never expose it to the internet.",
+        "The extract must cover the operating area: outside it the engine answers NoSegment, which is the truthful answer.",
+    ),
+    docs=(DocLink("OSRM backend", "https://github.com/Project-OSRM/osrm-backend"),),
+)
+
+_VALHALLA = Provider(
+    key="valhalla",
+    title="Valhalla (self-hosted)",
+    summary="A second self-hosted engine, different implementation, same OSM data. Used as the fallback.",
+    who="Whoever administers CER's infrastructure.",
+    steps=(
+        GuideStep("Build the tiles from the same OSM extract."),
+        GuideStep("Serve it and set ROUTE_ROUTING_FALLBACK_URL."),
+    ),
+    fields=(
+        ProviderField("base_url", "Base URL", FieldKind.ENDPOINT,
+                      source="The Valhalla instance", format="http://host:8002"),
+    ),
+    warnings=(
+        "A different engine covers a defect in the other one; a second OSRM would not.",
+    ),
+    docs=(DocLink("Valhalla", "https://github.com/valhalla/valhalla"),),
+)
+
+_TOMTOM = Provider(
+    key="tomtom",
+    title="TomTom Routing API",
+    summary="Hosted routing API. Every pair of waypoints is sent to TomTom, and each segment costs a request.",
+    who="Whoever holds CER's TomTom Developer account.",
+    steps=(
+        GuideStep("Sign in to the TomTom Developer Portal and create an API key.",
+                  "https://developer.tomtom.com/"),
+        GuideStep("Restrict the key to the Routing API and to CER's egress addresses."),
+        GuideStep("Store the key here. It is encrypted with the platform master key."),
+        GuideStep("Confirm with TomTom that the licence allows storing the derived distance permanently (see the warning below)."),
+    ),
+    fields=(
+        ProviderField("api_key", "API key", FieldKind.SECRET,
+                      source="TomTom Developer Portal > Dashboard > Keys"),
+        ProviderField("base_url", "API endpoint", FieldKind.PRESET, source="TomTom",
+                      default="https://api.tomtom.com", pattern=HTTPS_URL),
+    ),
+    warnings=(
+        "RTE06 section 27 and 28 require every segment distance to be kept and auditable forever. "
+        "Confirm TomTom's terms allow permanent storage of derived routing content before enabling this "
+        "with real data: it is a contractual check, not a technical one.",
+        "Supervisor coordinates leave CER's infrastructure on every segment.",
+        "Traffic-aware routing is disabled on purpose so the same waypoints always return the same distance. "
+        "Without that, a mileage fact could not be reproduced later.",
+    ),
+    docs=(DocLink("Calculate Route (TomTom)",
+                  "https://developer.tomtom.com/routing-api/documentation/routing/calculate-route"),),
+)
+
+
 INTEGRATIONS: tuple[Integration, ...] = (
     Integration(
         key="email",
@@ -341,6 +421,17 @@ INTEGRATIONS: tuple[Integration, ...] = (
         providers=(_CLAMAV, _CLOUDMERSIVE),
         open_decision="OD-08",
         capability_key="malware_scanner",
+    ),
+    Integration(
+        key="road_routing",
+        title="Road routing engine",
+        summary=(
+            "Turns the captured waypoints of a trip into its official mileage. Without it "
+            "the mileage stays pending and then terminalises saying so: it never invents a number."
+        ),
+        required=False,
+        providers=(_OSRM, _VALHALLA, _TOMTOM),
+        capability_key="road_routing",
     ),
 )
 
