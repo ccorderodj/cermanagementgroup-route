@@ -604,17 +604,23 @@ def get_road_router() -> RoadRouter:
     La integración va primero porque es lo que un administrador cambia en
     caliente; las variables de entorno exigen desplegar.
 
-    El adaptador se cachea
-    ----------------------
-    Se construye una vez por proceso. Cambiar la configuración **no** lo
-    reconstruye: hace falta reiniciar, o llamar a `set_road_router(None)`. Es
-    deliberado —montar un cliente por tramo sería caro— pero es la causa más
-    común de "ya puse la URL y sigue diciendo que no hay motor".
+    No se cachea, y es deliberado
+    -----------------------------
+    Se construye en **cada** llamada, igual que `get_storage()`. Lo cacheado es
+    el snapshot de configuración, que ya trae su TTL y su `NOTIFY`, así que
+    guardar además el adaptador no ahorraba nada y rompía algo: un
+    administrador que cambiaba de proveedor en la pantalla no veía efecto
+    hasta que alguien reiniciaba el proceso, sin que nada se lo dijera.
+
+    Construir es barato: los adaptadores sólo guardan cadenas. El cliente HTTP
+    nace y muere dentro de `distance()`, no aquí.
+
+    `_router` sigue existiendo, pero ahora es una **sustitución explícita** —lo
+    que pone `set_road_router`— y no una caché.
     """
-    global _router
-    if _router is None:
-        _router = _construir()
-    return _router
+    if _router is not None:
+        return _router
+    return _construir()
 
 
 def _construir() -> RoadRouter:
@@ -683,7 +689,12 @@ def _desde_la_integracion(tiempo: float) -> RoadRouter | None:
 
 
 def set_road_router(router: RoadRouter | None) -> RoadRouter | None:
-    """Sustituye el adaptador y devuelve el anterior. `None` vuelve al de config."""
+    """Sustituye el adaptador y devuelve el anterior. `None` vuelve al de config.
+
+    Es para los tests. En producción nadie lo llama: `get_road_router()` lee la
+    configuración en cada llamada, así que un cambio en la pantalla surte
+    efecto sin reiniciar nada.
+    """
     global _router
     previo = _router
     _router = router

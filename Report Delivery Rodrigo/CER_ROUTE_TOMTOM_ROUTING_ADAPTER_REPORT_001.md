@@ -2,7 +2,7 @@
 
 **Fecha**: 2026-10-01
 **Alcance**: tercer adaptador de routing (TomTom) y comando de reposición de kilometrajes fallidos
-**Estado**: `COMPLETED` para el adaptador; `COMPLETED WITH PENDING ITEMS` para la integración de plataforma
+**Estado**: `COMPLETED`
 **Rama**: `feature/tomtom-routing-adapter`
 
 ---
@@ -187,7 +187,37 @@ Coordenadas de Athens, Georgia —la zona del entorno de pruebas—:
 Las cinco quedan como tests en `test_route_routing_live.py`, tras la puerta
 `TOMTOM_API_KEY`, igual que los de OSRM y Valhalla.
 
-### 4.5 Errores propios durante la ejecución
+### 4.5 Dos defectos que llegaron hasta la pantalla — `CONFIRMED`
+
+Los dos los había medido y anunciado antes de que ocurrieran, y los dos
+ocurrieron igual. Se corrigen en este mismo cambio.
+
+**`Verify` no verificaba.** Declaré `capability_key="road_routing"` sin
+implementar su comprobación en `diagnostics.CHECKS`. El administrador pulsó el
+botón y recibió *"This integration cannot be verified"*. Las otras cuatro
+integraciones sí tenían la suya. **Nada en la suite lo detectó**: 74 tests en
+verde con una capacidad declarada que no se podía comprobar.
+
+Ahora existe `_road_routing`, y no es un ping: pide una ruta corta y conocida y
+comprueba lo único imposible de falsear —que por carretera no se va menos que en
+línea recta—. Un motor puede responder `200 OK` con una distancia de otro
+continente; preguntar si el puerto está abierto no detecta nada de eso.
+
+Y hay un test, `test_toda_integracion_tiene_comprobacion`, para que no se repita.
+
+**El cambio de proveedor no surtía efecto.** `get_road_router()` cacheaba el
+adaptador en una global, así que cambiar de proveedor en la pantalla no hacía
+nada hasta que alguien reiniciaba el proceso, sin que nada se lo dijera.
+
+Era además inconsistente con el proyecto: `get_storage()` **no cachea**, lee el
+snapshot en cada llamada. Lo cacheado es la configuración, que ya trae TTL y
+`NOTIFY`. Construir un adaptador es barato —sólo guarda cadenas; el cliente HTTP
+nace dentro de `distance()`—, así que la caché no ahorraba nada y rompía algo.
+
+Alineado con `get_storage()`. `set_road_router` sigue existiendo como
+sustitución explícita para los tests.
+
+### 4.6 Errores propios durante la ejecución
 
 Se reportan porque ocurrieron.
 
@@ -212,7 +242,9 @@ código. Los dos salieron en la primera ejecución.
 | `tests/test_tomtom_router.py` | **PASS** — 13/13 |
 | `tests/integration/test_reprocess_failed_mileage.py` | **PASS** — 5/5 |
 | `tests/test_permission_catalog.py` | **PASS** — 7/7 |
-| Regresión del lote completo | **PASS** — **53 passed, 1 skipped**, `exit 0` (tras la corrección) |
+| Regresión del lote completo | **PASS** — **68 passed, 1 skipped**, `exit 0` |
+| Comprobación de salud, 4 escenarios | **PASS** — sin motor, TomTom real, clave inválida, motor que miente |
+| Toda integración tiene comprobación | **PASS** — 5/5 |
 | Comando en modo simulación contra la base local | **PASS** — corre, 0 candidatos (base vacía) |
 | **Contra la API real de TomTom** | **PASS** — 5 tests, `6 passed, 9 skipped in 11.12s` |
 | Migraciones | `NOT APPLICABLE` — sin cambio de esquema |
@@ -253,18 +285,18 @@ Pendiente:
 |---|---|---|
 | Verificar los términos de TomTom (§4.1) | `PENDING` — **no es trabajo de Development** | — |
 | Probar con clave real y registrar las cifras | `COMPLETED` | — |
-| Comprobación de salud `road_routing` | `PENDING` | 1,5 |
-| Invalidar la caché del router al guardar la integración | `PENDING` | 1,0 |
-| Tests del cableado integración → adaptador | `PENDING` | 1,5 |
-| Test que exija comprobación de salud a toda integración | `PENDING` | 0,5 |
+| Comprobación de salud `road_routing` | `COMPLETED` | — |
+| Eliminar la caché del router | `COMPLETED` | — |
+| Tests del cableado integración → adaptador | `COMPLETED` | — |
+| Test que exija comprobación de salud a toda integración | `COMPLETED` | — |
 | Reponer los fallidos del entorno de pruebas | `PENDING` — espera decisión de rango | 0,5 |
-| **Subtotal** | | **5,0** |
+| **Subtotal** | | **0,5** |
 
 Coeficientes: integración de terceros **80-100 LoC/h** (se usó 90),
 backend/dominio **150-200 LoC/h** (se usó 175). Margen **+30%** por integración
 de terceros.
 
-**Total pendiente con margen: 6,5 horas-agente.**
+**Total pendiente con margen: 0,7 horas-agente.**
 
 ---
 

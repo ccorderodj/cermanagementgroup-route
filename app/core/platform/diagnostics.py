@@ -216,6 +216,81 @@ async def _scheduler() -> tuple[str, str]:
     return HEALTHY, "The scheduler is running."
 
 
+async def _road_routing() -> tuple[str, str]:
+    """Pide una ruta corta y conocida, y comprueba que la respuesta es creíble.
+
+    Por qué una ruta de verdad y no un ping
+    ---------------------------------------
+    Un motor de routing puede responder `200 OK` y devolver una distancia de
+    otro continente: es el modo de fallo que describe `OsrmRouter` —el que no
+    rompe nada y miente—. Preguntar si el puerto está abierto no detecta nada
+    de eso.
+
+    Así que se pide una ruta entre dos puntos cuya separación en línea recta se
+    conoce, y se comprueba lo único que es imposible falsear: **por carretera
+    no se puede ir menos que en línea recta**. Si el motor ajustó las
+    coordenadas a un grafo que no cubre la zona, o si alguien invirtió
+    latitud y longitud en un adaptador, la relación se rompe y esto lo ve.
+
+    Dónde está el punto de prueba
+    -----------------------------
+    Times Square → Bryant Park, Manhattan. No se elige por bonito: tiene que
+    ser un sitio que cualquier extracto de Estados Unidos cubra, para que un
+    `no hay carretera` signifique de verdad que el motor no sirve y no que el
+    mapa desplegado es de otra región.
+
+    Un motor auto-alojado con un extracto de otro país responderá
+    `NoSegment`, y eso es correcto: ese despliegue **no** puede calcular las
+    rutas de CER tampoco.
+    """
+    from decimal import Decimal
+
+    from app.routers_api.mileage.routing import (
+        Punto,
+        RoutingUnavailable,
+        UnconfiguredRouter,
+        get_road_router,
+        haversine_meters,
+    )
+
+    motor = get_road_router()
+    if isinstance(motor, UnconfiguredRouter):
+        return (
+            NOT_APPLICABLE,
+            "No routing engine is configured, so trip mileage stays pending.",
+        )
+
+    a = Punto(latitude=Decimal("40.758000"), longitude=Decimal("-73.985500"))
+    b = Punto(latitude=Decimal("40.753600"), longitude=Decimal("-73.983300"))
+
+    try:
+        resultado = await motor.distance(a, b)
+    except RoutingUnavailable as fallo:
+        # Transitorio es "ahora no"; permanente es "esta configuración no
+        # sirve". Son dos problemas distintos y se informan distinto.
+        if fallo.transient:
+            return UNREACHABLE, f"The routing engine did not answer: {fallo}"
+        return AUTH_FAILED, f"The routing engine rejected the request: {fallo}"
+    except Exception as fallo:  # noqa: BLE001
+        return UNREACHABLE, f"The routing engine failed: {fallo}"
+
+    recta = haversine_meters(a, b)
+    if resultado.distance_meters < recta:
+        # Geométricamente imposible. Casi siempre significa coordenadas
+        # invertidas o un extracto que no cubre la zona.
+        return (
+            DEGRADED,
+            f"{motor.name} returned {resultado.distance_meters} m for a "
+            f"{recta} m straight line, which is impossible by road.",
+        )
+
+    return (
+        HEALTHY,
+        f"{motor.name} answered {resultado.distance_meters} m "
+        f"({resultado.method}) for a known {recta} m straight line.",
+    )
+
+
 async def _triggers() -> tuple[str, str]:
     return await integrity.check_protection_triggers()
 
@@ -243,6 +318,8 @@ CHECKS: tuple[CheckDefinition, ...] = (
                     "Writes, reads and removes a probe, and confirms the bucket is private.", "_storage"),
     CheckDefinition("malware_scanner", "Malware scanning", "integration",
                     "Scans the EICAR test file, which must be rejected, and a clean sample.", "_scanner"),
+    CheckDefinition("road_routing", "Road routing engine", "integration",
+                    "Asks for a short known route and checks the answer is not shorter than the straight line.", "_road_routing"),
     CheckDefinition("integrity.protection_triggers", "Evidence protection", "integrity",
                     "The database triggers that stop signatures and evidence from being rewritten.", "_triggers"),
     CheckDefinition("integrity.migrations", "Database version", "integrity",
