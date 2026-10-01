@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import lru_cache
 from pathlib import Path
 
 from app.core.rbac.catalog import CAPABILITY_NAMES, DEFAULT_ROLES, capabilities_for
@@ -48,18 +49,53 @@ def _string_list(node: ast.AST) -> list[str] | None:
     return values
 
 
+# Directorios en los que no hay código de la aplicación. Se podan **durante**
+# el recorrido, no después: `app/node_modules` tiene 6.832 directorios y 51.622
+# ficheros, y `rglob` desciende a todos ellos antes de que un filtro sobre
+# `path.parts` pueda descartarlos. Medido: 2.513 ms descendiendo contra 166 ms
+# podando, para los mismos 205 ficheros de la aplicación.
+#
+# Y no es sólo tiempo. `app/node_modules` contiene hoy dos ficheros `.py`
+# (`flatted/python/flatted.py` y `shell-quote/print.py`) que este test estaba
+# parseando con `ast`. Hoy los dos parsean y ninguno menciona una capacidad, así
+# que no fallaba nada; pero qué se parsea dependía de qué paquetes npm hubiera
+# instalados, y bastaba una dependencia nueva con un `.py` de Python 2 para que
+# `ast.parse` levantara un `SyntaxError` sin relación con el producto.
+DIRECTORIOS_AJENOS = frozenset(
+    {"node_modules", "components", "migrations", "__pycache__", ".venv"}
+)
+
+
+def _fuentes_del_backend() -> list[Path]:
+    """Los `.py` de la aplicación, sin descender a lo que no es suyo."""
+    encontrados: list[Path] = []
+    pendientes = [BACKEND_ROOT]
+
+    while pendientes:
+        for entrada in pendientes.pop().iterdir():
+            if entrada.is_dir():
+                if entrada.name not in DIRECTORIOS_AJENOS:
+                    pendientes.append(entrada)
+            elif entrada.suffix == ".py":
+                encontrados.append(entrada)
+
+    return encontrados
+
+
+@lru_cache(maxsize=1)
 def permissions_required_by_backend() -> dict[str, list[str]]:
     """Capacidades que exige cada archivo, leyendo el AST.
 
     Se usa el AST y no una expresión regular porque una regexp no distingue una
     llamada real de una mención en un comentario o en una cadena de texto.
+
+    El resultado se cachea porque dos tests lo piden y el árbol de fuentes no
+    cambia durante una ejecución: leerlo dos veces era repetir un cálculo cuyo
+    resultado ya se tenía. Lo que devuelve no se muta en ningún sitio.
     """
     found: dict[str, list[str]] = {}
 
-    for path in BACKEND_ROOT.rglob("*.py"):
-        if "components" in path.parts or "migrations" in path.parts:
-            continue
-
+    for path in _fuentes_del_backend():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
         for node in ast.walk(tree):
