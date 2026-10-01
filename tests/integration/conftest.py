@@ -285,6 +285,34 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
 )
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _pool_de_un_test():
+    """Devuelve las conexiones al cerrar el test, no antes y no después.
+
+    Por qué existe
+    --------------
+    El motor de tests usa pool, igual que producción. Sin esto no podría:
+    `pytest-asyncio` abre un **event loop nuevo por test**, y una conexión de
+    asyncpg queda atada al loop que la creó. Si el pool la guarda para el test
+    siguiente, ese loop ya está cerrado y el teardown muere con
+    `RuntimeError: Event loop is closed`. Está medido: con pool y sin esto, 10
+    de 22 tests dan ERROR.
+
+    Lo que hace es acotar la vida del pool a **un test**, que es exactamente la
+    vida de un event loop. Dentro del test se reutiliza la conexión —que es de
+    donde sale la ganancia: un test de integración abría ~16 conexiones a 156 ms
+    cada una para 6,1 ms de consultas— y al terminar no queda ninguna viva que
+    el test siguiente pueda heredar.
+
+    No toca ningún dato ni ninguna aserción: sólo cierra sockets.
+    """
+    yield
+
+    from app.database import engine
+
+    await engine.dispose()
+
+
 @pytest_asyncio.fixture
 async def seeded(database_schema) -> Fixture:
     """Dos compañías completas, sus roles, sus usuarios y el catálogo.

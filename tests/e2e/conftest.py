@@ -34,6 +34,7 @@ import pytest
 from app.config import settings
 from tests.integration.conftest import (  # noqa: F401
     TEST_PASSWORD,
+    _pool_de_un_test,
     alpha_client,
     seeded,
 )

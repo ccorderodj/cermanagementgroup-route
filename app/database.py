@@ -11,7 +11,7 @@ la de desarrollo, porque la suite recrea el esquema.
 
 from typing import Callable
 
-from sqlalchemy import NullPool, event
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
@@ -24,9 +24,30 @@ from app.core.database.query_profiler import (
 
 if settings.is_testing:
     DATABASE_URL = settings.TEST_DATABASE_URL
-    # Sin pool: cada test abre y cierra su conexión, y el pool mantiene vivas
-    # conexiones que impiden borrar la base al terminar.
-    DATABASE_PARAMS: dict = {"poolclass": NullPool}
+    # Se reutilizan las conexiones, igual que en producción.
+    #
+    # Antes no había pool, con el motivo de que mantendría vivas conexiones que
+    # impiden borrar la base al terminar. Ese motivo ya no se corresponde con el
+    # código: `tests/conftest.py::_reset_schema` no borra la base, hace
+    # `DROP SCHEMA public CASCADE` y acto seguido `await engine.dispose()`, que
+    # cierra el pool entero. Y sólo se llama en los dos extremos de la sesión de
+    # pytest, con el pool vacío en el primero.
+    #
+    # Lo que costaba, medido sobre 520 conexiones en 90 s de suite: cada
+    # conexión vivía 156 ms para ejecutar 6,1 ms de consultas —el 96 % de su
+    # vida era el saludo TCP y la autenticación—, y un test de integración abre
+    # unas 16, que son ~2,5 s de los 2,74 s que tardaba.
+    #
+    # No cambia ninguna aserción: cambia cuántas veces se paga abrir la
+    # conexión. `pool_pre_ping` está por el mismo motivo que en producción, y
+    # aquí además cubre que una conexión sobreviva a un `DROP SCHEMA`. Los
+    # tamaños son los que el propio proyecto declara en `config.py`: no se
+    # inventa aquí una capacidad distinta de la que ya está decidida.
+    DATABASE_PARAMS: dict = {
+        "pool_pre_ping": True,
+        "pool_size": settings.DB_POOL_SIZE,
+        "max_overflow": settings.DB_POOL_MAX_OVERFLOW,
+    }
 else:
     DATABASE_URL = settings.DATABASE_URL
     DATABASE_PARAMS = {
