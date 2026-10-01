@@ -167,6 +167,13 @@ class MissingLocationReason(BusinessEnum):
     CACHED_REJECTED = "cached_rejected"
     #: La ventana de recuperación terminó sin punto y sin más información.
     RECOVERY_WINDOW_EXHAUSTED = "recovery_window_exhausted"
+    #: Hubo puntos durante la ventana, pero **todos** superaban el umbral de
+    #: precisión aprobado. Es un hecho distinto de `RECOVERY_WINDOW_EXHAUSTED`,
+    #: que dice "sin punto": aquí sí los hubo y se rechazaron por calidad.
+    #: Decirlo con el otro motivo sobrecargaría una razón con un hecho que no
+    #: describe, y quien lea la traza no podría distinguir un GPS que no fija
+    #: de uno que fija mal (D-FIELD-03).
+    RECOVERY_ACCURACY_REJECTED = "recovery_accuracy_rejected"
     #: El cliente nunca volvió a decir nada y lo cerró el sweeper.
     NO_CLIENT_REPORT = "no_client_report"
 

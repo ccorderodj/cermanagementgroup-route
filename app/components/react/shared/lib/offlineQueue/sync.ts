@@ -24,7 +24,21 @@ function esRechazoDefinitivoDeEvidencia(error: unknown): boolean {
     // 404: el evento aún no existe en el servidor porque su acción sigue en la
     // cola. Reintentar **sí** sirve.
     // 408 y 429: el servidor pide esperar.
-    if (estado === 404 || estado === 408 || estado === 429) return false;
+    // 409: es **una carrera, no un veredicto**. La captura de `start_work` se
+    // dispara a la vez que la acción que crea la jornada, así que la evidencia
+    // puede llegar antes de que esa jornada esté `ACTIVE` y el servidor
+    // responde "requires an active work session". Tratarlo como definitivo
+    // descartaba evidencia válida: el evento se quedaba sin punto y sin
+    // Missing, es decir en el limbo que §11 no contempla. Medido en
+    // navegador: POST /api/location/evidence -> 409, cero filas en
+    // `location_fix` y cero en `missing_location_event`.
+    //
+    // El otro 409 del endpoint —la ventana de recuperación de End Work ya
+    // cerrada— seguirá fallando, y es correcto: ese reintento se agota contra
+    // el límite de la cola en vez de perder la evidencia en el primer intento.
+    if (estado === 404 || estado === 408 || estado === 409 || estado === 429) {
+        return false;
+    }
     return estado >= 400 && estado < 500;
 }
 

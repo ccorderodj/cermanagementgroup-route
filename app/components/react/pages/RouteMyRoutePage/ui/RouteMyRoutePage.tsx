@@ -151,6 +151,66 @@ function Destino({ trip }: { trip: Trip }) {
     );
 }
 
+/**
+ * La tarea de odómetro que el supervisor tenía abierta, de forma que
+ * sobreviva a que Android recree la pestaña al volver de la cámara.
+ *
+ * Por qué hace falta algo durable
+ * -------------------------------
+ * `capturandoInicio` es `useState`. Mientras el proceso de la página viva da
+ * igual, pero Android Chrome descarta y recrea la pestaña con frecuencia al
+ * abrir la cámara bajo presión de memoria, y entonces todo el estado de React
+ * se pierde: la página vuelve al workbench con la tarea sin resolver y nada
+ * que indique dónde estaba el supervisor. Es el hallazgo de campo.
+ *
+ * Por qué `sessionStorage` y no el servidor
+ * -----------------------------------------
+ * Esto **no es evidencia**: es dónde estaba mirando una persona. Mandarlo al
+ * servidor crearía estado de interfaz en el dominio, que es justo lo que la
+ * arquitectura evita. `sessionStorage` dura lo que la pestaña, que es
+ * exactamente lo que tiene que durar.
+ *
+ * Y no sustituye a la verdad de dominio: si hay foto subida, la tarea se
+ * reanuda igual aunque esto esté vacío —ver `capturandoOdometro`—. Esto sólo
+ * cubre el caso en el que la página murió **antes** de que la foto llegara a
+ * subirse, que no deja ningún rastro en el servidor (ODO-05).
+ */
+function llaveDeTarea(sessionId: number, end: 'start' | 'end'): string {
+    return `cer.route.odometer.${sessionId}.${end}`;
+}
+
+function marcarTarea(sessionId: number, end: 'start' | 'end'): void {
+    try {
+        sessionStorage.setItem(llaveDeTarea(sessionId, end), '1');
+    } catch {
+        // Modo privado o almacenamiento bloqueado. No es un fallo: se pierde
+        // la reanudación en ese caso concreto y el resto sigue igual.
+    }
+}
+
+function olvidarTarea(sessionId: number, end: 'start' | 'end'): void {
+    try {
+        sessionStorage.removeItem(llaveDeTarea(sessionId, end));
+    } catch {
+        // Ídem.
+    }
+}
+
+function tareaMarcada(sessionId: number, end: 'start' | 'end'): boolean {
+    try {
+        return sessionStorage.getItem(llaveDeTarea(sessionId, end)) === '1';
+    } catch {
+        return false;
+    }
+}
+
+/** Si la evidencia ya tiene foto subida. Verdad de dominio, no de interfaz. */
+function tieneFotoPersistida(evidencia: OdometerEvidence | null): boolean {
+    return evidencia !== null
+        && evidencia.captured_at !== null
+        && evidencia.captured_at !== undefined;
+}
+
 export const RouteMyRoutePage = () => {
     const [view, setView] = useState<Vista>({ phase: 'loading' });
     const [odometro, setOdometro] = useState<OdometerSessionState | null>(null);
@@ -206,14 +266,31 @@ export const RouteMyRoutePage = () => {
             // La evidencia de odómetro se lee junto a la jornada: de ella
             // depende si se puede salir, y no tenerla a mano obligaría a la
             // pantalla a adivinar.
-            setOdometro(
-                await fetchSessionOdometer(sesion.id).catch(() => null),
-            );
+            const evidencia = await fetchSessionOdometer(sesion.id)
+                .catch(() => null);
+            setOdometro(evidencia);
 
             const confirmar = (vista: Vista) => {
                 ultimaVista.current = vista;
                 setView(vista);
             };
+
+            // La lectura de CIERRE pendiente manda sobre cualquier otra fase.
+            //
+            // Antes, `phase: 'ending'` sólo se ponía dentro del flujo de cerrar
+            // la jornada, así que era estado volátil: si Android recreaba la
+            // pestaña al volver de la cámara, `reconcile` calculaba `working` y
+            // la tarea de cierre desaparecía de la vista, con la evidencia
+            // pendiente en el servidor y nada que lo dijera. Era el hallazgo de
+            // campo en su mitad de END (ODO-03).
+            //
+            // Ahora sale de la evidencia, que es verdad de dominio y sobrevive
+            // a todo. Y **no reabre la jornada**: `ended_at` ya está escrito, y
+            // esto sólo decide qué pantalla se muestra.
+            if (evidencia?.end && !isOdometerResolved(evidencia.end.status)) {
+                confirmar({ phase: 'ending', session: sesion });
+                return;
+            }
 
             if (!viaje) {
                 confirmar({ phase: 'working', session: sesion });
@@ -321,7 +398,21 @@ export const RouteMyRoutePage = () => {
     // ningún viaje.
     const inicio: OdometerEvidence | null = odometro?.start ?? null;
     const faltaInicio = inicio !== null && !isOdometerResolved(inicio.status);
-    const capturandoOdometro = capturandoInicio && inicio !== null;
+    // La captura de inicio se abre por tres caminos, y los tres son
+    // restaurables. El primero es el único volátil, y a propósito: los otros
+    // dos son los que hacen que la tarea sobreviva a que Android recree la
+    // pestaña al volver de la cámara (ODO-01, ODO-02, ODO-05).
+    //
+    //   1. el supervisor acaba de pulsar el botón;
+    //   2. **ya hay foto subida** — verdad de dominio: la tarea está a medias
+    //      y lo que falta es confirmar la lectura (ODO-04);
+    //   3. quedó marcada la intención antes de abrir la cámara, para el caso
+    //      en que la página muriera **antes** de subir la foto (ODO-05).
+    const capturandoOdometro = inicio !== null && faltaInicio && (
+        capturandoInicio
+        || tieneFotoPersistida(inicio)
+        || tareaMarcada(ultimaJornada.current?.id ?? -1, 'start')
+    );
     const distancia = readingAsNumber(odometro?.odometer_distance);
 
     /**
@@ -516,6 +607,9 @@ export const RouteMyRoutePage = () => {
         // de resolverse. Mientras se consulta, el supervisor sigue viendo la
         // captura — que es la verdad: aún no sabemos que quedó resuelta.
         await reconcile();
+        // La tarea quedó resuelta: la marca ya no describe nada y dejarla
+        // reabriría la captura en el siguiente arranque de la pestaña.
+        olvidarTarea(ultimaJornada.current?.id ?? -1, 'start');
         setCapturandoInicio(false);
 
         if (pendiente) {
@@ -526,6 +620,9 @@ export const RouteMyRoutePage = () => {
 
     /** Cancelar la captura devuelve al workbench, sin viaje empezado. */
     const cancelarOdometro = () => {
+        // Cancelar es una decisión del supervisor, así que la marca se va con
+        // ella: reanudar algo que alguien acaba de cerrar sería ignorarle.
+        olvidarTarea(ultimaJornada.current?.id ?? -1, 'start');
         setCapturandoInicio(false);
         setPlanPendiente(null);
     };
@@ -594,7 +691,13 @@ export const RouteMyRoutePage = () => {
                             <OdometerPendingBanner
                                 status={inicio.status}
                                 disabled={busy}
-                                onCapture={() => setCapturandoInicio(true)}
+                                onCapture={() => {
+                                    // Se marca ANTES de que el componente abra
+                                    // la cámara: si la página muere con ella
+                                    // abierta, esto es lo único que queda.
+                                    marcarTarea(view.session.id, 'start');
+                                    setCapturandoInicio(true);
+                                }}
                             />
                         )}
 

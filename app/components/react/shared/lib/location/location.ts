@@ -116,6 +116,16 @@ async function leerPermiso(): Promise<EstadoDelPermiso> {
     }
 }
 
+/**
+ * Respiro entre intentos de recuperación.
+ *
+ * La ventana se acota por tiempo, no por número de intentos, así que sin esto
+ * un proveedor que responde al instante la convertiría en un bucle ocupado.
+ * Dos segundos dan margen al GPS para fijar algún satélite más, que es la
+ * razón por la que reintentar sirve de algo.
+ */
+const PAUSA_ENTRE_INTENTOS_MS = 2000;
+
 interface PuntoCrudo {
     latitude: number;
     longitude: number;
@@ -382,41 +392,131 @@ async function capturar(
     }
 
     // ── Etapa 3: la ventana de recuperación ───────────────────────────────
+    //
+    // Reintenta **hasta que la ventana se agote**, no una sola vez.
+    //
+    // Antes era un único `pedirPosicion` con el ancho de la ventana como
+    // timeout, y sin comprobar la precisión: lo que devolviera se aceptaba
+    // como `recovered`. Un punto rechazado en la etapa 1 por tener 2 km de
+    // error entraba aquí como evidencia autoritativa, y `for_trip_waypoints`
+    // no vuelve a filtrar por nivel ni por precisión, así que acababa siendo
+    // un waypoint oficial de kilometraje. Era el nivel más lento de obtener
+    // y el único sin exigencia (F-1).
+    //
+    // Ahora se exige **el mismo umbral que `fresh`**: un punto recuperado no
+    // puede ser de peor calidad que uno recién capturado sólo por haber
+    // tardado más. Se reutiliza `freshMaxAccuracyM` a propósito, en vez de
+    // añadir un segundo umbral configurable: dos números que significan lo
+    // mismo acaban divergiendo, y entonces nadie sabe cuál manda.
+    //
+    // Que un candidato no valga **no cierra la ventana**: mientras quede
+    // tiempo se vuelve a intentar, porque el GPS suele mejorar según fija
+    // satélites. Lo que cierra la ventana es el reloj.
     const inicioRecuperacion = Date.now();
-    try {
-        const punto = await pedirPosicion({
-            enableHighAccuracy: true,
-            timeout: politica.recoveryWindowSeconds * 1000,
-            maximumAge: 0,
-        });
-        // Se envía con **su** hora de captura, que es posterior al evento. Es
-        // correcto y es el punto de `recovered`: la hora dice cuándo se midió,
-        // no cuándo ocurrió el evento (§11).
-        await enviarPunto(
-            eventKind,
-            subject,
-            'recovered',
-            punto,
-            permiso,
-        );
-    } catch (error) {
-        const fallo = error as GeolocationPositionError;
-        intentos.push({
-            stage: 'recovery',
-            started_at: new Date(inicioRecuperacion).toISOString(),
-            duration_ms: Date.now() - inicioRecuperacion,
-            error_code: fallo?.code,
-            error_message: fallo?.message?.slice(0, 300),
-        });
-        await declararMissing(
-            eventKind,
-            subject,
-            razonDe(fallo?.code),
-            intentos,
-            permiso,
-            rechazado,
-        );
+    const finDeVentana = inicioRecuperacion + politica.recoveryWindowSeconds * 1000;
+    // Precisión del mejor candidato rechazado, para que el Missing pueda
+    // decir **cuánto** fallaba. Nunca se guarda dónde estaba.
+    let mejorPrecisionRechazada: number | null = null;
+    let huboCandidato = false;
+    let ultimoFallo: GeolocationPositionError | undefined;
+
+    // Los `await` de dentro son secuenciales **a propósito**: cada intento
+    // tiene que terminar antes de decidir si queda ventana para el siguiente,
+    // y lanzarlos en paralelo convertiría un reintento acotado en una ráfaga
+    // de peticiones de posición simultáneas.
+    /* eslint-disable no-await-in-loop */
+    while (Date.now() < finDeVentana) {
+        const inicioIntento = Date.now();
+        const restante = finDeVentana - inicioIntento;
+        try {
+            const punto = await pedirPosicion({
+                enableHighAccuracy: true,
+                // Lo que quede de ventana, nunca más: el timeout no puede
+                // sobrevivir a la ventana que lo acota.
+                timeout: restante,
+                maximumAge: 0,
+            });
+            huboCandidato = true;
+            const precision = punto.accuracy;
+            if (precision === null || precision <= politica.freshMaxAccuracyM) {
+                // Se envía con **su** hora de captura, que es posterior al
+                // evento. Es correcto y es el punto de `recovered`: la hora
+                // dice cuándo se midió, no cuándo ocurrió el evento (§11).
+                await enviarPunto(
+                    eventKind,
+                    subject,
+                    'recovered',
+                    punto,
+                    permiso,
+                );
+                return;
+            }
+            // Midió, pero con demasiado error. Se deja constancia de **cuánto**
+            // y se sigue intentando. Las coordenadas no se guardan: §12 y la
+            // regla de privacidad ya aprobada para el candidato cacheado.
+            if (
+                mejorPrecisionRechazada === null
+                || precision < mejorPrecisionRechazada
+            ) {
+                mejorPrecisionRechazada = precision;
+            }
+            intentos.push({
+                stage: 'recovery',
+                started_at: new Date(inicioIntento).toISOString(),
+                duration_ms: Date.now() - inicioIntento,
+                error_message:
+                    `accuracy ${Math.round(precision)}m above threshold`,
+            });
+        } catch (error) {
+            const fallo = error as GeolocationPositionError;
+            ultimoFallo = fallo;
+            intentos.push({
+                stage: 'recovery',
+                started_at: new Date(inicioIntento).toISOString(),
+                duration_ms: Date.now() - inicioIntento,
+                error_code: fallo?.code,
+                error_message: fallo?.message?.slice(0, 300),
+            });
+            // El permiso denegado no mejora esperando: cortar aquí evita
+            // consumir la ventana entera preguntando lo mismo.
+            if (fallo?.code === 1) break;
+        }
+
+        // Respiro entre intentos. Sin esto, un proveedor que responde al
+        // instante convertiría la ventana en un bucle ocupado —GEO-04 lo
+        // prohíbe— y gastaría batería sin mejorar la fijación.
+        const consumido = Date.now() - inicioIntento;
+        if (consumido < PAUSA_ENTRE_INTENTOS_MS) {
+            const espera = Math.min(
+                PAUSA_ENTRE_INTENTOS_MS - consumido,
+                Math.max(0, finDeVentana - Date.now()),
+            );
+            if (espera > 0) {
+                await new Promise((listo) => {
+                    setTimeout(listo, espera);
+                });
+            }
+        }
     }
+
+    /* eslint-enable no-await-in-loop */
+
+    // La ventana se agotó. La razón distingue dos hechos que no son el mismo:
+    // no haber conseguido ningún punto, y haberlos conseguido todos
+    // demasiado imprecisos. Decir lo segundo con la razón del primero sería
+    // sobrecargar un motivo con un hecho que no describe (§29).
+    await declararMissing(
+        eventKind,
+        subject,
+        huboCandidato && mejorPrecisionRechazada !== null
+            ? 'recovery_accuracy_rejected'
+            : razonDe(ultimoFallo?.code),
+        intentos,
+        permiso,
+        mejorPrecisionRechazada !== null
+            ? { ...(rechazado ?? {}), accuracy_m: mejorPrecisionRechazada }
+            : rechazado,
+    );
 }
 
 /** Evita capturar dos veces lo mismo si la pantalla despacha la acción dos veces. */
