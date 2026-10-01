@@ -36,6 +36,7 @@ from app.routers_api.mileage.routing import (
     OsrmRouter,
     Punto,
     RoutingUnavailable,
+    TomTomRouter,
     ValhallaRouter,
     haversine_meters,
 )
@@ -312,3 +313,103 @@ async def test_a_multi_segment_trip_sums_real_road_distances():
     for tramo in (primero, segundo):
         assert tramo.provider == "osrm"
         assert tramo.distance_meters > 0
+
+
+# ── TomTom ──────────────────────────────────────────────────────────────────
+#
+# Tercer adaptador, proveedor comercial. Vive aquí por la misma razón que los
+# otros dos: sólo un motor real demuestra que el adaptador está bien escrito.
+#
+# Y lo demostró. La primera versión mandaba `instructionsType=none`, que parece
+# razonable y que los dobles aceptaron sin rechistar —un test unitario llegó a
+# afirmarlo—. TomTom respondió
+# `BAD_INPUT: Invalid InstructionsType value: [none]`: sólo acepta `coded`,
+# `text` y `tagged`, y para no recibir instrucciones se omite el parámetro.
+# Ningún doble podía encontrar eso.
+
+CLAVE_TOMTOM = os.environ.get("TOMTOM_API_KEY", "").strip()
+
+sin_tomtom = pytest.mark.skipif(
+    not CLAVE_TOMTOM,
+    reason="sin TOMTOM_API_KEY no hay cuenta de TomTom que medir",
+)
+
+#: Athens, Georgia: la zona del entorno de pruebas de CER.
+TT_A = Punto(Decimal("33.945512"), Decimal("-83.420400"))
+TT_B = Punto(Decimal("33.940328"), Decimal("-83.465930"))
+
+
+def _tomtom() -> TomTomRouter:
+    return TomTomRouter(CLAVE_TOMTOM, timeout=10.0)
+
+
+@sin_tomtom
+@pytest.mark.asyncio
+async def test_tomtom_responde_una_distancia_plausible() -> None:
+    """Por carretera nunca se va menos que en línea recta."""
+    resultado = await _tomtom().distance(TT_A, TT_B)
+    recta = haversine_meters(TT_A, TT_B)
+
+    assert resultado.provider == "tomtom"
+    assert resultado.method == "car/fastest/no-traffic"
+    assert resultado.distance_meters >= recta
+    # Un factor desorbitado significaría que la ruta es de otro sitio.
+    assert resultado.distance_meters <= recta * 3
+
+
+@sin_tomtom
+@pytest.mark.asyncio
+async def test_tomtom_es_determinista() -> None:
+    """`traffic=false` de verdad: la misma pregunta, la misma respuesta.
+
+    Es lo que hace reproducible un kilometraje que §27 y §28 obligan a
+    conservar. Con el tráfico activo esto fallaría de forma intermitente, que
+    es la peor manera de descubrirlo.
+    """
+    primero = await _tomtom().distance(TT_A, TT_B)
+    segundo = await _tomtom().distance(TT_A, TT_B)
+    assert primero.distance_meters == segundo.distance_meters
+
+
+@sin_tomtom
+@pytest.mark.asyncio
+async def test_tomtom_orden_lat_lon() -> None:
+    """Invertir las coordenadas no puede pasar por una ruta válida.
+
+    Es el modo de fallo más peligroso del adaptador: devolvería distancias
+    plausibles de otro sitio. Con estas coordenadas, invertirlas cae en el mar,
+    y TomTom lo rechaza nombrando el punto.
+    """
+    invertido = _tomtom()
+    with pytest.raises(RoutingUnavailable) as exc:
+        await invertido.distance(
+            Punto(TT_A.longitude, TT_A.latitude),
+            Punto(TT_B.longitude, TT_B.latitude),
+        )
+    assert exc.value.transient is False
+
+
+@sin_tomtom
+@pytest.mark.asyncio
+async def test_tomtom_sin_carretera_es_permanente() -> None:
+    """Un punto en mitad del Atlántico: terminal honesto, no reintento."""
+    mar = Punto(Decimal("30.000000"), Decimal("-40.000000"))
+    with pytest.raises(RoutingUnavailable) as exc:
+        await _tomtom().distance(TT_A, mar)
+    assert exc.value.transient is False
+    assert "MAP_MATCHING_FAILURE" in str(exc.value)
+
+
+@sin_tomtom
+@pytest.mark.asyncio
+async def test_tomtom_clave_invalida_no_filtra_la_clave() -> None:
+    """401 permanente, y el mensaje no lleva la credencial.
+
+    Ese mensaje acaba en `trip_mileage.last_error`, que se conserva: una clave
+    filtrada ahí quedaría en la base para siempre.
+    """
+    falsa = "clave-que-no-existe-000"
+    with pytest.raises(RoutingUnavailable) as exc:
+        await TomTomRouter(falsa, timeout=10.0).distance(TT_A, TT_B)
+    assert exc.value.transient is False
+    assert falsa not in str(exc.value)

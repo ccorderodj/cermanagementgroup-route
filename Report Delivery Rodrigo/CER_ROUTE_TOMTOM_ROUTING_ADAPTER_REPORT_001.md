@@ -2,7 +2,7 @@
 
 **Fecha**: 2026-10-01
 **Alcance**: tercer adaptador de routing (TomTom) y comando de reposición de kilometrajes fallidos
-**Estado**: `COMPLETED WITH PENDING VALIDATION`
+**Estado**: `COMPLETED` para el adaptador; `COMPLETED WITH PENDING ITEMS` para la integración de plataforma
 **Rama**: `feature/tomtom-routing-adapter`
 
 ---
@@ -148,7 +148,46 @@ falta reiniciar. Es deliberado —montar un cliente por tramo sería caro— per
 la causa más común de "ya puse la URL y sigue diciendo que no hay motor", y ahora
 está documentado en el propio docstring.
 
-### 4.3 Errores propios durante la ejecución
+### 4.3 Lo que sólo encontró la API real — `CONFIRMED`
+
+**El adaptador no funcionaba.** La primera versión mandaba
+`instructionsType=none`, que parece razonable y que **los 13 tests unitarios
+aceptaron sin rechistar** —uno de ellos llegaba a afirmarlo como correcto—.
+TomTom respondió:
+
+```
+BAD_INPUT: Invalid InstructionsType value: [none]
+```
+
+Sólo acepta `coded`, `text` y `tagged`; para no recibir instrucciones el
+parámetro **se omite**, y con `routeRepresentation=summaryOnly` tampoco
+vendrían. Corregido, con el comentario en el código para que nadie lo vuelva a
+añadir "por claridad", y el test unitario invertido para que ahora exija su
+ausencia.
+
+Es exactamente lo que este reporte decía que un doble no puede demostrar, y
+ocurrió a la primera llamada. Un doble confirma la lógica; sólo el motor real
+confirma que el adaptador está bien escrito.
+
+### 4.4 Evidencia de la ejecución real
+
+Coordenadas de Athens, Georgia —la zona del entorno de pruebas—:
+
+| Comprobación | Medido |
+|---|---|
+| Ruta A→B | **4.976 m** (3,092 mi) por carretera |
+| Línea recta | 4.239,37 m (2,634 mi) |
+| Factor de desvío | **1,174** — la vía supera a la recta, como debe |
+| Determinismo | misma pregunta dos veces → **4976 = 4976**. `traffic=false` funciona |
+| Coordenadas invertidas | `MAP_MATCHING_FAILURE`, nombrando el origen. **Permanente** |
+| Punto en el Atlántico | `MAP_MATCHING_FAILURE`. **Permanente** |
+| Clave inválida | `401`, **permanente**, y la clave **no aparece** en el mensaje |
+| `provider` / `method` | `tomtom` / `car/fastest/no-traffic`; `formatVersion` 0.0.12 |
+
+Las cinco quedan como tests en `test_route_routing_live.py`, tras la puerta
+`TOMTOM_API_KEY`, igual que los de OSRM y Valhalla.
+
+### 4.5 Errores propios durante la ejecución
 
 Se reportan porque ocurrieron.
 
@@ -173,9 +212,9 @@ código. Los dos salieron en la primera ejecución.
 | `tests/test_tomtom_router.py` | **PASS** — 13/13 |
 | `tests/integration/test_reprocess_failed_mileage.py` | **PASS** — 5/5 |
 | `tests/test_permission_catalog.py` | **PASS** — 7/7 |
-| Regresión del lote completo | **PASS** — **74 passed, 1 skipped**, `exit 0` |
+| Regresión del lote completo | **PASS** — **53 passed, 1 skipped**, `exit 0` (tras la corrección) |
 | Comando en modo simulación contra la base local | **PASS** — corre, 0 candidatos (base vacía) |
-| **Contra la API real de TomTom** | **NOT RUN** — no hay clave |
+| **Contra la API real de TomTom** | **PASS** — 5 tests, `6 passed, 9 skipped in 11.12s` |
 | Migraciones | `NOT APPLICABLE` — sin cambio de esquema |
 | `npm run check` | `NOT APPLICABLE` — sin cambio de frontend |
 
@@ -213,16 +252,19 @@ Pendiente:
 | Tarea | Estado | Horas-agente |
 |---|---|---|
 | Verificar los términos de TomTom (§4.1) | `PENDING` — **no es trabajo de Development** | — |
-| Probar con clave real y registrar las cifras | `PENDING` | 1,5 |
-| Sección de TomTom en el test de routing real | `PENDING` | 1,0 |
+| Probar con clave real y registrar las cifras | `COMPLETED` | — |
+| Comprobación de salud `road_routing` | `PENDING` | 1,5 |
+| Invalidar la caché del router al guardar la integración | `PENDING` | 1,0 |
+| Tests del cableado integración → adaptador | `PENDING` | 1,5 |
+| Test que exija comprobación de salud a toda integración | `PENDING` | 0,5 |
 | Reponer los fallidos del entorno de pruebas | `PENDING` — espera decisión de rango | 0,5 |
-| **Subtotal** | | **3,0** |
+| **Subtotal** | | **5,0** |
 
 Coeficientes: integración de terceros **80-100 LoC/h** (se usó 90),
 backend/dominio **150-200 LoC/h** (se usó 175). Margen **+30%** por integración
 de terceros.
 
-**Total pendiente con margen: 3,9 horas-agente.**
+**Total pendiente con margen: 6,5 horas-agente.**
 
 ---
 

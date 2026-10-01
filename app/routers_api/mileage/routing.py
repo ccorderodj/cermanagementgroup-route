@@ -411,8 +411,14 @@ class TomTomRouter:
             "key": self._key,
             # Sólo el resumen: sin geometría ni maniobras, que aquí no se usan
             # y multiplicarían la respuesta.
+            #
+            # `instructionsType` **no se manda**. Es tentador poner `"none"`,
+            # pero TomTom sólo acepta `coded`, `text` y `tagged`, y responde
+            # `BAD_INPUT: Invalid InstructionsType value: [none]`. Para no
+            # recibir instrucciones se omite el parámetro, y con
+            # `summaryOnly` tampoco vendrían. Medido contra la API real: un
+            # doble no puede descubrir esto.
             "routeRepresentation": "summaryOnly",
-            "instructionsType": "none",
             "travelMode": "car",
             "routeType": "fastest",
             # Reproducibilidad. Ver el docstring.

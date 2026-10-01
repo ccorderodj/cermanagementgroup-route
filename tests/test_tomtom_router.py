@@ -78,8 +78,12 @@ async def test_pide_resumen_y_sin_trafico() -> None:
     # cuando se pregunte, y un kilometraje auditable dejaria de ser reproducible.
     assert visto["traffic"] == ["false"]
     assert visto["routeRepresentation"] == ["summaryOnly"]
-    assert visto["instructionsType"] == ["none"]
     assert visto["key"] == [CLAVE]
+    # `instructionsType` NO se manda. Este test lo afirmaba al reves —con
+    # `"none"`— y pasaba, porque el doble acepta lo que se le diga. La API
+    # real respondio `BAD_INPUT: Invalid InstructionsType value: [none]`.
+    # Queda fijado para que nadie lo vuelva a anadir "por claridad".
+    assert "instructionsType" not in visto
 
 
 @pytest.mark.asyncio
