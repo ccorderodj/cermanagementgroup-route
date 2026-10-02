@@ -123,6 +123,40 @@ CAPABILITIES: tuple[Capability, ...] = (
     # excepción, y el control dejaría de serlo. Estaba en el catálogo
     # certificado de RTE01 y se activa ahora que hay endpoints que la exigen.
     _cap("route", "records.adjust", "Review and decide odometer manual-entry exceptions"),
+    # Medida temporal de estabilización, autorizada por CER.
+    #
+    # Qué concede, exactamente
+    # ------------------------
+    # Que la excepción de odómetro que **el propio supervisor** pide se apruebe
+    # sola, para que el día no se detenga esperando a un administrador. Nada
+    # más: no deja revisar ni decidir la excepción de nadie, no da acceso a la
+    # cola de administración, y no sustituye a `records.adjust`.
+    #
+    # Es deliberadamente estrecha por lo que dice el comentario de arriba: dar
+    # `records.adjust` a quien ejecuta la jornada le dejaría aprobar cualquier
+    # excepción, y eso sí desarmaría el control. Esta sólo quita la espera en el
+    # caso que CER acotó.
+    #
+    # Lo que **no** cambia
+    # --------------------
+    # La excepción sigue siendo una excepción: mismo motivo cerrado, misma
+    # trazabilidad, y la lectura sigue entrando como `manual_no_photo`. No se
+    # fabrica foto ni lectura. El camino normal de foto y confirmación no se
+    # toca.
+    #
+    # No se siembra en ningún rol
+    # ---------------------------
+    # No está en `DEFAULT_ROLES` a propósito: instalar este código no cambia el
+    # comportamiento de nadie. Hay que concederla a mano al rol que corresponda,
+    # en el tenant que corresponda, y por eso la reversión es retirarla —lo que
+    # devuelve el flujo de `requested` y aprobación por administrador sin tocar
+    # ninguna línea de código—.
+    _cap(
+        "route",
+        "odometer.selfapprove",
+        "Temporarily let the supervisor's own odometer exception be approved "
+        "automatically, during CER stabilisation",
+    ),
 )
 
 CAPABILITY_NAMES: frozenset[str] = frozenset(c.name for c in CAPABILITIES)

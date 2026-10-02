@@ -457,8 +457,25 @@ class OdometerService:
         reason: str,
         reason_note: str | None,
         actor_user_id: int,
+        auto_approve: bool = False,
     ) -> OdometerExceptionRequest:
-        """Pide permiso para teclear sin foto. No lo concede."""
+        """Pide permiso para teclear sin foto, y con `auto_approve` se lo da.
+
+        `auto_approve` es lo que el servidor averiguo del permiso real de quien
+        llama (`route.odometer.selfapprove`), nunca algo que venga del cuerpo de
+        la peticion. Por defecto es `False`, de modo que el flujo de siempre
+        -pedir y esperar al administrador- es el que se obtiene si nadie
+        concede nada.
+
+        Lo que la autoaprobacion hace es **saltarse la espera**, no la
+        excepcion: la solicitud queda `approved`, la evidencia pasa a
+        `exception_approved`, y el supervisor sigue teniendo que teclear su
+        lectura, que entrara como `manual_no_photo`. No se escribe ninguna
+        lectura ni se fabrica ninguna foto.
+
+        Es una medida temporal de estabilizacion. Retirar la capacidad del rol
+        devuelve el comportamiento anterior sin tocar codigo.
+        """
         fila = await OdometerService.ensure_row(
             company_id=company_id,
             work_session_id=work_session_id,
@@ -491,7 +508,22 @@ class OdometerService:
                 evidencia = await session.scalar(
                     select(OdometerEvidence).where(OdometerEvidence.id == fila.id)
                 )
-                evidencia.status = OdometerStatus.EXCEPTION_REQUESTED.value
+                if auto_approve:
+                    # En la **misma** transaccion: si se partiera en dos, entre
+                    # una y otra existiria una solicitud pedida y sin decidir
+                    # que un administrador podria ver y decidir, y acabariamos
+                    # con dos decisiones sobre el mismo hecho.
+                    #
+                    # `decided_by` queda en NULL a proposito: no hubo persona.
+                    # Poner al propio supervisor diria que se aprobo a si mismo,
+                    # y poner a un administrador seria inventarlo. La columna ya
+                    # era nulable, y "decidida sin decisor" es exactamente lo
+                    # que paso.
+                    solicitud.status = OdometerExceptionStatus.APPROVED.value
+                    solicitud.decided_at = ahora
+                    evidencia.status = OdometerStatus.EXCEPTION_APPROVED.value
+                else:
+                    evidencia.status = OdometerStatus.EXCEPTION_REQUESTED.value
                 evidencia.version = evidencia.version + 1
                 await session.flush()
         except IntegrityError:
@@ -518,6 +550,27 @@ class OdometerService:
             summary=f"Manual odometer entry requested for {evidence_type}",
             changes={"reason": {"old": None, "new": reason}},
         )
+
+        if auto_approve:
+            # Un evento aparte, y con accion propia. Dos eventos cuentan los dos
+            # hechos: se pidio, y se aprobo sola. Reutilizar `approve` la haria
+            # indistinguible de la decision de una persona en cuanto alguien
+            # leyera la auditoria, que es lo contrario de lo que se pide.
+            await record_event(
+                company_id=company_id,
+                entity_type="odometer_exception_request",
+                entity_id=solicitud_id,
+                action="auto_approve",
+                actor_user_id=actor_user_id,
+                summary=(
+                    f"Manual odometer entry auto-approved for {evidence_type} "
+                    "under route.odometer.selfapprove"
+                ),
+                changes={
+                    "status": {"old": "requested", "new": "approved"},
+                    "decided_by": {"old": None, "new": None},
+                },
+            )
 
         return await OdometerExceptionRequestsDAO.get_for_company(
             request_id=solicitud_id, company_id=company_id
