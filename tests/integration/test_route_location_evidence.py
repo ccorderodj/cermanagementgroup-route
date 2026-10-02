@@ -1084,3 +1084,99 @@ async def test_a_configured_window_reaches_the_client(seeded, alpha_client):
     assert cuerpo["recovery_window_seconds"] == 7, cuerpo
     # Y lo que no se guardó sigue viniendo de los valores por defecto.
     assert cuerpo["fresh_max_accuracy_m"] == 100, cuerpo
+
+
+# ── El barrido cubre los siete eventos, no tres ─────────────────────────────
+
+
+async def test_the_sweep_closes_work_session_events_too(seeded, alpha_client):
+    """`start_work` y `end_work` también se cierran si nadie los reporta.
+
+    Por qué este test existe
+    ------------------------
+    El barrido sólo miraba `start_trip`, `arrived` y `change_plan`. Los cuatro
+    eventos restantes —los dos de jornada y los dos de actividad— no tenían
+    tercer camino: si el cliente no volvía a hablar de ellos, el evento se
+    quedaba sin punto y sin Missing **para siempre**, que es el limbo que esta
+    función existe para evitar.
+
+    No se notaba porque la entrada se quedaba en la cola del dispositivo
+    reintentando, lo que daba la impresión de que alguien seguía ocupándose. Al
+    acotar esos reintentos —FR-03 del cierre anterior— el hueco pasó a ser
+    observable: una entrada caducada de `start_work` se retiraba y nadie
+    cerraba el hecho.
+    """
+    from app.routers_api.location.service import sweep_unreported_windows
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    assert "id" in jornada, jornada
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert cierre.status_code in (200, 201), cierre.text
+
+    # Se envejece la jornada entera: el corte del barrido se mide contra la
+    # hora de ocurrencia, y esperar cinco minutos de reloj no demostraría nada
+    # que esto no demuestre.
+    async with async_session_maker() as sesion:
+        await sesion.execute(
+            text(
+                "UPDATE work_session SET started_at = now() - interval '2 hours', "
+                "ended_at = now() - interval '2 hours' "
+                "WHERE id = :j AND company_id = :c"
+            ),
+            {"j": jornada["id"], "c": seeded.alpha.id},
+        )
+        await sesion.commit()
+
+    await sweep_unreported_windows()
+
+    hechos = await _filas(
+        "SELECT event_kind, reason_code, trip_id, subject_kind "
+        "FROM missing_location_event WHERE company_id = :c AND subject_id = :s",
+        {"c": seeded.alpha.id, "s": jornada["id"]},
+    )
+    por_evento = {f["event_kind"]: f for f in hechos}
+    assert "start_work" in por_evento, hechos
+    assert "end_work" in por_evento, hechos
+    for evento in ("start_work", "end_work"):
+        fila = por_evento[evento]
+        assert fila["reason_code"] == "no_client_report", fila
+        assert fila["subject_kind"] == "work_session", fila
+        # La jornada no tiene viaje, y el hecho no se lo inventa.
+        assert fila["trip_id"] is None, fila
+
+    # Y no se fabrican coordenadas para rellenar el hueco.
+    assert await _filas(
+        "SELECT id FROM location_fix WHERE company_id = :c", {"c": seeded.alpha.id}
+    ) == []
+
+
+def test_the_sweep_cannot_leave_an_event_kind_behind():
+    """Ningún evento del catálogo puede quedarse fuera del barrido.
+
+    Es un guardián estructural, y conviene ser exacto sobre lo que demuestra:
+    lee el SQL del barrido y comprueba que cada valor de `LocationEventKind`
+    aparece en él. **No** demuestra que cada rama funcione —eso lo hacen los
+    tests de comportamiento—, sino que añadir un evento nuevo sin darle tercer
+    camino hace fallar la suite en vez de pasar inadvertido.
+
+    Existe porque el hueco anterior duró así: cuatro de los siete eventos sin
+    barrido, sin que nada lo dijera.
+    """
+    import inspect
+
+    from app.routers_api.location import service
+    from app.routers_api.location.models import LocationEventKind
+
+    fuente = inspect.getsource(service.sweep_unreported_windows)
+    sin_cubrir = [
+        evento.value
+        for evento in LocationEventKind
+        if f"'{evento.value}'" not in fuente
+    ]
+    assert not sin_cubrir, (
+        "estos eventos no aparecen en el barrido, así que un evento sin punto "
+        f"y sin Missing se quedaría así para siempre: {sin_cubrir}"
+    )
