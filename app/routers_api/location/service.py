@@ -541,12 +541,27 @@ async def sweep_unreported_windows(*, limit: int = 200) -> int:
     vuelve a hablar de ese evento nunca. Es la misma enfermedad que §24 prohíbe
     para `Pending`, sólo en otra tabla.
 
-    Se hace en SQL sobre las tres clases de sujeto porque la pregunta es
+    Se hace en SQL sobre las cuatro clases de sujeto porque la pregunta es
     "eventos ocurridos hace más que la ventana, sin punto y sin missing", y
     resolverla en Python obligaría a traer los candidatos de cuatro tablas.
 
     `subject_kind_for` no se usa aquí: la consulta ya emite la pareja correcta
     por construcción, y el `CHECK` de la tabla la verifica al insertar.
+
+    Cubre los siete eventos, y antes cubría tres
+    --------------------------------------------
+    Sólo barría `start_trip`, `arrived` y `change_plan`. `start_work`,
+    `end_work`, `activity_complete` y `activity_leave` no tenían tercer camino:
+    si el cliente no volvía a hablar de ellos, el evento se quedaba sin punto y
+    sin Missing para siempre. Es exactamente el limbo que esta función existe
+    para evitar, en cuatro de los siete eventos que lo pueden sufrir.
+
+    No se notó porque el cliente casi siempre vuelve, y porque hasta este
+    cierre nada acotaba sus reintentos: la entrada se quedaba en la cola
+    reintentando, lo que mantenía la ilusión de que alguien seguía ocupándose.
+    Al acotar la cola —que es lo que pide FR-03— el límite de este barrido pasó
+    a ser observable: una entrada caducada de `start_work` se retiraba y nadie
+    cerraba el hecho.
     """
     politica = _politica()
     limite = timedelta(
@@ -577,6 +592,37 @@ async def sweep_unreported_windows(*, limit: int = 200) -> int:
                    'change_plan', 'trip_purpose_change', c.id, c.changed_at
             FROM trip_purpose_change c
             JOIN trip t ON t.id = c.trip_id AND t.company_id = c.company_id
+
+            UNION ALL
+
+            -- La jornada no tiene viaje, y `trip_id` es nulable justo para
+            -- esto: el sujeto de `start_work` es la jornada misma.
+            SELECT w.company_id, w.id, NULL::integer,
+                   'start_work', 'work_session', w.id, w.started_at
+            FROM work_session w
+
+            UNION ALL
+
+            SELECT w.company_id, w.id, NULL::integer,
+                   'end_work', 'work_session', w.id, w.ended_at
+            FROM work_session w WHERE w.ended_at IS NOT NULL
+
+            UNION ALL
+
+            -- Cuál de los dos eventos fue lo dice `terminal_action`, que es la
+            -- misma fuente que usa el cliente al capturar. Una ejecución sin
+            -- terminalizar todavía no ha producido ningún evento que capturar.
+            SELECT a.company_id, a.work_session_id, a.trip_id,
+                   'activity_complete', 'activity_execution', a.id, a.ended_at
+            FROM activity_execution a
+            WHERE a.ended_at IS NOT NULL AND a.terminal_action = 'complete'
+
+            UNION ALL
+
+            SELECT a.company_id, a.work_session_id, a.trip_id,
+                   'activity_leave', 'activity_execution', a.id, a.ended_at
+            FROM activity_execution a
+            WHERE a.ended_at IS NOT NULL AND a.terminal_action = 'leave'
         ) e
         WHERE e.occurred_at < :corte
           AND NOT EXISTS (
