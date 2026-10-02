@@ -28,12 +28,14 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, status
 
+from app.core.platform.config_service import platform_config
 from app.routers_api.users.permissions import require_permissions
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.location.schemas import (
     LocationEvidenceIn,
     LocationEvidenceRead,
+    LocationPolicyRead,
     MissingLocationIn,
     MissingLocationRead,
 )
@@ -44,6 +46,29 @@ from app.routers_api.users.models import Users
 router = APIRouter(prefix="/location", tags=["Route Location"])
 
 EJECUTA = Depends(require_permissions(["route.worksession.execute"]))
+
+
+@router.get("/policy")
+async def read_location_policy(
+    _authz: None = EJECUTA,
+    _company: TenantContext = Depends(get_company_required),
+) -> LocationPolicyRead:
+    """Los umbrales de captura que debe aplicar el cliente.
+
+    Faltaba, y la falta era silenciosa: el cliente llevaba los cinco números
+    escritos en el bundle y `setLocationPolicy` estaba exportada sin que nadie
+    la llamara, así que `route_location` no llegaba al dispositivo. La política
+    es editable desde el panel de plataforma, de modo que la pantalla decía que
+    el cambio se había guardado —y se guardaba— mientras el teléfono seguía
+    capturando con los valores por defecto.
+
+    Va con la misma capacidad que la captura (`route.worksession.execute`) por
+    lo mismo que ella: conocer los umbrales con los que hay que capturar es
+    parte de ejecutar la propia ruta. No devuelve nada específico del tenant
+    —la política es de plataforma—, pero se exige compañía resuelta para que no
+    quede un endpoint autenticado fuera del alcance del subdominio.
+    """
+    return LocationPolicyRead.model_validate(platform_config.policy("route_location"))
 
 
 @router.post("/evidence", status_code=status.HTTP_201_CREATED)

@@ -168,3 +168,34 @@ class MissingLocationRead(BaseModel):
     #: (D-RTE06-MISSING-01).
     notification_status: str = "pending"
     replayed: bool = False
+
+
+class LocationPolicyRead(BaseModel):
+    """Los umbrales que el cliente necesita para capturar.
+
+    Por qué existe
+    --------------
+    El cliente tenía estos cinco números escriturados en el bundle y no había
+    forma de que los de la compañía llegaran: `setLocationPolicy` estaba
+    exportada y no la llamaba nadie, así que `route_location` —que es política
+    de plataforma, editable— no tenía ningún efecto en el dispositivo. Un
+    administrador que bajara `fresh_max_accuracy_m` veía la pantalla aceptar el
+    cambio y el teléfono seguía con 100.
+
+    No es un control: el servidor vuelve a comprobar los criterios al recibir
+    (`LocationEvidenceService._validar_calidad`). Esto evita que el cliente
+    gaste capturas que el servidor va a rechazar, y que la ventana de
+    recuperación dure algo distinto de lo que la compañía configuró.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    fresh_timeout_seconds: int
+    fresh_max_accuracy_m: int
+    cached_max_age_seconds: int
+    cached_max_accuracy_m: int
+    recovery_window_seconds: int
+    #: Va con los demas porque el cliente necesita saber **cuando deja de tener
+    #: sentido reintentar** un envio: pasada la ventana mas este margen, el
+    #: servidor cierra el hecho por su cuenta y el reintento no puede ganar.
+    sweeper_grace_seconds: int

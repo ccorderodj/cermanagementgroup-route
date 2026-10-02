@@ -41,6 +41,8 @@
  * bloquear a nadie.
  */
 
+import { z } from 'zod';
+import { $api, parseApi } from '@/shared/api';
 import { enqueueLocationEvidence } from '@/shared/lib/offlineQueue';
 import { flushPendingLocationEvidence } from '@/shared/lib/offlineQueue/sync';
 
@@ -61,6 +63,7 @@ interface LocationPolicy {
     cachedMaxAgeSeconds: number;
     cachedMaxAccuracyM: number;
     recoveryWindowSeconds: number;
+    sweeperGraceSeconds: number;
 }
 
 /**
@@ -78,13 +81,104 @@ const POLICY_POR_DEFECTO: LocationPolicy = {
     cachedMaxAgeSeconds: 300,
     cachedMaxAccuracyM: 500,
     recoveryWindowSeconds: 180,
+    sweeperGraceSeconds: 120,
 };
 
 let politica: LocationPolicy = POLICY_POR_DEFECTO;
 
-/** Sustituye los umbrales. La llama el arranque de la página de ejecución. */
+/** Sustituye los umbrales. La usa `asegurarPolitica`, y los tests. */
 export function setLocationPolicy(parcial: Partial<LocationPolicy>): void {
     politica = { ...POLICY_POR_DEFECTO, ...parcial };
+}
+
+const locationPolicySchema = z.object({
+    fresh_timeout_seconds: z.number(),
+    fresh_max_accuracy_m: z.number(),
+    cached_max_age_seconds: z.number(),
+    cached_max_accuracy_m: z.number(),
+    recovery_window_seconds: z.number(),
+    sweeper_grace_seconds: z.number(),
+});
+
+/**
+ * La promesa de la única petición de política, para no pedirla por captura.
+ *
+ * Se guarda la **promesa** y no un booleano a propósito: dos capturas
+ * simultáneas —arranque de jornada y actividad— compartirían la misma petición
+ * en vuelo en vez de lanzar dos.
+ */
+/**
+ * Lo maximo que se espera por la configuracion antes de capturar.
+ *
+ * La mitad del `freshTimeoutSeconds` de fabrica: leer cinco numeros no puede
+ * costar mas que medio intento de posicion. Pasado el plazo se captura con los
+ * valores por defecto.
+ */
+const TIMEOUT_DE_POLITICA_MS = 5_000;
+
+let politicaEnCurso: Promise<void> | null = null;
+
+/**
+ * Trae los umbrales de la compañía antes de capturar, una sola vez.
+ *
+ * Por qué hace falta
+ * ------------------
+ * `setLocationPolicy` existía, estaba exportada y **no la llamaba nadie**. El
+ * resultado es que `route_location` —política de plataforma, editable desde el
+ * panel— no tenía ningún efecto en el dispositivo: quien bajara
+ * `fresh_max_accuracy_m` o acortara `recovery_window_seconds` veía la pantalla
+ * guardar el cambio mientras el teléfono seguía con los valores del bundle.
+ *
+ * Por qué vive aquí y no en un efecto de la página
+ * ------------------------------------------------
+ * `captureFor` se llama desde dos sitios —el workbench y la parada de
+ * actividad—. En un efecto de página habría que acordarse en cada uno, y el que
+ * se olvidara capturaría con otros umbrales sin que nada lo dijera.
+ *
+ * Si la petición falla no se bloquea la captura: se siguen usando los valores
+ * por defecto, que son los mismos que el servidor trae de fábrica, y el
+ * servidor vuelve a comprobar los criterios al recibir. Lo peor que pasa es
+ * gastar un envío que el servidor rechazará.
+ */
+async function asegurarPolitica(): Promise<void> {
+    if (politicaEnCurso === null) {
+        politicaEnCurso = (async () => {
+            try {
+                // Con timeout propio, y no es un detalle: `$api` no tiene
+                // ninguno, así que sin esto una petición que se quedara en el
+                // aire bloquearía la captura **para siempre** —se espera antes
+                // de la primera etapa—. §12 dice que un fallo de ubicación no
+                // puede propagarse a los caminos operativos, y colgar la
+                // captura es la peor forma de propagarlo.
+                //
+                // El plazo es corto a propósito: esto es leer configuración, y
+                // si no llega en menos de lo que tarda un intento de posición
+                // no merece retrasar la captura. Quedarse sin ella sólo
+                // significa usar los valores de fábrica.
+                const respuesta = await $api.get('/location/policy', {
+                    timeout: TIMEOUT_DE_POLITICA_MS,
+                });
+                const leida = parseApi(
+                    locationPolicySchema,
+                    respuesta.data,
+                    'readLocationPolicy',
+                );
+                setLocationPolicy({
+                    freshTimeoutSeconds: leida.fresh_timeout_seconds,
+                    freshMaxAccuracyM: leida.fresh_max_accuracy_m,
+                    cachedMaxAgeSeconds: leida.cached_max_age_seconds,
+                    cachedMaxAccuracyM: leida.cached_max_accuracy_m,
+                    recoveryWindowSeconds: leida.recovery_window_seconds,
+                    sweeperGraceSeconds: leida.sweeper_grace_seconds,
+                });
+            } catch {
+                // Sin política del servidor se captura con los valores por
+                // defecto. No se reintenta en la siguiente captura: insistir
+                // sin red convertiría cada captura en una espera.
+            }
+        })();
+    }
+    await politicaEnCurso;
 }
 
 interface Intento {
@@ -200,6 +294,19 @@ function identidadDe(subject: Sujeto): Record<string, unknown> {
 }
 
 /**
+ * Hasta cuando tiene sentido reintentar el envio de este evento.
+ *
+ * Es la ventana de recuperacion mas el margen del barrido, contados desde
+ * ahora: exactamente los numeros con los que el servidor decide cerrar el
+ * hecho por su cuenta. Se calcula al encolar porque es cuando se conoce la
+ * politica; la cola no puede pedirla sin crear un import circular.
+ */
+function caducidadDelEnvio(): string {
+    const margen = (politica.recoveryWindowSeconds + politica.sweeperGraceSeconds) * 1000;
+    return new Date(Date.now() + margen).toISOString();
+}
+
+/**
  * Guarda el punto **antes** de intentar enviarlo, y luego intenta.
  *
  * Éste es el cambio que exige el cierre de RTE06. Antes se llamaba a `$api`
@@ -228,7 +335,7 @@ async function enviarPunto(
         ...aPayload(punto),
         ...(nivel === 'degraded_cached' ? { source_age_seconds: edadSegundos } : {}),
         permission_state: permiso,
-    });
+    }, caducidadDelEnvio());
     await flushPendingLocationEvidence();
 }
 
@@ -262,7 +369,14 @@ async function declararMissing(
         ...(rechazado?.accuracy_m !== undefined
             ? { rejected_accuracy_m: rechazado.accuracy_m.toFixed(2) }
             : {}),
-    });
+        // El Missing caduca igual que el punto, y conviene saber qué se pierde
+        // al caducar: el motivo que el cliente conocía —por ejemplo
+        // `recovery_accuracy_rejected`— y que el barrido no puede deducir. Se
+        // acota de todos modos porque lo contrario es dejar la entrada
+        // reintentándose sin fin, y porque si el servidor ya cerró la ventana
+        // es que el barrido probablemente ya escribió el hecho: insistir no
+        // recuperaría el motivo, sólo repetiría el rechazo.
+    }, caducidadDelEnvio());
     await flushPendingLocationEvidence();
 }
 
@@ -279,10 +393,48 @@ function razonDe(codigo: number | undefined): string {
     return 'recovery_window_exhausted';
 }
 
+/**
+ * Si la precisión de un punto es **verificable y aceptable**.
+ *
+ * Las dos cosas, y en ese orden. Antes cada etapa escribía la regla a mano
+ * como `precision === null || precision <= umbral`, es decir: una precisión
+ * desconocida contaba como si cumpliera el umbral. No es lo mismo. Un punto de
+ * 12 m se midió y entró; un punto sin precisión no se pudo evaluar, y aceptarlo
+ * es decir que su calidad es buena sin haberla comprobado.
+ *
+ * Que la regla esté escrita una sola vez es parte del arreglo: estaba repetida
+ * en las tres etapas, y repetida es como una de ellas se queda atrás —de hecho
+ * fue lo que pasó con la etapa de recuperación, que no comprobaba nada (F-1).
+ *
+ * El predicado de tipo deja que TypeScript sepa que en la rama buena
+ * `precision` ya es un número, sin repetir la comprobación.
+ */
+function precisionAceptable(
+    precision: number | null,
+    umbralEnMetros: number,
+): precision is number {
+    return precision !== null && precision <= umbralEnMetros;
+}
+
+/**
+ * Por qué se rechazó la precisión, dicho sin inventar el número que falta.
+ *
+ * Decir "accuracy 0m above threshold" cuando no había medida sería escribir un
+ * hecho falso en la evidencia (§29). Son dos motivos distintos y se cuentan
+ * como tales.
+ */
+function motivoDePrecision(precision: number | null, umbral: number): string {
+    return precision === null
+        ? 'accuracy unknown: cannot be evaluated'
+        : `accuracy ${Math.round(precision)}m above ${umbral}m threshold`;
+}
+
 async function capturar(
     eventKind: LocationEventKind,
     subject: Sujeto,
 ): Promise<void> {
+    // Los umbrales, antes de aplicarlos. Si falla, se usan los de fábrica.
+    await asegurarPolitica();
     const permiso = await leerPermiso();
     const intentos: Intento[] = [];
 
@@ -294,13 +446,8 @@ async function capturar(
             timeout: politica.freshTimeoutSeconds * 1000,
             maximumAge: 0,
         });
-        // En una variable propia, no leyendo `punto.accuracy` dos veces: así
-        // TypeScript sabe que tras el `return` es un número, y el mensaje de
-        // abajo puede decir cuánto era sin inventar un 0.
         const precision = punto.accuracy;
-        const aceptable = precision === null
-            || precision <= politica.freshMaxAccuracyM;
-        if (aceptable) {
+        if (precisionAceptable(precision, politica.freshMaxAccuracyM)) {
             await enviarPunto(
                 eventKind,
                 subject,
@@ -310,13 +457,18 @@ async function capturar(
             );
             return;
         }
-        // Se midió ahora pero con demasiado error. No es fresco utilizable, y
-        // tampoco cacheado: se deja constancia y se sigue a la siguiente etapa.
+        // Se preguntó ahora y lo que vino no sirve: o traía demasiado error, o
+        // no traía precisión que evaluar. No es fresco utilizable, y tampoco
+        // cacheado: se deja constancia de cuál de las dos cosas fue y se sigue
+        // a la siguiente etapa.
         intentos.push({
             stage: 'current',
             started_at: new Date(inicioFresco).toISOString(),
             duration_ms: Date.now() - inicioFresco,
-            error_message: `accuracy ${Math.round(precision)}m above threshold`,
+            error_message: motivoDePrecision(
+                precision,
+                politica.freshMaxAccuracyM,
+            ),
         });
     } catch (error) {
         const fallo = error as GeolocationPositionError;
@@ -353,10 +505,11 @@ async function capturar(
         });
         const edad = Math.max(0, Math.round((Date.now() - punto.timestamp) / 1000));
         const dentroDeEdad = edad <= politica.cachedMaxAgeSeconds;
-        const dentroDePrecision = punto.accuracy === null
-            || punto.accuracy <= politica.cachedMaxAccuracyM;
-        const suficiente = dentroDeEdad && dentroDePrecision;
-        if (suficiente) {
+        const dentroDePrecision = precisionAceptable(
+            punto.accuracy,
+            politica.cachedMaxAccuracyM,
+        );
+        if (dentroDeEdad && dentroDePrecision) {
             await enviarPunto(
                 eventKind,
                 subject,
@@ -374,11 +527,21 @@ async function capturar(
             age_seconds: edad,
             accuracy_m: punto.accuracy ?? undefined,
         };
+        // El motivo dice **cuál** de las dos condiciones falló. Antes decía
+        // siempre la edad, también cuando lo que fallaba era la precisión, y
+        // entonces la evidencia explicaba el rechazo con un hecho que no era
+        // su causa.
         intentos.push({
             stage: 'cached',
             started_at: new Date(inicioCache).toISOString(),
             duration_ms: Date.now() - inicioCache,
-            error_message: `cached point rejected: age ${edad}s`,
+            error_message: dentroDeEdad
+                ? `cached point rejected: ${motivoDePrecision(
+                    punto.accuracy,
+                    politica.cachedMaxAccuracyM,
+                )}`
+                : `cached point rejected: age ${edad}s above `
+                    + `${politica.cachedMaxAgeSeconds}s`,
         });
     } catch (error) {
         const fallo = error as GeolocationPositionError;
@@ -417,6 +580,11 @@ async function capturar(
     // Precisión del mejor candidato rechazado, para que el Missing pueda
     // decir **cuánto** fallaba. Nunca se guarda dónde estaba.
     let mejorPrecisionRechazada: number | null = null;
+    // Si alguna vez llegó un punto cuya precisión no se podía evaluar. Se
+    // cuenta aparte de `mejorPrecisionRechazada` porque no hay número que
+    // guardar, y sin esto el Missing final diría que no se consiguió ningún
+    // punto —que es falso— en vez de que no se consiguió ninguno evaluable.
+    let huboPrecisionDesconocida = false;
     let huboCandidato = false;
     let ultimoFallo: GeolocationPositionError | undefined;
 
@@ -438,7 +606,7 @@ async function capturar(
             });
             huboCandidato = true;
             const precision = punto.accuracy;
-            if (precision === null || precision <= politica.freshMaxAccuracyM) {
+            if (precisionAceptable(precision, politica.freshMaxAccuracyM)) {
                 // Se envía con **su** hora de captura, que es posterior al
                 // evento. Es correcto y es el punto de `recovered`: la hora
                 // dice cuándo se midió, no cuándo ocurrió el evento (§11).
@@ -451,10 +619,14 @@ async function capturar(
                 );
                 return;
             }
-            // Midió, pero con demasiado error. Se deja constancia de **cuánto**
-            // y se sigue intentando. Las coordenadas no se guardan: §12 y la
-            // regla de privacidad ya aprobada para el candidato cacheado.
-            if (
+            // Vino un punto y no vale: o midió con demasiado error, o no trajo
+            // precisión que evaluar. Se deja constancia de cuál fue y se sigue
+            // intentando. Las coordenadas no se guardan en ninguno de los dos
+            // casos: §12 y la regla de privacidad ya aprobada para el
+            // candidato cacheado.
+            if (precision === null) {
+                huboPrecisionDesconocida = true;
+            } else if (
                 mejorPrecisionRechazada === null
                 || precision < mejorPrecisionRechazada
             ) {
@@ -464,8 +636,10 @@ async function capturar(
                 stage: 'recovery',
                 started_at: new Date(inicioIntento).toISOString(),
                 duration_ms: Date.now() - inicioIntento,
-                error_message:
-                    `accuracy ${Math.round(precision)}m above threshold`,
+                error_message: motivoDePrecision(
+                    precision,
+                    politica.freshMaxAccuracyM,
+                ),
             });
         } catch (error) {
             const fallo = error as GeolocationPositionError;
@@ -505,14 +679,24 @@ async function capturar(
     // no haber conseguido ningún punto, y haberlos conseguido todos
     // demasiado imprecisos. Decir lo segundo con la razón del primero sería
     // sobrecargar un motivo con un hecho que no describe (§29).
+    //
+    // Una precisión desconocida cuenta como rechazo por precisión, no como
+    // "no hubo punto": hubo punto y se descartó porque su calidad no se podía
+    // evaluar. Cuál de los dos fue está en `attempts`, que es inmutable, así
+    // que el hecho queda trazable sin añadir un motivo nuevo que significara
+    // casi lo mismo.
+    const rechazadoPorPrecision = huboCandidato
+        && (mejorPrecisionRechazada !== null || huboPrecisionDesconocida);
     await declararMissing(
         eventKind,
         subject,
-        huboCandidato && mejorPrecisionRechazada !== null
+        rechazadoPorPrecision
             ? 'recovery_accuracy_rejected'
             : razonDe(ultimoFallo?.code),
         intentos,
         permiso,
+        // Si lo único que hubo fue precisión desconocida no se manda ningún
+        // `accuracy_m`: no hay número y poner un 0 sería inventarlo.
         mejorPrecisionRechazada !== null
             ? { ...(rechazado ?? {}), accuracy_m: mejorPrecisionRechazada }
             : rechazado,

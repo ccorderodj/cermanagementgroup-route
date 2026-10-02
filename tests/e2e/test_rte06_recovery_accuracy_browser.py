@@ -30,7 +30,6 @@ import json
 from contextlib import asynccontextmanager
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
 from app.database import async_session_maker
@@ -47,9 +46,6 @@ UMBRAL_POR_DEFECTO = 100
 
 #: Ventana corta para los tests. Suficiente para dos o tres intentos con la
 #: pausa de 2 s del cliente, y lo bastante breve para no alargar la suite.
-VENTANA_DE_PRUEBA = 7
-
-
 def _guion(pasos: list[dict]) -> str:
     """Un `navigator.geolocation` que devuelve lo que diga el guion.
 
@@ -107,54 +103,35 @@ async def _movil(live_server, email: str, pasos: list[dict]):
             )
             await contexto.add_init_script(_guion(pasos))
             page = await contexto.new_page()
+
+            # Los errores de la página se recogen y se imprimen al salir.
+            #
+            # Sin esto, una excepción dentro de la captura no deja rastro
+            # alguno: el test ve "no hay punto y no hay Missing" y no puede
+            # distinguir "la regla lo rechazó" de "el código se rompió a
+            # mitad". Es exactamente la confusión que costó una vuelta entera
+            # de diagnóstico en este cierre.
+            fallos: list[str] = []
+            page.on("pageerror", lambda e: fallos.append(f"pageerror: {e}"))
+            page.on(
+                "console",
+                lambda m: (
+                    fallos.append(f"console.{m.type}: {m.text}")
+                    if m.type == "error"
+                    else None
+                ),
+            )
+
             await abrir_sesion(page, email)
-            yield contexto, page
+            try:
+                yield contexto, page
+            finally:
+                if fallos:
+                    print("\n--- errores del navegador ---")
+                    for f in fallos[:20]:
+                        print(f"  {f}")
         finally:
             await navegador.close()
-
-
-@pytest_asyncio.fixture
-async def ventana_corta():
-    """Acorta la ventana de recuperación, **antes** de que arranque el servidor.
-
-    **No depende de `database_schema`**: hacerlo la ponía a reiniciar la base
-    antes que `seeded`, los usuarios desaparecían y el login del navegador
-    devolvía 401 en los diez tests. Aquí sólo escribe una fila de política.
-
-    Es fixture y no gestor de contexto por una razón medida: el cliente pide la
-    política una sola vez, al arrancar la página, y el servidor cachea su
-    instantánea de configuración. Cambiarla a mitad del test no llega a ningún
-    sitio —se midieron 11 intentos de recuperación en 18 s, que es la ventana
-    de 180 s por defecto—. Como fixture, se escribe antes de que `live_server`
-    levante el proceso, que es cuando se lee.
-    """
-    async with async_session_maker() as s:
-        previo = await s.scalar(text(
-            "SELECT value FROM platform_policy WHERE key = 'route_location'"))
-        await s.execute(text(
-            "INSERT INTO platform_policy(key, value, version, updated_at) "
-            "VALUES ('route_location', CAST(:v AS jsonb), 1, now()) "
-            "ON CONFLICT (key) DO UPDATE SET value = CAST(:v AS jsonb), "
-            "  version = platform_policy.version + 1, updated_at = now()"),
-            {"v": json.dumps({"recovery_window_seconds": VENTANA_DE_PRUEBA})})
-        # El servidor cachea su instantánea de configuración, así que escribir
-        # la fila no basta: sin esto sigue sirviendo la ventana de 180 s y el
-        # test termina antes de que se declare el Missing. Medido.
-        await s.execute(text("NOTIFY platform_config_changed"))
-        await s.commit()
-    try:
-        yield
-    finally:
-        async with async_session_maker() as s:
-            if previo is None:
-                await s.execute(text(
-                    "DELETE FROM platform_policy WHERE key = 'route_location'"))
-            else:
-                await s.execute(text(
-                    "UPDATE platform_policy SET value = CAST(:v AS jsonb) "
-                    "WHERE key = 'route_location'"),
-                    {"v": json.dumps(previo)})
-            await s.commit()
 
 
 async def _fijos(company_id: int, nivel: str | None = None) -> int:
@@ -177,10 +154,57 @@ async def _missing(company_id: int) -> list[tuple[str, dict]]:
     return [(r[0], r[1]) for r in filas]
 
 
-async def _start_work(page) -> None:
+async def _start_work(page, company_id: int) -> None:
+    """Empieza la jornada y espera a que la captura **se resuelva**.
+
+    Espera hasta que el sistema haya dicho algo -un punto o un Missing- en vez
+    de dormir un tiempo fijo. Las dos cosas mejoran con eso:
+
+    * los casos que aceptan el punto terminan en segundos en vez de esperar la
+      ventana entera, que es lo que hacia la version anterior de esto y lo que
+      convertia diez tests de veinte segundos en diez de tres minutos;
+    * los casos que necesitan que la ventana se agote esperan **su** ventana,
+      la que el servidor sirve de verdad, no una constante escrita aqui.
+
+    Aqui habia una fixture que escribia `recovery_window_seconds: 7` en
+    `platform_policy` para no esperar tres minutos. **No funcionaba, y no podia
+    funcionar**: `app/main.py` vuelve de su evento de arranque antes de
+    `platform_config.refresh()` cuando `settings.is_testing`, asi que el
+    proceso de uvicorn de los e2e nunca carga la configuracion de plataforma y
+    `policy()` devuelve siempre los valores de fabrica. Tampoco habia nadie
+    escuchando su `NOTIFY`.
+
+    Eso es deliberado -`_platform_config_vacia` aisla la configuracion por test
+    por la misma razon-, de modo que lo que estaba mal era la fixture. Su
+    efecto real fue que G3, G4, G6 y G7 median quince segundos contra una
+    ventana de ciento ochenta y fallaban diciendo "falta el Missing", que
+    parece un defecto del producto y no lo era.
+    """
     await page.goto("/route")
+
+    servida = await page.evaluate(
+        """async () => {
+            const r = await fetch('/api/location/policy', {
+                credentials: 'include',
+            });
+            return r.ok ? await r.json() : { error: r.status };
+        }"""
+    )
+    ventana = servida.get("recovery_window_seconds")
+    assert isinstance(ventana, int), f"no se pudo leer la politica: {servida}"
+
     await page.get_by_role("button", name="Start Work").click()
-    await page.wait_for_timeout(VENTANA_DE_PRUEBA * 1000 + 8_000)
+
+    # El tope cubre la ventana entera mas el envio del hecho. Si se agota sin
+    # que haya ni punto ni Missing, el test de turno lo dira con su propia
+    # asercion; aqui no se decide si eso esta bien o mal.
+    tope = ventana + 25
+    esperado = 0
+    while esperado < tope:
+        await page.wait_for_timeout(2_000)
+        esperado += 2
+        if await _fijos(company_id) > 0 or await _missing(company_id):
+            return
 
 
 # ── G1, G2, G3, G4: el umbral en la etapa de recuperación ────────────────
@@ -196,7 +220,7 @@ async def _start_work(page) -> None:
     ],
 )
 async def test_umbral_de_recuperacion(
-    ventana_corta, seeded, live_server, precision, acepta, caso
+    seeded, live_server, precision, acepta, caso
 ):
     """La etapa 3 aplica el mismo umbral que la 1.
 
@@ -211,7 +235,7 @@ async def test_umbral_de_recuperacion(
         {"accuracy": precision},        # etapa 3: el caso bajo prueba
     ]
     async with _movil(live_server, supervisor.email, pasos) as (_c, page):
-        await _start_work(page)
+        await _start_work(page, empresa.id)
 
     recuperados = await _fijos(empresa.id, "recovered")
     if acepta:
@@ -224,7 +248,7 @@ async def test_umbral_de_recuperacion(
 
 
 @pytest.mark.asyncio
-async def test_g5_candidato_malo_y_luego_bueno(ventana_corta, seeded, live_server):
+async def test_g5_candidato_malo_y_luego_bueno(seeded, live_server):
     """Un candidato rechazado no cierra la ventana: se sigue intentando."""
     empresa = seeded.alpha
     supervisor = empresa.users["supervisor"]
@@ -235,7 +259,7 @@ async def test_g5_candidato_malo_y_luego_bueno(ventana_corta, seeded, live_serve
         {"accuracy": 40},     # recuperacion, aceptado
     ]
     async with _movil(live_server, supervisor.email, pasos) as (_c, page):
-        await _start_work(page)
+        await _start_work(page, empresa.id)
 
     assert await _fijos(empresa.id, "recovered") == 1, (
         "el segundo candidato, bueno, tenia que aceptarse")
@@ -244,7 +268,7 @@ async def test_g5_candidato_malo_y_luego_bueno(ventana_corta, seeded, live_serve
 
 @pytest.mark.asyncio
 async def test_g6_g7_todos_malos_dan_missing_con_su_motivo(
-    ventana_corta, seeded, live_server
+    seeded, live_server
 ):
     """Ventana agotada con candidatos: motivo propio, no el de 'sin punto'."""
     empresa = seeded.alpha
@@ -255,7 +279,7 @@ async def test_g6_g7_todos_malos_dan_missing_con_su_motivo(
         {"accuracy": 1800},   # todos los de recuperacion, imprecisos
     ]
     async with _movil(live_server, supervisor.email, pasos) as (_c, page):
-        await _start_work(page)
+        await _start_work(page, empresa.id)
 
     assert await _fijos(empresa.id, "recovered") == 0
     motivos = await _missing(empresa.id)
@@ -317,7 +341,7 @@ async def test_g10_cached_sigue_exigiendo_las_dos_cosas(seeded, live_server):
 
 @pytest.mark.asyncio
 async def test_g11_un_candidato_rechazado_no_es_waypoint(
-    ventana_corta, seeded, live_server
+    seeded, live_server
 ):
     """Lo rechazado no existe como `location_fix`, así que no puede ser waypoint.
 
@@ -333,8 +357,52 @@ async def test_g11_un_candidato_rechazado_no_es_waypoint(
         {"accuracy": 2000},
     ]
     async with _movil(live_server, supervisor.email, pasos) as (_c, page):
-        await _start_work(page)
+        await _start_work(page, empresa.id)
 
     # Ni una fila, de ningun nivel: lo rechazado no deja rastro consultable
     # como evidencia.
     assert await _fijos(empresa.id) == 0
+
+
+# ── G12: precisión que no se puede evaluar ──────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_g12_precision_desconocida_no_es_autoritativa(seeded, live_server):
+    """Un punto sin precisión medible no entra, en ninguna etapa.
+
+    Es el hueco que CER señaló sobre el delta anterior: la regla aceptaba
+    `precision <= umbral` **o** `precision desconocida`, tratándolas como
+    equivalentes. Un punto de 12 m se midió y cumple; uno sin precisión no se
+    pudo comprobar, y aceptarlo afirma que su calidad es buena sin mirarla.
+
+    El guion devuelve posiciones con `accuracy: null` en las tres etapas, que es
+    lo que hace un proveedor que da coordenadas sin decir con cuánto error. El
+    resultado tiene que ser el mismo que para un punto groseramente impreciso:
+    ningún `location_fix`, y el hecho resuelto por el modelo escalonado.
+
+    La mitad de servidor de esto —que es la puerta real— está en
+    `tests/integration/test_route_location_evidence.py::
+    test_g12_unknown_accuracy_is_not_acceptable_accuracy`.
+    """
+    empresa = seeded.alpha
+    supervisor = empresa.users["supervisor"]
+    pasos = [
+        {"accuracy": None},
+        {"stage": "cached", "accuracy": None},
+        {"accuracy": None},
+    ]
+    async with _movil(live_server, supervisor.email, pasos) as (_c, page):
+        await _start_work(page, empresa.id)
+
+    assert await _fijos(empresa.id) == 0, (
+        "un punto cuya precisión no se puede evaluar acabó como evidencia"
+    )
+
+    motivos = await _missing(empresa.id)
+    assert len(motivos) == 1, f"el hecho no se resolvió: {motivos}"
+    razon, rechazado = motivos[0]
+    assert razon == "recovery_accuracy_rejected", razon
+    # Y no se inventa un número que no existía: sin precisión medible no hay
+    # `accuracy_m` que guardar, y un 0 ahí sería falso.
+    assert "accuracy_m" not in (rechazado or {}), rechazado
