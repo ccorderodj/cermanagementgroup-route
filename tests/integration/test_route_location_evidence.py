@@ -733,3 +733,354 @@ async def test_activity_evidence_must_match_what_actually_happened(
         json=_punto(event_kind="activity_complete", subject_id=bloque["id"]),
     )
     assert correcto.status_code == 201, correcto.text
+
+
+# ── G3, G4 y G12: la calidad se exige en los tres niveles ───────────────────
+#
+# Qué cubre este bloque y por qué está en el servidor
+# ---------------------------------------------------
+# El cliente ya comprueba la precisión antes de enviar, pero el bundle y la
+# cookie son del navegador: lo que el cliente comprueba es experiencia de uso,
+# no un control (AGENTS.md, invariante 8). La puerta tiene que estar aquí.
+#
+# Y tiene que estar **aquí** y no más adelante porque `for_trip_waypoints()` no
+# vuelve a filtrar por nivel ni por precisión: si la fila se escribe, ya es un
+# waypoint oficial de kilometraje. La única defensa es que no se escriba.
+#
+# Antes de este delta, `_validar_calidad` volvía en la primera línea para
+# cualquier nivel que no fuera `degraded_cached`, así que `fresh` y `recovered`
+# no tenían ninguna comprobación de precisión en el servidor y
+# `fresh_max_accuracy_m` estaba declarado en la política sin usarse.
+
+
+@pytest.mark.parametrize("nivel", ["fresh", "recovered"])
+async def test_g4_a_grossly_inaccurate_point_is_not_authoritative(
+    seeded, alpha_client, nivel
+):
+    """G4: dos kilómetros de error no son evidencia, en ningún nivel.
+
+    El umbral de `recovered` es el mismo que el de `fresh` a propósito: un punto
+    recuperado no puede valer menos que uno recién capturado sólo por haber
+    tardado más.
+    """
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(
+        "/api/location/evidence",
+        json=_punto(
+            event_kind="start_trip",
+            subject_id=viaje["id"],
+            nivel=nivel,
+            precision="2000.00",
+        ),
+    )
+
+    assert respuesta.status_code == 422, respuesta.text
+    assert await _filas(
+        "SELECT id FROM location_fix WHERE company_id = :c", {"c": seeded.alpha.id}
+    ) == []
+
+
+@pytest.mark.parametrize(
+    "precision, esperado",
+    [("100.00", 201), ("100.01", 422), ("99.99", 201)],
+    ids=["en-el-umbral", "justo-por-encima", "justo-por-debajo"],
+)
+async def test_g3_the_threshold_is_the_threshold(
+    seeded, alpha_client, precision, esperado
+):
+    """G3: el límite se comprueba donde está, no "más o menos" ahí.
+
+    Los tres casos juntos porque lo que se prueba es el borde: que 100 entre,
+    que 100,01 no, y que el que está justo por debajo siga entrando. Comprobar
+    sólo uno dejaría pasar un `<` escrito donde debía ir un `<=`.
+    """
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(
+        "/api/location/evidence",
+        json=_punto(
+            event_kind="start_trip",
+            subject_id=viaje["id"],
+            nivel="fresh",
+            precision=precision,
+        ),
+    )
+
+    assert respuesta.status_code == esperado, respuesta.text
+
+
+@pytest.mark.parametrize("nivel", ["fresh", "degraded_cached", "recovered"])
+async def test_g12_unknown_accuracy_is_not_acceptable_accuracy(
+    seeded, alpha_client, nivel
+):
+    """G12: una precisión que no se puede evaluar no es una precisión buena.
+
+    Es el hallazgo de CER sobre la regla implementada en el delta anterior:
+    aceptaba `precision <= umbral` **o** `precision desconocida`, tratando las
+    dos como equivalentes. No lo son. Un punto de 12 m se midió y cumple; un
+    punto sin precisión no se pudo comprobar, y aceptarlo es afirmar que su
+    calidad es buena sin haberla mirado.
+
+    Se comprueban los tres niveles porque el agujero no estaba sólo en
+    `recovered`: `fresh` aceptaba lo mismo, y al aceptarlo en la etapa 1 el
+    punto de precisión desconocida nunca llegaba a la etapa de recuperación.
+    Arreglar sólo `recovered` habría dejado el camino real abierto.
+    """
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(
+        "/api/location/evidence",
+        json=_punto(
+            event_kind="start_trip",
+            subject_id=viaje["id"],
+            nivel=nivel,
+            precision=None,
+            edad=60 if nivel == "degraded_cached" else None,
+        ),
+    )
+
+    assert respuesta.status_code == 422, respuesta.text
+    assert await _filas(
+        "SELECT id FROM location_fix WHERE company_id = :c", {"c": seeded.alpha.id}
+    ) == []
+
+
+async def test_g12_a_rejected_point_never_becomes_a_trip_waypoint(
+    seeded, alpha_client
+):
+    """FR-02: lo que se rechazó no aparece después como entrada de kilometraje.
+
+    No basta con que el POST devuelva 422. Lo que importa es lo que ve el motor
+    de kilometraje, y lo que ve es `for_trip_waypoints()`, que selecciona de
+    `location_fix` sin filtrar por nivel ni por precisión. Así que esto
+    comprueba el final del camino, no la puerta: después del rechazo, ese viaje
+    no tiene ningún waypoint.
+    """
+    from app.routers_api.location.dao import LocationFixesDAO
+
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    for precision in (None, "2000.00"):
+        respuesta = await alpha_client.post(
+            "/api/location/evidence",
+            json=_punto(
+                event_kind="start_trip",
+                subject_id=viaje["id"],
+                nivel="recovered",
+                precision=precision,
+            ),
+        )
+        assert respuesta.status_code == 422, respuesta.text
+
+    waypoints = await LocationFixesDAO.for_trip_waypoints(
+        company_id=seeded.alpha.id, trip_id=viaje["id"]
+    )
+    assert waypoints == [], (
+        "un punto rechazado por calidad acabó siendo waypoint oficial: "
+        f"{waypoints}"
+    )
+
+
+async def test_g12_the_good_point_still_enters(seeded, alpha_client):
+    """La otra mitad: endurecer la regla no puede cerrar el camino bueno.
+
+    Sin esto, los tests de arriba pasarían igual si el servidor rechazara
+    **todo**, que es el modo de fallo más fácil de introducir al añadir una
+    comprobación.
+    """
+    from app.routers_api.location.dao import LocationFixesDAO
+
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(
+        "/api/location/evidence",
+        json=_punto(
+            event_kind="start_trip",
+            subject_id=viaje["id"],
+            nivel="fresh",
+            precision="12.00",
+        ),
+    )
+    assert respuesta.status_code == 201, respuesta.text
+
+    waypoints = await LocationFixesDAO.for_trip_waypoints(
+        company_id=seeded.alpha.id, trip_id=viaje["id"]
+    )
+    assert len(waypoints) == 1, waypoints
+
+
+# ── La política de captura llega al cliente ─────────────────────────────────
+
+
+async def test_the_client_can_read_the_capture_policy(seeded, alpha_client):
+    """Los umbrales que el cliente debe aplicar se pueden pedir.
+
+    Por qué este test existe
+    ------------------------
+    No existía el endpoint. El cliente llevaba los cinco números escritos en el
+    bundle y `setLocationPolicy` estaba exportada sin que nadie la llamara, así
+    que `route_location` —política de plataforma, editable desde el panel— no
+    llegaba al dispositivo: la pantalla guardaba el cambio y el teléfono seguía
+    capturando con los valores por defecto.
+
+    Se descubrió al ejecutar por primera vez los tests de navegador G3/G4/G6/G7,
+    que acortan la ventana de recuperación con una fila de política y fallaban
+    porque el cliente no la leía nunca.
+    """
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    respuesta = await alpha_client.get("/api/location/policy")
+
+    assert respuesta.status_code == 200, respuesta.text
+    cuerpo = respuesta.json()
+    assert set(cuerpo) == {
+        "fresh_timeout_seconds",
+        "fresh_max_accuracy_m",
+        "cached_max_age_seconds",
+        "cached_max_accuracy_m",
+        "recovery_window_seconds",
+        "sweeper_grace_seconds",
+    }, cuerpo
+    # Los valores por defecto de `RouteLocationPolicy`, que son los aprobados.
+    assert cuerpo["fresh_max_accuracy_m"] == 100
+    assert cuerpo["recovery_window_seconds"] == 180
+
+
+async def test_the_capture_policy_needs_a_session(seeded, alpha_anonymous):
+    """Sin sesión no se sirve: es configuración operativa, no superficie pública."""
+    respuesta = await alpha_anonymous.get("/api/location/policy")
+    assert respuesta.status_code == 401, respuesta.text
+
+
+# ── §8.3: nada se queda en el limbo ─────────────────────────────────────────
+
+
+async def test_an_event_the_client_never_reported_is_closed_by_the_sweep(
+    seeded, alpha_client
+):
+    """El tercer camino: si el cliente no vuelve, el servidor cierra el hecho.
+
+    Por qué esto es la pieza que cierra FR-03
+    -----------------------------------------
+    El cliente acota sus reintentos —pasada la ventana más el margen deja de
+    insistir y retira la entrada—, así que la pregunta siguiente es qué pasa
+    con el evento. La respuesta no puede ser "nada": un evento sin punto y sin
+    Missing es exactamente el estado que §11 no contempla y que el hallazgo de
+    campo produjo.
+
+    Lo cierra el barrido, con el motivo que describe el hecho observable
+    —`no_client_report`— y no una suposición sobre qué le pasó al teléfono.
+
+    Se envejece el viaje con SQL porque el corte del barrido se mide contra
+    `occurred_at` y esperar cinco minutos de reloj en un test no demuestra nada
+    que esto no demuestre. `trip` no es append-only, así que se puede.
+    """
+    from app.routers_api.location.service import sweep_unreported_windows
+
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+
+    # Antes del barrido: el evento existe y no tiene ni punto ni Missing.
+    assert await _filas(
+        "SELECT id FROM location_fix WHERE company_id = :c", {"c": seeded.alpha.id}
+    ) == []
+    assert await _filas(
+        "SELECT id FROM missing_location_event WHERE company_id = :c",
+        {"c": seeded.alpha.id},
+    ) == []
+
+    async with async_session_maker() as sesion:
+        await sesion.execute(
+            text(
+                "UPDATE trip SET started_at = now() - interval '2 hours' "
+                "WHERE id = :t AND company_id = :c"
+            ),
+            {"t": viaje["id"], "c": seeded.alpha.id},
+        )
+        await sesion.commit()
+
+    cerrados = await sweep_unreported_windows()
+    assert cerrados >= 1, "el barrido no cerró el evento que nadie reportó"
+
+    hechos = await _filas(
+        "SELECT event_kind, reason_code FROM missing_location_event "
+        "WHERE company_id = :c AND subject_id = :s",
+        {"c": seeded.alpha.id, "s": viaje["id"]},
+    )
+    motivos = {(f["event_kind"], f["reason_code"]) for f in hechos}
+    assert ("start_trip", "no_client_report") in motivos, hechos
+
+    # Y no fabrica coordenadas para rellenar el hueco.
+    assert await _filas(
+        "SELECT id FROM location_fix WHERE company_id = :c", {"c": seeded.alpha.id}
+    ) == []
+
+
+async def test_the_sweep_leaves_alone_what_already_has_an_answer(
+    seeded, alpha_client
+):
+    """El barrido no duplica ni pisa lo que ya está resuelto.
+
+    La otra mitad del test de arriba: sin esto, un barrido que escribiera un
+    `no_client_report` encima de un punto válido pasaría igual los dos
+    primeros, y estaría borrando la respuesta verdadera con una genérica.
+    """
+    from app.routers_api.location.service import sweep_unreported_windows
+
+    _, viaje = await _jornada_con_viaje(alpha_client, seeded)
+    respuesta = await alpha_client.post(
+        "/api/location/evidence",
+        json=_punto(event_kind="start_trip", subject_id=viaje["id"]),
+    )
+    assert respuesta.status_code == 201, respuesta.text
+
+    async with async_session_maker() as sesion:
+        await sesion.execute(
+            text(
+                "UPDATE trip SET started_at = now() - interval '2 hours' "
+                "WHERE id = :t AND company_id = :c"
+            ),
+            {"t": viaje["id"], "c": seeded.alpha.id},
+        )
+        await sesion.commit()
+
+    await sweep_unreported_windows()
+
+    assert await _filas(
+        "SELECT id FROM missing_location_event WHERE company_id = :c "
+        "AND subject_id = :s",
+        {"c": seeded.alpha.id, "s": viaje["id"]},
+    ) == [], "el barrido escribió un Missing sobre un evento que ya tenía punto"
+
+
+async def test_a_configured_window_reaches_the_client(seeded, alpha_client):
+    """Lo que la compañía configura es lo que el cliente recibe.
+
+    Es la otra mitad de F-C: no basta con que el endpoint exista, tiene que
+    servir el valor **guardado**, no el de fábrica. Si esto falla, acortar la
+    ventana desde el panel no acorta nada en el teléfono.
+    """
+    import json as _json
+
+    from app.core.platform.config_service import platform_config
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+
+    async with async_session_maker() as sesion:
+        await sesion.execute(
+            text(
+                "INSERT INTO platform_policy(key, value, version, updated_at) "
+                "VALUES ('route_location', CAST(:v AS jsonb), 1, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = CAST(:v AS jsonb), "
+                "  version = platform_policy.version + 1, updated_at = now()"
+            ),
+            {"v": _json.dumps({"recovery_window_seconds": 7})},
+        )
+        await sesion.commit()
+    await platform_config.refresh()
+
+    cuerpo = (await alpha_client.get("/api/location/policy")).json()
+
+    assert cuerpo["recovery_window_seconds"] == 7, cuerpo
+    # Y lo que no se guardó sigue viniendo de los valores por defecto.
+    assert cuerpo["fresh_max_accuracy_m"] == 100, cuerpo

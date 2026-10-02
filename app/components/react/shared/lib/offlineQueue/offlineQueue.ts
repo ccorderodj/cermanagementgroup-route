@@ -162,6 +162,18 @@ export interface PendingLocationEvidence {
     createdAt: string;
     attempts: number;
     lastError?: string;
+    /**
+     * Cuando deja de tener sentido reintentar este envio.
+     *
+     * Sale de la ventana de recuperacion de la compania mas el margen del
+     * barrido, que son los mismos numeros con los que el servidor decide
+     * cerrar el hecho por su cuenta. Pasada esa hora ningun reintento puede
+     * ganar: lo que haya que decir del evento lo dira el barrido.
+     *
+     * Es opcional porque las entradas guardadas antes de que esto existiera no
+     * lo tienen. A esas se las sigue tratando como antes.
+     */
+    expiresAt?: string;
 }
 
 /** Guarda o reemplaza la evidencia pendiente de un evento. */
@@ -169,6 +181,7 @@ export async function enqueueLocationEvidence(
     id: string,
     endpoint: string,
     payload: Record<string, unknown>,
+    expiresAt?: string,
 ): Promise<void> {
     const existente = await withNamedStore<PendingLocationEvidence | undefined>(
         LOCATION_STORE,
@@ -183,6 +196,9 @@ export async function enqueueLocationEvidence(
         // capturó, no cuándo se reintentó.
         createdAt: existente?.createdAt ?? new Date().toISOString(),
         attempts: existente?.attempts ?? 0,
+        // Se conserva la caducidad del primer encolado por lo mismo que la
+        // fecha: reencolar no estira el plazo que da el servidor.
+        expiresAt: existente?.expiresAt ?? expiresAt,
     };
     await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(entrada));
 }

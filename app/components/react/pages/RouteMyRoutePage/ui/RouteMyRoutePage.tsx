@@ -437,6 +437,16 @@ export const RouteMyRoutePage = () => {
         // bucle. Quien acaba de resolverla lo sabe y lo dice.
         if (!yaCapturado && faltaInicio) {
             setPreparando(null);
+            // Se marca aquí por lo mismo que en el aviso del workbench: desde
+            // este punto hay una tarea de lectura abierta, y si Android recrea
+            // la pestaña con la cámara delante esto es lo único que queda para
+            // saberlo.
+            //
+            // Faltaba. La marca sólo se ponía al entrar por el aviso, así que
+            // quien llegaba a la captura pulsando `Start Trip` —que es el
+            // camino normal— perdía la tarea si la página moría antes de subir
+            // la foto. Era el mismo hallazgo de campo por la otra puerta.
+            marcarTarea(ultimaJornada.current?.id ?? -1, 'start');
             setCapturandoInicio(true);
             setPlanPendiente(plan);
             return;
@@ -695,7 +705,19 @@ export const RouteMyRoutePage = () => {
                                     // Se marca ANTES de que el componente abra
                                     // la cámara: si la página muere con ella
                                     // abierta, esto es lo único que queda.
-                                    marcarTarea(view.session.id, 'start');
+                                    //
+                                    // La llave sale de `ultimaJornada`, que es
+                                    // de donde la lee `capturandoOdometro`.
+                                    // Escribirla con `view.session.id` —que es
+                                    // lo que había— dependía de que los dos
+                                    // valores coincidieran siempre; el día que
+                                    // no, la marca se guardaba bajo una llave
+                                    // que nadie consulta y la tarea se perdía
+                                    // sin que nada lo dijera.
+                                    marcarTarea(
+                                        ultimaJornada.current?.id ?? -1,
+                                        'start',
+                                    );
                                     setCapturandoInicio(true);
                                 }}
                             />

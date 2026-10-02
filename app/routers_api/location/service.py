@@ -289,26 +289,79 @@ class LocationEvidenceService:
 
     @staticmethod
     def _validar_calidad(payload: LocationEvidenceIn) -> None:
-        """Un punto cacheado tiene que cumplir los criterios configurados.
+        """Un punto autoritativo tiene que cumplir los criterios configurados.
 
         §11: "cached evidence is eligible only if it meets configured
         freshness/accuracy criteria". El cliente ya lo comprueba, y volver a
         comprobarlo aquí no es desconfianza gratuita: el umbral es
         configuración del servidor y el cliente puede llevar una versión vieja.
+
+        Por qué comprueba los tres niveles y no sólo el cacheado
+        -------------------------------------------------------
+        Antes esto volvía en la primera línea para cualquier nivel que no fuera
+        `degraded_cached`. Es decir: `fresh` y `recovered` no tenían **ninguna**
+        comprobación de precisión en el servidor, y `fresh_max_accuracy_m`
+        estaba declarado en la política y no se usaba en ningún sitio. Como
+        `for_trip_waypoints()` tampoco filtra por nivel ni por precisión, un
+        cliente que enviara `recovered` con 2 km de error obtenía un waypoint
+        oficial de kilometraje. La comprobación del cliente no es un control
+        —la cookie y el bundle son suyos—, así que la puerta tiene que estar
+        aquí (AGENTS.md, invariante 8).
+
+        Por qué una precisión desconocida no pasa
+        -----------------------------------------
+        `accuracy_m` era opcional y la comparación la saltaba con
+        `is not None`, así que un punto sin precisión se aceptaba como si
+        cumpliera el umbral. No es lo mismo: uno se midió y entró, el otro no
+        se pudo evaluar. CER no acepta calidad no verificable como equivalente
+        a calidad verificada, y un punto cuya calidad no se puede evaluar no
+        puede ser autoritativo para kilometraje (FR-01, FR-02).
+
+        Esto **no** convierte el fallo en bloqueo: el cliente que no consigue un
+        punto evaluable lo resuelve por el modelo escalonado que ya existe y
+        acaba en `missing_location_event`, que es el camino aprobado. Lo único
+        que deja de ocurrir es que entre como evidencia buena.
         """
-        if payload.evidence_level is not LocationEvidenceLevel.DEGRADED_CACHED:
-            return
         politica = _politica()
-        if (payload.source_age_seconds or 0) > int(politica["cached_max_age_seconds"]):
+
+        if payload.accuracy_m is None:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="That cached point is older than this company allows.",
+                detail=(
+                    "Location evidence needs a measured accuracy. A point whose "
+                    "accuracy cannot be evaluated is recorded as missing, not as "
+                    "evidence."
+                ),
             )
-        limite = int(politica["cached_max_accuracy_m"])
-        if payload.accuracy_m is not None and payload.accuracy_m > limite:
+
+        if payload.evidence_level is LocationEvidenceLevel.DEGRADED_CACHED:
+            if (
+                payload.source_age_seconds or 0
+            ) > int(politica["cached_max_age_seconds"]):
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="That cached point is older than this company allows.",
+                )
+            limite = int(politica["cached_max_accuracy_m"])
+            if payload.accuracy_m > limite:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=(
+                        "That cached point is less accurate than this company "
+                        "allows."
+                    ),
+                )
+            return
+
+        # `fresh` y `recovered` comparten umbral a propósito: un punto
+        # recuperado no puede ser de peor calidad que uno recién capturado sólo
+        # por haber tardado más. Es el mismo criterio que aplica el cliente, y
+        # sale del mismo sitio para que no puedan divergir.
+        limite = int(politica["fresh_max_accuracy_m"])
+        if payload.accuracy_m > limite:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="That cached point is less accurate than this company allows.",
+                detail="That point is less accurate than this company allows.",
             )
 
     @staticmethod

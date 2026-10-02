@@ -34,12 +34,48 @@ function esRechazoDefinitivoDeEvidencia(error: unknown): boolean {
     // `location_fix` y cero en `missing_location_event`.
     //
     // El otro 409 del endpoint —la ventana de recuperación de End Work ya
-    // cerrada— seguirá fallando, y es correcto: ese reintento se agota contra
-    // el límite de la cola en vez de perder la evidencia en el primer intento.
+    // cerrada— seguirá fallando, y es correcto: vale más reintentar algo
+    // perdido que descartar evidencia válida en el primer intento. Lo que
+    // acota ese reintento es `haCaducado`, no esta función: aquí no se puede
+    // distinguir un 409 del otro.
     if (estado === 404 || estado === 408 || estado === 409 || estado === 429) {
         return false;
     }
     return estado >= 400 && estado < 500;
+}
+
+/**
+ * Si ya pasó la hora en la que el servidor dejaría de aceptar este envío.
+ *
+ * Por qué hace falta
+ * ------------------
+ * Tratar un rechazo como transitorio sin acotarlo deja la entrada
+ * reintentándose para siempre. El endpoint devuelve 409 en dos situaciones que
+ * no se parecen: la evidencia llegó antes de que su jornada estuviera
+ * `ACTIVE` —una carrera, que se arregla sola— y la ventana de recuperación de
+ * End Work ya cerró —un veredicto, que no—. Desde el dispositivo las dos son
+ * el mismo número.
+ *
+ * El comentario que había aquí afirmaba que el reintento "se agota contra el
+ * límite de la cola". No era cierto: `attempts` se escribía y no se leía
+ * nunca, así que no había ningún límite. Esto lo pone.
+ *
+ * Por qué por hora y no por número de intentos
+ * --------------------------------------------
+ * Un contador sería un número inventado. La hora no: sale de la ventana de
+ * recuperación de la compañía más el margen del barrido, que son los mismos
+ * valores con los que el servidor decide cerrar el hecho
+ * (`sweep_unreported_windows`). Así el cliente deja de insistir exactamente
+ * cuando el servidor deja de poder aceptarlo, y el hecho lo resuelve el
+ * barrido — que es el tercer camino que la arquitectura ya tenía previsto.
+ *
+ * Sin `expiresAt` —entradas guardadas antes de que esto existiera— se
+ * responde `false` y se mantiene el comportamiento anterior para ellas.
+ */
+function haCaducado(entrada: PendingLocationEvidence): boolean {
+    if (entrada.expiresAt === undefined) return false;
+    const limite = Date.parse(entrada.expiresAt);
+    return Number.isFinite(limite) && Date.now() > limite;
 }
 
 /**
@@ -72,7 +108,7 @@ async function enviarEvidencia(
         return enviarEvidencia(pendientes, indice + 1, sincronizadas + 1, fallidas);
     } catch (error) {
         const mensaje = error instanceof Error ? error.message : String(error);
-        if (esRechazoDefinitivoDeEvidencia(error)) {
+        if (esRechazoDefinitivoDeEvidencia(error) || haCaducado(entrada)) {
             // El servidor la rechazó a ella y no va a cambiar de opinión. Se
             // retira para no reintentarla eternamente; el evento queda sin
             // punto y el barrido del servidor lo cerrará.
