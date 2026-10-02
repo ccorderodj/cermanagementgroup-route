@@ -211,6 +211,56 @@ function tieneFotoPersistida(evidencia: OdometerEvidence | null): boolean {
         && evidencia.captured_at !== undefined;
 }
 
+/**
+ * Cuántas veces se reintenta leer la evidencia antes de darla por ilegible.
+ *
+ * El fallo que esto cubre es el parpadeo de las primeras peticiones cuando
+ * Android acaba de recrear la pestaña: se resuelve muy por debajo del segundo.
+ * Tres intentos con pausa creciente cubren algo más de un segundo, que es
+ * suficiente para ese caso y poco para que la pantalla parezca colgada. No es
+ * un mecanismo de reintento general: si el servidor está caído, se agota y se
+ * dice.
+ */
+const INTENTOS_DE_LECTURA = 3;
+const PAUSA_DE_LECTURA_MS = 400;
+
+/**
+ * La evidencia de odómetro de la jornada. **Lanza si no se pudo leer.**
+ *
+ * Que lance es el punto de esta función. Antes la lectura era
+ * `fetchSessionOdometer(...).catch(() => null)`, y ese `null` significaba a la
+ * vez "no hay evidencia" y "no pude preguntar". La pantalla decide con eso si
+ * hay una lectura de cierre pendiente, así que un fallo de red momentáneo
+ * acababa afirmando que no había nada pendiente — y devolvía al supervisor al
+ * workbench con la tarea viva en el servidor.
+ *
+ * Separarlas es todo el arreglo: aquí se devuelve lo que el servidor dijo, o se
+ * lanza. Quien llama decide qué hacer con la incertidumbre, y lo que no puede
+ * hacer es confundirla con una respuesta.
+ */
+async function leerOdometro(sessionId: number): Promise<OdometerSessionState> {
+    let ultimoFallo: unknown;
+
+    // Secuencial a propósito: cada intento tiene que terminar antes de decidir
+    // si merece la pena otro.
+    /* eslint-disable no-await-in-loop */
+    for (let intento = 0; intento < INTENTOS_DE_LECTURA; intento += 1) {
+        try {
+            return await fetchSessionOdometer(sessionId);
+        } catch (err) {
+            ultimoFallo = err;
+            if (intento + 1 < INTENTOS_DE_LECTURA) {
+                await new Promise((listo) => {
+                    setTimeout(listo, PAUSA_DE_LECTURA_MS * (intento + 1));
+                });
+            }
+        }
+    }
+    /* eslint-enable no-await-in-loop */
+
+    throw ultimoFallo;
+}
+
 export const RouteMyRoutePage = () => {
     const [view, setView] = useState<Vista>({ phase: 'loading' });
     const [odometro, setOdometro] = useState<OdometerSessionState | null>(null);
@@ -266,8 +316,32 @@ export const RouteMyRoutePage = () => {
             // La evidencia de odómetro se lee junto a la jornada: de ella
             // depende si se puede salir, y no tenerla a mano obligaría a la
             // pantalla a adivinar.
-            const evidencia = await fetchSessionOdometer(sesion.id)
-                .catch(() => null);
+            //
+            // Si no se puede leer, **no se decide ninguna fase con eso**. No
+            // saber si hay lectura de cierre pendiente no es lo mismo que saber
+            // que no la hay, y confundirlos es el defecto que CER reprodujo en
+            // campo: aquí había un `.catch(() => null)`, un fallo de lectura
+            // caía en la misma rama que "no hay evidencia", y el supervisor
+            // acababa en el workbench con su lectura de cierre viva en el
+            // servidor y nada que lo dijera.
+            let evidencia: OdometerSessionState;
+            try {
+                evidencia = await leerOdometro(sesion.id);
+            } catch {
+                if (ultimaVista.current) {
+                    // Se queda donde estaba. Si estaba en la pantalla de
+                    // cierre, sigue en ella: no se le mueve por no haber
+                    // podido preguntar.
+                    setView(ultimaVista.current);
+                } else {
+                    // Arranque en frío —la pestaña se acaba de recrear— y
+                    // tampoco se pudo leer. Se dice que no se pudo cargar, que
+                    // es verdad, en vez de enseñar un workbench que afirmaría
+                    // en silencio que no queda nada pendiente.
+                    setView({ phase: 'error' });
+                }
+                return;
+            }
             setOdometro(evidencia);
 
             const confirmar = (vista: Vista) => {
@@ -576,7 +650,12 @@ export const RouteMyRoutePage = () => {
                 return;
             }
 
-            const cierre = await fetchSessionOdometer(session.id).catch(() => null);
+            // Con reintento, por lo mismo que en `reconcile`: un parpadeo de
+            // red aquí le enseñaría al supervisor el rechazo del servidor en
+            // vez de la lectura que tiene que resolver. Si aun así no se puede
+            // leer, el `reconcile()` de abajo es la red: ya no colapsa al
+            // workbench cuando no sabe.
+            const cierre = await leerOdometro(session.id).catch(() => null);
             setOdometro(cierre);
             if (cierre?.end && !isOdometerResolved(cierre.end.status)) {
                 setRevisandoCierre(false);
