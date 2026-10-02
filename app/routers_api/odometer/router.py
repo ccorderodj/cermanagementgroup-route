@@ -38,7 +38,7 @@ from app.routers_api.odometer.schemas import (
 from app.routers_api.odometer.service import OdometerService
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
-from app.routers_api.users.permissions import require_permissions
+from app.routers_api.users.permissions import has_permissions, require_permissions
 from app.routers_api.worksessions.dao import WorkSessionsDAO
 
 
@@ -210,9 +210,21 @@ async def request_exception(
     payload: OdometerExceptionCreate,
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    autoaprueba: bool = Depends(
+        has_permissions(["route.odometer.selfapprove"])
+    ),
     company: TenantContext = Depends(get_company_required),
 ) -> OdometerExceptionRead:
-    """Pide permiso para teclear sin foto. No lo concede: lo pide."""
+    """Pide permiso para teclear sin foto, y a veces se lo concede solo.
+
+    `has_permissions` **informa**, no corta: pedir la excepcion es legitimo
+    para cualquiera que ejecute su jornada, y lo unico que cambia segun la
+    capacidad es si hay que esperar a un administrador. Cortar aqui dejaria
+    sin excepcion a quien no la tiene, que es justo el flujo que se conserva.
+
+    La decision la toma el servidor con el permiso real del usuario; el
+    cliente no envia nada que diga si puede autoaprobarse.
+    """
     await _jornada_propia(
         company_id=company.id, user_id=current_user.id, work_session_id=work_session_id
     )
@@ -224,6 +236,7 @@ async def request_exception(
         reason=payload.reason.value,
         reason_note=payload.reason_note,
         actor_user_id=current_user.id,
+        auto_approve=autoaprueba,
     )
     return OdometerExceptionRead.model_validate(solicitud)
 
