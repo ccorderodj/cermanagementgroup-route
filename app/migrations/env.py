@@ -39,7 +39,14 @@ from app.database import DATABASE_URL as RESOLVED_DATABASE_URL
 # access to the values within the .ini file in use.
 config = context.config
 
-config.set_main_option("sqlalchemy.url", f"{RESOLVED_DATABASE_URL}?async_fallback=True")
+# El separador depende de si la URL ya trae query string, y eso dejó de ser
+# hipotético: en cuanto `DB_SSL` añade `?ssl=require`, concatenar otro `?` deja
+# una URL malformada y la conexión falla por un motivo que no tiene nada que ver
+# con la migración.
+_SEPARADOR = "&" if "?" in RESOLVED_DATABASE_URL else "?"
+config.set_main_option(
+    "sqlalchemy.url", f"{RESOLVED_DATABASE_URL}{_SEPARADOR}async_fallback=True"
+)
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.

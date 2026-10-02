@@ -52,6 +52,23 @@ class Settings(BaseSettings):
     DB_NAME: str
     DB_CLOUDSQL_CONNECTION_NAME: str = ""
 
+    #: Modo TLS de la conexión. Vacío deja la conexión sin cifrar.
+    #:
+    #: Por qué no se fuerza siempre: el PostgreSQL de desarrollo que levanta
+    #: `docker-compose` no ofrece TLS, y exigirlo dejaría a cualquiera sin poder
+    #: arrancar en local. Por qué existe: una base gestionada sí lo exige, y
+    #: hasta ahora la URL se construía sin ninguna opción de cifrado, de modo
+    #: que no había manera de pedirlo sin tocar código.
+    #:
+    #: Lo descubrió el job de migraciones en el ambiente de prueba: conectaba
+    #: desde una IP pública y PostgreSQL lo rechazaba con `no pg_hba.conf entry
+    #: ... no encryption`. El servicio web no lo notaba porque su salida va por
+    #: la red interna, donde la misma base acepta conexiones sin cifrar.
+    #:
+    #: Valores: los de libpq —`require`, `verify-ca`, `verify-full`—. En una
+    #: base gestionada accesible por internet, `require` es el mínimo.
+    DB_SSL: str = ""
+
     DATABASE_URL: Optional[str] = None
     TEST_DATABASE_URL: Optional[str] = None
 
@@ -228,9 +245,13 @@ class Settings(BaseSettings):
                 f"@/{self.DB_NAME}?host=/cloudsql/{self.DB_CLOUDSQL_CONNECTION_NAME}"
             )
         else:
+            # El cifrado sólo tiene sentido en la conexión por TCP. La de Cloud
+            # SQL va por un socket de Unix del propio host, donde no hay nada
+            # que interceptar y `ssl` no aplica.
+            cifrado = f"?ssl={self.DB_SSL}" if self.DB_SSL else ""
             self.DATABASE_URL = (
                 f"postgresql+asyncpg://{self.DB_USER}:{self.DB_PASS}"
-                f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}"
+                f"@{self.DB_HOST}:{self.DB_PORT}/{self.DB_NAME}{cifrado}"
             )
         return self
 
