@@ -26,6 +26,7 @@ Documentación:
 | [`docs/DEVELOPMENT_WORKFLOW.md`](docs/DEVELOPMENT_WORKFLOW.md) | La disciplina de trabajo: fuente de verdad, migraciones, tests, evidencia |
 | [`docs/DOMAIN_EXTENSION_GUIDE.md`](docs/DOMAIN_EXTENSION_GUIDE.md) | Cómo añadir un módulo de dominio sin romper la base |
 | [`docs/INTEGRATION_GUIDE.md`](docs/INTEGRATION_GUIDE.md) | REST versionado, webhooks, firma, idempotencia, correlación |
+| [`docs/MIGRACIONES_EN_APP_PLATFORM.md`](docs/MIGRACIONES_EN_APP_PLATFORM.md) | Correr las migraciones solas al desplegar, y los obstáculos reales de llegar ahí |
 | [`AGENTS.md`](AGENTS.md) | Invariantes y reglas para quien (persona o agente) cambia el código |
 | [`EXTRACTION_REPORT.md`](EXTRACTION_REPORT.md) | De dónde sale esta base y cómo se validó |
 
@@ -114,5 +115,5 @@ app/
   migrations/versions/       0001_foundation_baseline.py (única revisión de la base)
   db/scripts/                bootstrap y SQL de roles/bases
 tests/                       unit (sin BD) e integration (PostgreSQL real)
-docs/                        arquitectura, flujo de trabajo, extensión, integración
+docs/                        arquitectura, flujo de trabajo, extensión, integración, despliegue
 ```
