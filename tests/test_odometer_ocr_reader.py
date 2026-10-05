@@ -21,6 +21,7 @@ esto eligiendo el número más grande.
 
 from __future__ import annotations
 
+import sys
 from decimal import Decimal
 
 import pytest
@@ -156,6 +157,22 @@ def test_una_salida_truncada_no_revienta():
 def test_un_binario_que_no_existe_no_esta_disponible():
     """Lo que decide en el arranque si se enchufa el lector o no."""
     assert tesseract_disponible("tesseract-que-no-existe-en-ninguna-parte") is False
+
+
+def test_estar_en_el_path_no_basta_para_estar_disponible():
+    """El caso intermedio que el piloto destapó, y que antes pasaba por bueno.
+
+    Allí el binario estaba instalado y en el `PATH` —`shutil.which` decía que
+    sí— y no podía leer nada: primero por una biblioteca ausente y luego porque
+    los datos de idioma estaban fuera de donde los busca. Con la comprobación
+    anterior el arranque escribía "lector activo" mientras cada foto fallaba.
+
+    Se usa el intérprete de Python como impostor porque existe en cualquier
+    máquina donde corra esta suite: pasa el `which` y no sabe listar idiomas,
+    que es exactamente la forma del caso real. Un binario de mentira creado en
+    un temporal probaría lo mismo con más ceremonia y menos portabilidad.
+    """
+    assert tesseract_disponible(sys.executable) is False
 
 
 def test_invocar_un_binario_ausente_se_declara_indisponible():

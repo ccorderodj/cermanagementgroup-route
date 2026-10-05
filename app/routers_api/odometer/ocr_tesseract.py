@@ -44,6 +44,7 @@ segunda sólo le hace teclear.
 from __future__ import annotations
 
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -84,15 +85,75 @@ class TesseractUnavailable(RuntimeError):
     """El binario no está instalado, o no contestó."""
 
 
-def tesseract_disponible(binario: str = "tesseract") -> bool:
-    """Si hay un binario que invocar.
+def tesseract_disponible(binario: str = "tesseract", *, idioma: str = "eng") -> bool:
+    """Si hay un Tesseract que **de verdad pueda leer**, no sólo un binario.
 
     Se consulta al arrancar para decidir qué lector se registra. Un despliegue
-    sin el paquete de sistema se queda con `NoSuggestionReader` y **se comporta
-    exactamente como antes**, que es lo que mantiene verde la línea base
+    sin el paquete de sistema se queda con `NoSuggestionReader` y se comporta
+    exactamente como antes, que es lo que mantiene verde la línea base
     certificada.
+
+    Por qué no basta con `shutil.which`
+    ------------------------------------
+    Lo era hasta que el piloto enseñó el caso intermedio. Allí el binario estaba
+    instalado y en el `PATH` —`which` decía que sí— y aun así no podía hacer
+    nada, primero por una biblioteca que faltaba y después porque los datos de
+    idioma estaban fuera de donde los busca:
+
+        Error opening data file .../tessdata/eng.traineddata
+        Tesseract couldn't load any languages!
+
+    Con la comprobación anterior el arranque registraba el lector y escribía
+    "lector activo" en el log mientras **cada foto fallaba**. No era peligroso
+    —`suggest_safely` lo convierte en "sin sugerencia" y el supervisor teclea—
+    pero el log afirmaba un control que no existía, que es justo lo que este
+    repositorio no hace en ninguna otra frontera: el escáner de malware
+    distingue "limpio" de "nadie pudo mirarlo" por la misma razón.
+
+    Así que se pregunta lo que de verdad importa: ¿puedes cargar el idioma? Un
+    `--list-langs` cuesta milisegundos una vez por proceso y convierte un log
+    que miente en uno que se puede creer.
     """
-    return shutil.which(binario) is not None
+    if shutil.which(binario) is None:
+        return False
+
+    try:
+        resultado = subprocess.run(
+            [binario, "--list-langs"],
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+    if resultado.returncode != 0:
+        logger.info(
+            "ODOMETER OCR | %s está instalado pero no puede listar idiomas: %s",
+            binario,
+            resultado.stderr.decode("utf-8", "replace").strip()[:200],
+        )
+        return False
+
+    # `--list-langs` escribe la cabecera por stderr y los idiomas por stdout en
+    # unas versiones, y todo por stderr en otras. Se miran los dos.
+    salida = (
+        resultado.stdout.decode("utf-8", "replace")
+        + resultado.stderr.decode("utf-8", "replace")
+    )
+    disponibles = {
+        linea.strip() for linea in salida.splitlines() if linea.strip()
+    }
+    if idioma not in disponibles:
+        logger.info(
+            "ODOMETER OCR | %s no tiene el idioma '%s' (TESSDATA_PREFIX=%s)",
+            binario,
+            idioma,
+            os.environ.get("TESSDATA_PREFIX", "<sin definir>"),
+        )
+        return False
+
+    return True
 
 
 def _preprocesar(image: bytes) -> bytes:
