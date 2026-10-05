@@ -62,7 +62,7 @@ async def _caducar_pendientes(page) -> int:
     """
     return await page.evaluate(
         """() => new Promise((resolver) => {
-            const solicitud = indexedDB.open('cer-route-offline', 2);
+            const solicitud = indexedDB.open('cer-route-offline');
             solicitud.onerror = () => resolver(0);
             solicitud.onsuccess = () => {
                 const db = solicitud.result;

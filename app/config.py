@@ -162,6 +162,22 @@ class Settings(BaseSettings):
     ROUTE_ROUTING_FALLBACK_URL: str = ""
     ROUTE_ROUTING_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=60)
 
+    # ── OCR del odómetro (RTE10-A01) ────────────────────────────────────────
+    #: Si se intenta leer el odómetro de la foto. En `true` —el valor por
+    #: defecto— el arranque enchufa el adaptador **sólo si el binario de
+    #: Tesseract existe**; una imagen sin el paquete de sistema se queda sin
+    #: sugerencias y se comporta igual que antes de este checkpoint.
+    #:
+    #: Está aquí para poder apagarlo sin desplegar código: el OCR es asistivo y
+    #: si un día sugiriera mal de forma sistemática, lo que hay que poder hacer
+    #: es quitarlo, no corregirlo a prisa.
+    ODOMETER_OCR_ENABLED: bool = True
+    #: El binario. Se resuelve en el `PATH` salvo que se dé una ruta.
+    ODOMETER_OCR_BINARY: str = "tesseract"
+    #: Plazo del reconocimiento. Pasado, el proceso se mata y la foto sigue su
+    #: camino sin sugerencia: el supervisor espera esto como máximo.
+    ODOMETER_OCR_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
+
     # ── Correo ──────────────────────────────────────────────────────────────
     EMAIL_BACKEND: Literal["console", "memory", "smtp"] = "console"
     EMAIL_FROM: str = "no-reply@example.com"

@@ -1,0 +1,11 @@
+# Paquetes de sistema que el buildpack instala en la imagen.
+#
+# Formato: un paquete por línea. Lo lee el buildpack de apt de la plataforma
+# (DigitalOcean App Platform lo soporta con la convención de Heroku); la imagen
+# de Docker instala los mismos en su propia etapa, ver `Dockerfile`.
+
+# OCR del odómetro (RTE10-A01). Sin estos dos, `app/main.py` no enchufa el
+# lector y el supervisor teclea la lectura: el camino normal sigue funcionando,
+# simplemente sin sugerencia. No es un requisito de arranque.
+tesseract-ocr
+tesseract-ocr-eng

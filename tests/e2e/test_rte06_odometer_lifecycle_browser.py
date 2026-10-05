@@ -224,7 +224,8 @@ async def test_the_start_reading_task_survives_the_camera_and_a_recreated_tab(
 
             # ── O4: sin sugerencia de OCR, y eso no impide confirmar ────────
             assert evidencia.ocr_detected_reading is None, (
-                "el OCR productivo está fuera de alcance: no debe sugerir nada"
+                "en MODE=TEST no se enchufa ningún lector (ver `app/main.py`), "
+                "así que el camino sin sugerencia es el que se recorre aquí"
             )
             await expect(page.locator("#odometer-reading")).to_have_value("")
 

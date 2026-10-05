@@ -131,6 +131,48 @@ async def _platform_config_startup() -> None:
         await platform_scheduler.start()
 
 
+@app.on_event("startup")
+async def _odometer_ocr_startup() -> None:
+    """Enchufa el lector de odómetro, si hay uno que enchufar (RTE10-A01 FR-01).
+
+    Se decide por **presencia del binario**, no por configuración: una imagen
+    sin el paquete de sistema se queda con `NoSuggestionReader` y se comporta
+    exactamente igual que antes de este checkpoint, que es lo que mantiene
+    verde la línea base certificada. Anunciar un OCR que no está instalado sólo
+    produciría un fallo por foto.
+
+    En TEST no se enchufa nada a propósito. La suite registra su propio
+    adaptador con `set_odometer_reader` cuando quiere probar una sugerencia
+    concreta, y un Tesseract real en la máquina de quien ejecuta los tests haría
+    que el resultado dependiera de qué tiene instalado.
+    """
+    from app.routers_api.odometer.ocr import set_odometer_reader
+    from app.routers_api.odometer.ocr_tesseract import (
+        TesseractReader,
+        tesseract_disponible,
+    )
+
+    if settings.is_testing or not settings.ODOMETER_OCR_ENABLED:
+        return
+
+    binario = settings.ODOMETER_OCR_BINARY
+    if not tesseract_disponible(binario):
+        logger.info(
+            "ODOMETER OCR | '%s' no está instalado; sin sugerencias y el "
+            "supervisor teclea la lectura, que es el camino normal",
+            binario,
+        )
+        return
+
+    set_odometer_reader(
+        TesseractReader(
+            binary=binario,
+            timeout_seconds=settings.ODOMETER_OCR_TIMEOUT_SECONDS,
+        )
+    )
+    logger.info("ODOMETER OCR | lector activo: tesseract (%s)", binario)
+
+
 @app.on_event("shutdown")
 async def _platform_config_shutdown() -> None:
     if _config_listener_stop is not None:
