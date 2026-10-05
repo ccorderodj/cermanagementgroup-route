@@ -253,3 +253,80 @@ def test_el_modo_de_segmentacion_es_texto_disperso():
     from app.routers_api.odometer.ocr_tesseract import _PSM_TEXTO_DISPERSO
 
     assert _PSM_TEXTO_DISPERSO == "11"
+
+
+# ── La cascada de escalas y el acuerdo ─────────────────────────────────────
+
+
+class _EscalasFijas:
+    """Un lector que devuelve una lectura distinta por escala, sin Tesseract.
+
+    Se sustituye `_leer_una_escala` porque lo que se prueba aquí no es el
+    reconocimiento —eso depende del binario y de la fotografía— sino **la
+    regla de decisión**: cuándo se acepta una lectura y cuándo se calla.
+    """
+
+    def __init__(self, *por_escala):
+        self.por_escala = list(por_escala)
+        self.pasadas = 0
+
+    def __call__(self, image, max_dimension):
+        indice = min(self.pasadas, len(self.por_escala) - 1)
+        self.pasadas += 1
+        return self.por_escala[indice]
+
+
+def _con_escalas(monkeypatch, *valores):
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+
+    falso = _EscalasFijas(*valores)
+    monkeypatch.setattr(TesseractReader, "_leer_una_escala",
+                        lambda self, image, max_dimension: falso(image, max_dimension))
+    lector = TesseractReader()
+    return lector.suggest(image=b"irrelevante", content_type="image/jpeg"), falso
+
+
+def test_dos_escalas_que_coinciden_producen_la_sugerencia(monkeypatch):
+    """El caso normal: la foto está bien y las escalas dicen lo mismo."""
+    valor, falso = _con_escalas(monkeypatch, Decimal("128437.0"), Decimal("128437.0"))
+    assert valor == Decimal("128437.0")
+    assert falso.pasadas == 2, "con acuerdo a la segunda no hace falta la tercera"
+
+
+def test_escalas_que_discrepan_no_sugieren_nada(monkeypatch):
+    """El caso que esto existe para evitar.
+
+    Medido sobre una foto real de 4000 px con el odómetro pequeño: a 2400 se
+    leía `128437` y a 3200 `128497` — un `3` confundido con un `9`. Sin acuerdo
+    entre escalas, una de las dos habría llegado a la pantalla, y el supervisor
+    puede confirmarla sin mirar. Entonces entra como kilometraje confirmado por
+    una persona, que es el daño que no se deshace.
+    """
+    valor, falso = _con_escalas(
+        monkeypatch, Decimal("128437.0"), Decimal("128497.0"), Decimal("128407.0")
+    )
+    assert valor is None
+    assert falso.pasadas == 3, "sin acuerdo se agotan las escalas"
+
+
+def test_una_sola_escala_que_lee_no_basta(monkeypatch):
+    """Leer en una escala y nada en las otras no es confianza suficiente.
+
+    Es lo que pasaba cuando el odómetro quedaba ilegible y sólo sobrevivía otro
+    indicador del tablero: un número aparecía en una pasada y en ninguna más.
+    """
+    valor, _ = _con_escalas(monkeypatch, Decimal("60.0"), None, None)
+    assert valor is None
+
+
+def test_el_minimo_de_digitos_descarta_otros_indicadores():
+    """Un salpicadero está lleno de números de dos y tres dígitos.
+
+    La velocidad, la temperatura, la marcha, el nivel de combustible. Con el
+    mínimo en 2 —como estaba— el velocímetro se colaba como lectura de odómetro
+    en cuanto el odómetro no se leía bien: medido, una foto donde el odómetro
+    quedaba ilegible sugería `60`.
+    """
+    assert leer((95.0, "60")) is None
+    assert leer((95.0, "120")) is None
+    assert leer((95.0, "1284")) == Decimal("1284.0")

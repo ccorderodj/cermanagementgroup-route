@@ -69,18 +69,50 @@ logger = logging.getLogger(__name__)
 _PSM_TEXTO_DISPERSO = "11"
 _CARACTERES = "0123456789."
 
-#: Lado mayor al que se reduce la foto antes de reconocer. Una foto de teléfono
-#: viene a 4000 px y Tesseract no gana nada con eso: tarda más y come memoria
-#: que el nodo del ambiente de prueba no tiene de sobra.
-MAX_DIMENSION = 1600
+#: Las escalas a las que se intenta leer, en orden.
+#:
+#: No hay una resolución buena, y eso se midió antes de decidirlo. Sobre fotos
+#: de 4000 px con el odómetro ocupando poco del encuadre:
+#:
+#:     odómetro al 8%     1600 -> sólo el velocímetro
+#:                        2400 -> 128437  (correcto)
+#:                        3200 -> 128497  (un 3 leído como 9)
+#:     odómetro con desenfoque
+#:                        1600 -> sólo el velocímetro
+#:                        3200 -> 128437  (correcto)
+#:
+#: Reducir mucho borra los dígitos pequeños; reducir poco deja ruido que el
+#: motor confunde. Por eso se lee a varias y **se exige que dos coincidan**:
+#: dos escalas distintas que leen el mismo número es una señal de confianza
+#: real, no un umbral inventado, y cuando discrepan la respuesta honesta es que
+#: no se sabe. Es lo que convierte `128437` frente a `128497` en "sin
+#: sugerencia" en vez de en una lectura equivocada.
+#:
+#: El orden importa: las dos primeras son las que más aciertan, así que la foto
+#: bien encuadrada —el caso normal— se resuelve en dos pasadas y no en tres.
+ESCALAS = (2400, 3200, 1600)
+
+#: Coincidencias necesarias para aceptar una lectura.
+COINCIDENCIAS_NECESARIAS = 2
 
 #: Confianza mínima por token, en la escala 0-100 que devuelve Tesseract.
 #: Por debajo, el token se descarta: es ruido de reflejo o de poca luz.
 MIN_CONFIANZA = 60.0
 
-#: Una lectura de odómetro tiene al menos dos dígitos. Un dígito suelto en una
-#: foto de salpicadero es casi siempre un trozo de otro indicador.
-MIN_DIGITOS = 2
+#: Mínimo de dígitos de una lectura de odómetro.
+#:
+#: Era 2, con el argumento de que un dígito suelto en una foto de salpicadero es
+#: casi siempre un trozo de otro indicador. El argumento era bueno y el número
+#: era corto: un salpicadero está lleno de números de dos y tres dígitos —la
+#: velocidad, la temperatura, la marcha, el nivel— y con el umbral en 2 el
+#: velocímetro se colaba como lectura de odómetro en cuanto el odómetro no se
+#: leía bien. Medido: una foto donde el odómetro queda ilegible sugería `60`.
+#:
+#: Cuatro dígitos significan que se descarta un vehículo con menos de 1.000
+#: millas. En una flota en operación eso no ocurre, y cuando ocurra el coste es
+#: que el supervisor teclea — que es el coste barato. El caro es sugerirle la
+#: velocidad como si fuera el kilometraje.
+MIN_DIGITOS = 4
 
 #: El mismo techo que el contrato de entrada (`OdometerReadingConfirm`) y la
 #: restricción de la base. **No se inventa un rango de negocio nuevo**: §8 lo
@@ -172,7 +204,7 @@ def tesseract_disponible(binario: str = "tesseract", *, idioma: str = "eng") -> 
     return True
 
 
-def _preprocesar(image: bytes) -> bytes:
+def _preprocesar(image: bytes, max_dimension: int = 2400) -> bytes:
     """Deja la foto como Tesseract la lee mejor: derecha, gris y contrastada.
 
     La orientación importa más de lo que parece: un teléfono guarda la foto
@@ -190,7 +222,7 @@ def _preprocesar(image: bytes) -> bytes:
     from app.core.storage.media import normalize_image
 
     normalizada = normalize_image(
-        image, max_dimension=MAX_DIMENSION, jpeg_quality=90
+        image, max_dimension=max_dimension, jpeg_quality=90
     )
 
     imagen = Image.open(io.BytesIO(normalizada.data))
@@ -314,8 +346,9 @@ class TesseractReader:
         self.timeout = timeout_seconds
         self.language = language
 
-    def suggest(self, *, image: bytes, content_type: str) -> Decimal | None:
-        preparada = _preprocesar(image)
+    def _leer_una_escala(self, image: bytes, max_dimension: int) -> Decimal | None:
+        """Una pasada: preparar a esa escala, invocar, interpretar."""
+        preparada = _preprocesar(image, max_dimension=max_dimension)
 
         orden = [
             self.binary,
@@ -332,8 +365,7 @@ class TesseractReader:
             # tsv"—, **devuelve 0** y cae a texto plano. El texto plano tiene
             # una columna, el parser espera doce, así que no se reconocía
             # ningún candidato y el adaptador devolvía `None` con cualquier
-            # fotografía, sin un solo error. Medido en una instalación cuyo
-            # paquete no trae los `configs/`.
+            # fotografía, sin un solo error.
             "-c", "tessedit_create_tsv=1",
         ]
 
@@ -363,9 +395,44 @@ class TesseractReader:
             # Si la salida no es TSV, no hay candidatos que interpretar — y
             # devolver `None` aquí sería indistinguible de "no vi nada". Son
             # cosas distintas: una es la foto, la otra es la instalación, y
-            # sólo la segunda se arregla. Se levanta para que `suggest_safely`
-            # la registre con su traza.
+            # sólo la segunda se arregla.
             raise TesseractUnavailable(
                 f"{self.binary} no devolvió TSV: {tsv.splitlines()[:1]}"
             )
         return _a_lectura(_candidatos(tsv))
+
+    def suggest(self, *, image: bytes, content_type: str) -> Decimal | None:
+        """Lee a varias escalas y sugiere sólo cuando dos coinciden.
+
+        Por qué no basta una pasada
+        ----------------------------
+        Medido sobre fotografías de teléfono con el odómetro ocupando poco del
+        encuadre, que es lo que manda cualquiera: a 1600 px los dígitos
+        pequeños desaparecen y lo único que sobrevive es el velocímetro; a
+        3200 px aparece ruido que el motor confunde —un `3` leído como `9`—. No
+        hay una resolución que acierte siempre.
+
+        Dos escalas que leen el mismo número es una señal de confianza real, y
+        cuando discrepan la respuesta honesta es que no se sabe. Eso convierte
+        un `128437` frente a un `128497` en silencio en vez de en una lectura
+        equivocada, que es lo que de verdad cuesta: el supervisor puede
+        confirmarla sin mirar y entra como kilometraje de una persona.
+
+        Se para en cuanto hay acuerdo, así que la foto bien encuadrada —el caso
+        normal— cuesta dos pasadas y no tres.
+        """
+        lecturas: list[Decimal] = []
+        for escala in ESCALAS:
+            lectura = self._leer_una_escala(image, escala)
+            if lectura is None:
+                continue
+            lecturas.append(lectura)
+            if lecturas.count(lectura) >= COINCIDENCIAS_NECESARIAS:
+                return lectura
+
+        if lecturas:
+            logger.info(
+                "ODOMETER OCR | las escalas no coinciden (%s): sin sugerencia",
+                ", ".join(str(v) for v in lecturas),
+            )
+        return None
