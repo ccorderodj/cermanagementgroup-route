@@ -178,6 +178,23 @@ class Settings(BaseSettings):
     #: camino sin sugerencia: el supervisor espera esto como máximo.
     ODOMETER_OCR_TIMEOUT_SECONDS: float = Field(default=8.0, gt=0, le=30)
 
+    #: Minutos que se conserva la **fotografía** del odómetro. `0` = para
+    #: siempre, y es el valor por defecto a propósito.
+    #:
+    #: Existe por una limitación del entorno, no por una preferencia: en App
+    #: Platform el disco del contenedor es efímero y no hay almacenamiento de
+    #: objetos configurado, así que la foto se pierde igualmente en el siguiente
+    #: despliegue. Purgarla a propósito al menos acota el disco y hace que la
+    #: desaparición sea una regla conocida en vez de un accidente.
+    #:
+    #: **Lo que esto cuesta**: pasado el plazo, una evidencia `photo_confirmed`
+    #: sigue diciendo que hay fotografía y la fotografía ya no está. El modelo
+    #: distingue `photo_confirmed` de `manual_no_photo` precisamente por eso, y
+    #: con retención esa distinción deja de ser comprobable. Por eso el valor
+    #: por defecto es `0`: un entorno con almacenamiento duradero no debe
+    #: heredar esto por descuido.
+    ODOMETER_PHOTO_RETENTION_MINUTES: int = Field(default=0, ge=0)
+
     # ── Correo ──────────────────────────────────────────────────────────────
     EMAIL_BACKEND: Literal["console", "memory", "smtp"] = "console"
     EMAIL_FROM: str = "no-reply@example.com"

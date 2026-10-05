@@ -76,6 +76,15 @@ class StorageProvider(Protocol):
     def exists(self, storage_key: str) -> bool:
         ...
 
+    def delete(self, storage_key: str) -> bool:
+        """Retira un objeto. Devuelve si existía.
+
+        Borrar algo que ya no está **no es un error**: dos barridos solapados o
+        un reintento llegan a la misma conclusión, y hacer fallar al segundo
+        convertiría una carrera inofensiva en ruido. Devuelve `False` y sigue.
+        """
+        ...
+
     def put_derivative(self, *, data: bytes, content_type: str, scope: str) -> StorageObject:
         """Guarda un objeto que genera el servidor (miniatura, normalizada)."""
         ...
@@ -251,6 +260,25 @@ class LocalFileStorage:
     def open(self, storage_key: str) -> bytes:
         return self._ruta(storage_key).read_bytes()
 
+    def delete(self, storage_key: str) -> bool:
+        destino = self._ruta(storage_key)
+        try:
+            destino.unlink()
+        except FileNotFoundError:
+            return False
+        # Se limpian los directorios de fecha que quedan vacíos. Sin esto el
+        # almacén acumula un árbol de carpetas huecas, una por día, que nadie
+        # mira hasta que estorban.
+        padre = destino.parent
+        raiz = self.root.resolve()
+        while padre != raiz and padre.is_relative_to(raiz):
+            try:
+                padre.rmdir()
+            except OSError:
+                break
+            padre = padre.parent
+        return True
+
     def exists(self, storage_key: str) -> bool:
         try:
             return self._ruta(storage_key).is_file()
@@ -348,6 +376,14 @@ class S3CompatibleStorage:
 
     def open(self, storage_key: str) -> bytes:
         return self._client.get_object(Bucket=self.bucket, Key=storage_key)["Body"].read()
+
+    def delete(self, storage_key: str) -> bool:
+        # S3 no distingue borrar lo que estaba de borrar lo que no: `delete_object`
+        # responde igual. Se consulta antes para poder contar lo que de verdad se
+        # retiró, que es lo que hace legible el informe del barrido.
+        existia = self.exists(storage_key)
+        self._client.delete_object(Bucket=self.bucket, Key=storage_key)
+        return existia
 
     def exists(self, storage_key: str) -> bool:
         from botocore.exceptions import ClientError
