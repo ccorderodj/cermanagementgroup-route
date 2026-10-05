@@ -167,7 +167,23 @@ async def download_photo(
             status_code=status.HTTP_404_NOT_FOUND, detail="Photo not found"
         )
 
-    contenido = get_storage().open(evidencia.storage_key)
+    try:
+        contenido = get_storage().open(evidencia.storage_key)
+    except FileNotFoundError:
+        # La foto se capturó y ya no está. Ocurre por dos motivos que el
+        # servidor no puede distinguir: la retención la retiró, o el disco del
+        # contenedor se recicló. En los dos casos es un hecho sobre el recurso,
+        # no un fallo del servidor, y 410 es lo que lo dice — un 500 haría
+        # pensar en una avería y un 404 negaría que la evidencia existe, que sí
+        # existe y conserva su lectura confirmada.
+        raise HTTPException(
+            status_code=status.HTTP_410_GONE,
+            detail=(
+                "The photo is no longer stored. The confirmed reading remains "
+                "on the record."
+            ),
+        ) from None
+
     return Response(
         content=contenido,
         media_type=evidencia.content_type or "application/octet-stream",
