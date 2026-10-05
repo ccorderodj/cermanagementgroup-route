@@ -52,10 +52,21 @@ from decimal import Decimal, InvalidOperation
 
 logger = logging.getLogger(__name__)
 
-#: El binario mira una sola línea de texto (`--psm 7`) y sólo puede devolver
-#: dígitos y el punto de las décimas. La lista blanca es lo que más sube el
-#: acierto en un odómetro: sin ella, un `0` se confunde con `O` y un `1` con `l`.
-_PSM_LINEA_UNICA = "7"
+#: Texto disperso (`--psm 11`): busca lo que haya, esté donde esté.
+#:
+#: Antes era `7`, "una sola línea de texto", y era el modo equivocado para esto.
+#: Un salpicadero no es una línea: es el odómetro, el cuentaparcial, la
+#: velocidad y lo que el fabricante haya querido, repartidos por el encuadre.
+#: Medido sobre un tablero con dos grupos numéricos, el contraste es total —
+#: con `7` no se reconoce **nada**, con `11` salen los dos al 96% de confianza:
+#:
+#:     psm=7  -> []
+#:     psm=11 -> [('128437', 96.2), ('241.6', 96.6)]
+#:
+#: El modo `7` funcionaba con una imagen que fuera exactamente una línea de
+#: dígitos, que es la forma de las sondas sintéticas de verificación. Por eso
+#: pasaban mientras las fotografías de campo no producían ni una sugerencia.
+_PSM_TEXTO_DISPERSO = "11"
 _CARACTERES = "0123456789."
 
 #: Lado mayor al que se reduce la foto antes de reconocer. Una foto de teléfono
@@ -79,6 +90,11 @@ MAX_LECTURA = Decimal("99999999.9")
 #: Un número con dígitos y, como mucho, una parte decimal de un dígito: es lo
 #: que cabe en `Numeric(10, 1)`.
 _CANDIDATO = re.compile(r"^\d{1,8}(?:\.\d)?$")
+
+#: La primera columna de la cabecera que emite `tessedit_create_tsv`. Sirve
+#: para distinguir una salida TSV de la de texto plano a la que Tesseract cae
+#: cuando no encuentra lo que se le pidió.
+_CABECERA_TSV = "level	page_num"
 
 
 class TesseractUnavailable(RuntimeError):
@@ -221,24 +237,46 @@ def _candidatos(tsv: str) -> list[str]:
 
 
 def _a_lectura(candidatos: list[str]) -> Decimal | None:
-    """Un solo candidato plausible es una sugerencia; dos son una ambigüedad.
+    """Elige entre los candidatos, o no elige y no sugiere nada.
 
-    El salpicadero de un vehículo tiene el odómetro total **y** el parcial, y
-    casi siempre los dos están en la foto. Elegir uno de los dos por tamaño o
-    por posición sería adivinar, y la sugerencia equivocada tiene mucho más
-    coste que la sugerencia ausente: ésta hace teclear, y aquélla puede entrar
-    como kilometraje confirmado si alguien la acepta sin mirar.
+    El problema real
+    ----------------
+    Un salpicadero casi nunca enseña un solo número. Lo normal es el odómetro
+    **y** el cuentaparcial, y a menudo algo más. La versión anterior devolvía
+    `None` ante más de un candidato, lo cual era seguro y resultó ser demasiado:
+    medido sobre un tablero corriente, el OCR encontraba `128437` y `241.6` al
+    96% de confianza y la pantalla no enseñaba nada. El supervisor tecleaba
+    siempre.
+
+    Qué distingue al odómetro, y por qué no es adivinar
+    ---------------------------------------------------
+    El odómetro **acumula** y el cuentaparcial **se pone a cero**, así que el
+    primero tiene más dígitos que el segundo durante casi toda la vida del
+    vehículo. No es una heurística de apariencia —ni el tamaño, ni la posición,
+    ni "el número más grande"— sino una propiedad de lo que cada uno cuenta.
+
+    Se exige que el ganador tenga **estrictamente** más dígitos que todos los
+    demás. Si dos empatan, no hay ganador y no se sugiere nada: un empate
+    significa que la foto no distingue, y en ese caso callarse sigue siendo la
+    respuesta correcta. Una sugerencia equivocada es peor que ninguna.
     """
-    if len(candidatos) != 1:
-        if len(candidatos) > 1:
-            logger.info(
-                "ODOMETER OCR | %d candidatos plausibles: ambiguo, sin sugerencia",
-                len(candidatos),
-            )
+    if not candidatos:
+        return None
+
+    def digitos(valor: str) -> int:
+        return len(valor.replace(".", ""))
+
+    ordenados = sorted(candidatos, key=digitos, reverse=True)
+    if len(ordenados) > 1 and digitos(ordenados[0]) == digitos(ordenados[1]):
+        logger.info(
+            "ODOMETER OCR | %d candidatos empatados en dígitos: ambiguo, "
+            "sin sugerencia",
+            len(ordenados),
+        )
         return None
 
     try:
-        lectura = Decimal(candidatos[0])
+        lectura = Decimal(ordenados[0])
     except InvalidOperation:
         return None
 
@@ -284,9 +322,19 @@ class TesseractReader:
             "stdin",
             "stdout",
             "-l", self.language,
-            "--psm", _PSM_LINEA_UNICA,
+            "--psm", _PSM_TEXTO_DISPERSO,
             "-c", f"tessedit_char_whitelist={_CARACTERES}",
-            "tsv",
+            # El TSV se pide por **parámetro**, no por el fichero de
+            # configuración `tsv`.
+            #
+            # Son equivalentes cuando ese fichero existe, y la diferencia
+            # importa cuando no: Tesseract avisa por stderr —"Can't open
+            # tsv"—, **devuelve 0** y cae a texto plano. El texto plano tiene
+            # una columna, el parser espera doce, así que no se reconocía
+            # ningún candidato y el adaptador devolvía `None` con cualquier
+            # fotografía, sin un solo error. Medido en una instalación cuyo
+            # paquete no trae los `configs/`.
+            "-c", "tessedit_create_tsv=1",
         ]
 
         try:
@@ -311,4 +359,13 @@ class TesseractReader:
             )
 
         tsv = resultado.stdout.decode("utf-8", "replace")
+        if not tsv.startswith(_CABECERA_TSV):
+            # Si la salida no es TSV, no hay candidatos que interpretar — y
+            # devolver `None` aquí sería indistinguible de "no vi nada". Son
+            # cosas distintas: una es la foto, la otra es la instalación, y
+            # sólo la segunda se arregla. Se levanta para que `suggest_safely`
+            # la registre con su traza.
+            raise TesseractUnavailable(
+                f"{self.binary} no devolvió TSV: {tsv.splitlines()[:1]}"
+            )
         return _a_lectura(_candidatos(tsv))

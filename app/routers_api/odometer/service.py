@@ -263,7 +263,14 @@ class OdometerService:
             # salpicadero y matrícula.
             changes={
                 "evidence_type": {"old": None, "new": evidence_type},
-                "ocr_suggested": {"old": None, "new": str(sugerencia) if sugerencia else None},
+                # `is not None`, no la verdad del valor: `Decimal("0")` es falsy
+                # en Python, así que una lectura de cero se habría auditado como
+                # "no hubo sugerencia". Son hechos distintos y el OCR no tiene
+                # por qué saber qué valores le parecen plausibles al negocio.
+                "ocr_suggested": {
+                    "old": None,
+                    "new": str(sugerencia) if sugerencia is not None else None,
+                },
                 # Queda por escrito si alguien miró el archivo y con qué
                 # proveedor. Nadie podrá dar por revisada una foto que no lo fue.
                 "scan_status": {"old": None, "new": veredicto.verdict.value},

@@ -104,15 +104,34 @@ def test_un_digito_suelto_no_es_una_lectura():
     assert leer((95.0, "7")) is None
 
 
-def test_dos_candidatos_son_una_ambiguedad_y_no_se_sugiere_nada():
-    """El odómetro y el cuentaparcial, los dos en la foto: el caso normal.
+def test_entre_odometro_y_cuentaparcial_gana_el_de_mas_digitos():
+    """El caso normal de cualquier salpicadero, y el que antes no se resolvía.
 
-    Si este test empieza a fallar porque alguien decidió elegir "el más largo"
-    o "el de arriba", lo que se habrá perdido es la honestidad de la
-    sugerencia: el supervisor vería un número con aspecto de detectado que en
-    realidad salió de un desempate inventado.
+    La versión anterior devolvía `None` ante más de un candidato. Era seguro y
+    resultó ser demasiado: medido sobre un tablero corriente, el OCR encontraba
+    los dos números al 96% de confianza y la pantalla no enseñaba nada, así que
+    el supervisor tecleaba siempre.
+
+    Lo que desempata no es la apariencia —ni tamaño, ni posición, ni "el número
+    más grande"— sino lo que cada uno cuenta: el odómetro acumula y el
+    cuentaparcial se pone a cero, así que el primero tiene más dígitos durante
+    casi toda la vida del vehículo.
     """
-    assert leer((90.0, "128437"), (87.0, "4512")) is None
+    assert leer((90.0, "128437"), (87.0, "241.6")) == Decimal("128437.0")
+    # Y da igual en qué orden los devuelva Tesseract.
+    assert leer((87.0, "241.6"), (90.0, "128437")) == Decimal("128437.0")
+
+
+def test_un_empate_de_digitos_sigue_siendo_ambiguo():
+    """Si no hay un ganador estricto, no se sugiere nada.
+
+    Es lo que queda de la regla anterior, y es lo que impide que esto se
+    convierta en "elige uno". Dos números con los mismos dígitos no se pueden
+    distinguir por lo que cuentan, y callarse sigue siendo la respuesta
+    correcta: una sugerencia equivocada es peor que ninguna.
+    """
+    assert leer((90.0, "128437"), (88.0, "451278")) is None
+    assert leer((90.0, "1234"), (88.0, "567.8")) is None
 
 
 def test_sin_texto_no_hay_sugerencia():
@@ -185,3 +204,52 @@ def test_invocar_un_binario_ausente_se_declara_indisponible():
     lector = TesseractReader(binary="tesseract-que-no-existe-en-ninguna-parte")
     with pytest.raises(TesseractUnavailable):
         lector.suggest(image=foto_decodificable(), content_type="image/png")
+
+
+# ── El fallo silencioso que costó el campo ─────────────────────────────────
+
+
+def test_una_salida_que_no_es_tsv_se_declara_indisponible():
+    """El defecto que hacía que **ninguna** fotografía produjera sugerencia.
+
+    Tesseract acepta `tsv` como nombre de fichero de configuración. Cuando ese
+    fichero no está en la instalación, avisa por stderr —"Can't open tsv"—,
+    **devuelve 0** y cae a salida de texto plano. El texto plano tiene una
+    columna y el parser espera doce, así que no se reconocía ningún candidato y
+    el adaptador devolvía `None` con cualquier imagen, sin un solo error.
+
+    Ahora el TSV se pide por parámetro, que no depende de ningún fichero, y una
+    salida que no lo sea se declara indisponible en vez de confundirse con "no
+    vi nada". Son cosas distintas: una es la fotografía y la otra es la
+    instalación, y sólo la segunda se arregla.
+    """
+    import subprocess
+
+    from app.routers_api.odometer import ocr_tesseract
+
+    class _Plano:
+        returncode = 0
+        stdout = b"128437\n"
+        stderr = b"read_params_file: Can't open tsv\n"
+
+    original = subprocess.run
+    subprocess.run = lambda *a, **k: _Plano()  # noqa: E731
+    try:
+        with pytest.raises(ocr_tesseract.TesseractUnavailable):
+            ocr_tesseract.TesseractReader().suggest(
+                image=foto_decodificable(), content_type="image/png"
+            )
+    finally:
+        subprocess.run = original
+
+
+def test_el_modo_de_segmentacion_es_texto_disperso():
+    """Fija el modo, porque volver a `7` reproduce el fallo de campo entero.
+
+    Con `--psm 7` —"una sola línea de texto"— un salpicadero con dos grupos
+    numéricos no produce **ningún** token. Medido: `psm=7 -> []` frente a
+    `psm=11 -> [('128437', 96.2), ('241.6', 96.6)]`.
+    """
+    from app.routers_api.odometer.ocr_tesseract import _PSM_TEXTO_DISPERSO
+
+    assert _PSM_TEXTO_DISPERSO == "11"
