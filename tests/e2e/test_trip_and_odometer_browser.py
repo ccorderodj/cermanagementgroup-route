@@ -666,8 +666,24 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
             await page.get_by_role("option", name="The photo is not readable").click()
             await page.get_by_role("button", name="Send request").click()
 
+            # Se espera el estado **asentado**, no el transitorio.
+            #
+            # Antes esto aguardaba el mensaje "Ending your day…", que es la
+            # fase `end-queued`. Esa fase se pone y la `reconcile()` de la línea
+            # siguiente la reemplaza en cuanto el servidor contesta, así que
+            # vive lo que tarda una llamada de red: contra un `uvicorn` local
+            # son milisegundos y el sondeo no la alcanza. El test fallaba por
+            # la velocidad del entorno, no por el producto —se comprobó
+            # ejecutándolo contra el código sin cambios—, y afirmar un estado
+            # cuya duración depende de la red no demuestra nada.
+            #
+            # Lo que sí es un hecho del producto es dónde acaba el supervisor:
+            # cerrado el día, su pantalla vuelve a ofrecer empezar otro. Y lo
+            # que de verdad importa de este flujo —la jornada cerrada a su hora
+            # real con la evidencia pendiente— lo comprueban las aserciones de
+            # base que vienen justo detrás, que nunca dependieron de esto.
             await expect(
-                page.get_by_text("Ending your day")
+                page.get_by_text("Ready to start your day?")
             ).to_have_count(1, timeout=20_000)
 
             jornada = await _jornada(seeded.alpha.id)
