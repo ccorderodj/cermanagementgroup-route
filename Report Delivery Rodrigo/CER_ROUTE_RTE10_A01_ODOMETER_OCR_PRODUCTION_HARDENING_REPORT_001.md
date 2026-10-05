@@ -390,15 +390,58 @@ already did; no bytes and no filename.
 | Suite | Tests | Result |
 | --- | --- | --- |
 | `tests/test_odometer_ocr_reader.py` (new) | 13 | **PASS** |
-| `tests/integration/test_odometer_ocr_productive.py` (new) | 9 | **PASS** |
-| `tests/e2e/test_rte10_odometer_photo_durability_browser.py` (new) | 4 | **PASS** |
+| `tests/integration/test_odometer_ocr_productive.py` (new) | 10 | **PASS** |
+| `tests/e2e/test_rte10_odometer_photo_durability_browser.py` (new) | 7 | **PASS** |
 | Odometer regression: `test_odometer`, `_end_work`, `_exception_autoapproval`, `_ocr_preflight` | 64 | **PASS** |
-| Browser regression: RTE06 odometer lifecycle, offline durability, bounded queue, trip+odometer, RTE10 | — | **1 failure, pre-existing in `dev`** — see below |
+| Browser regression: RTE06 odometer lifecycle, offline durability, bounded queue, trip+odometer, RTE10 | 20 | **19 PASS, 1 failure pre-existing in `dev`** — see below |
 | `npm run check` (typecheck + lint) | — | **0 errors, 0 warnings** |
 | `uv run python -c "import app.main"` | — | **OK** |
 | Full Python suite | — | `NOT RUN` |
 
 No existing test was weakened or removed.
+
+### §8's fifteen edge cases, one by one
+
+| # | Case | State | Evidence |
+| --- | --- | --- | --- |
+| 1 | clear odometer image | `NOT RUN` | needs the binary and a real photo — §13.1, CER §12.1 |
+| 2 | angled image | `NOT RUN` | same |
+| 3 | glare / reflection | `NOT RUN` | same |
+| 4 | low light | `NOT RUN` | same |
+| 5 | partial / obscured digits | `NOT RUN` | same |
+| 6 | no readable odometer | **PASS** | `test_sin_texto_no_hay_sugerencia`, `test_el_ruido_no_numerico_se_descarta` |
+| 7 | wrong reading, Supervisor corrects | **PASS** | preflight: suggested `99120`, confirmed `99125` |
+| 8 | no suggestion, manual entry succeeds | **PASS** | `test_un_ocr_que_revienta_no_cuesta_la_foto` (both ends) |
+| 9 | retake after a suggestion | **PASS** | `test_rehacer_la_foto_borra_la_sugerencia_de_la_anterior` |
+| 10 | page recreation while OCR is pending | **PASS** | `test_recrear_la_pagina_con_el_ocr_en_vuelo_no_pierde_la_foto` |
+| 11 | recreation after capture, before persistence | **PASS** | `test_la_foto_guardada_sobrevive_a_recrear_la_pagina_y_se_sube_sola` |
+| 12 | network loss after capture | **PASS** | `test_la_foto_queda_guardada_cuando_la_subida_no_llega` |
+| 13 | recovery after network returns | **PASS** | same test, via the `online` event |
+| 14 | START | **PASS** | throughout |
+| 15 | END | **PASS** | `test_la_foto_de_cierre_tambien_sobrevive_y_se_sube_sola` |
+
+Case 10 deserves a note, because OCR makes it worse rather than better:
+recognition takes time, and that time is added to the upload window. The window
+in which Android can kill the page with the photo half-way is now *longer* than
+before this checkpoint. Had the photo not been staged before the network is
+touched, enabling OCR would have aggravated exactly the problem the checkpoint
+exists to fix.
+
+### A test that passed for the wrong reason, caught and replaced
+
+The first version of the AC-8 test intercepted the upload, called
+`Route.fetch()` to obtain the real response and re-fulfilled it with an injected
+suggestion. It reported green. It was green because the handler was **throwing**:
+`Route.fetch` resolves the host with the system resolver, which does not know
+`*.localhost` — the limitation the e2e conftest already documents for its own
+probe. No suggestion ever arrived, so "the stale suggestion did not survive" was
+true for a reason that had nothing to do with the guard under test.
+
+It was replaced by a version that builds the response body itself and opens with
+a **positive control**: one upload, answered with the suggestion, asserting the
+field actually shows it. Only then does the race phase run. Without that control
+an invalid body would produce the same empty green, and the failure mode would
+have been invisible a second time.
 
 ### The browser regression failure is not a regression
 
@@ -431,11 +474,7 @@ lives in `RouteMyRoutePage.tsx`, a file this checkpoint does not touch, and §17
 forbids reopening certified functionality here. It is reported rather than
 fixed, with its operational action in §13.
 
-**Exact per-file counts are `NOT RUN`.** The valid run's summary line was lost to
-output truncation, and the re-run launched to capture it had not finished when
-this report was written. What is established is the above: one failure, in that
-test, pre-existing. The counts are bookkeeping, not evidence of a different
-outcome.
+Counts for that run: `..............F.....` — **20 tests, 19 passed, 1 failed**.
 
 **A discarded run, reported because it happened.** The first browser regression
 was launched and, while it was still running, the bundle was rebuilt twice for
@@ -470,9 +509,9 @@ next schema addition cannot repeat it.
 | 3 | Supervisor can confirm a correct suggestion | VALIDATED | preflight `test_the_port_works_when_an_adapter_is_plugged_in` |
 | 4 | Supervisor can correct a wrong suggestion | VALIDATED | same test: suggestion `99120`, confirmed `99125` |
 | 5 | No result falls back to manual without blocking | VALIDATED | `test_un_ocr_que_revienta_no_cuesta_la_foto` |
-| 6 | START and END both work | VALIDATED | parametrised `["start", "end"]` |
+| 6 | START and END both work | VALIDATED | parametrised `["start", "end"]`; END durability in `test_la_foto_de_cierre_tambien_sobrevive_y_se_sube_sola` |
 | 7 | Retake uses only the new photo and result | VALIDATED | `test_rehacer_la_foto_borra_la_sugerencia_de_la_anterior` |
-| 8 | Stale OCR cannot overwrite a later retake | IMPLEMENTED | capture counter; no automated harness for the race (§13) |
+| 8 | Stale OCR cannot overwrite a later retake | VALIDATED | `test_la_sugerencia_de_la_foto_descartada_no_puede_llegar_tarde_y_ganar`, with a positive control |
 | 9 | Photo survives lifecycle interruption before upload | VALIDATED | `test_la_foto_guardada_sobrevive_a_recrear_la_pagina...` |
 | 10 | Connectivity loss does not force a retake | VALIDATED | same test: `online` event, uploads by itself |
 | 11 | Recovery does not fabricate persistence | VALIDATED | no `uploaded` field, asserted; `captured_at is None` |
@@ -484,7 +523,7 @@ next schema addition cannot repeat it.
 | 17 | Work Session / Trip unchanged | VALIDATED | no files touched; regression green |
 | 18 | Mobile bundle measured and documented | VALIDATED | §7 |
 | 19 | Any claimed optimization has before/after evidence | NOT APPLICABLE | none claimed; §8 |
-| 20 | Security / tenant isolation green | VALIDATED | §9 |
+| 20 | Security / tenant isolation green | VALIDATED | §9; `test_no_se_puede_subir_una_foto_a_la_jornada_de_otro` (404, nothing written) |
 | 21 | Typecheck / lint / build / regression green | VALIDATED | §10 |
 | 22 | No PARTIAL / GAP / BLOCKED / DECISION REQUIRED | see §13 | — |
 
@@ -538,12 +577,16 @@ option in §3 is worth bringing to a decision.
 **Within the authorized scope, nothing is PARTIAL, BLOCKED or awaiting a
 decision.** Two items are recorded as limits rather than gaps.
 
-1. **AC-8 has no automated harness.** The stale-result guard is implemented and
-   reviewable, but the race it protects against — a first upload's response
-   arriving after a second capture — cannot be provoked reliably in desktop Edge
-   without instrumenting the component for the test. The backend half of retake
-   correctness *is* tested. `UNVERIFIED` by automation; verifiable by reading
-   `capturaActual`.
+1. **§8's image-condition cases 1–5 are `NOT RUN`.** A clear photo, an angled
+   one, glare, low light and partially obscured digits cannot be exercised here:
+   they need the Tesseract binary, which is not installed on the development
+   machine — Windows has no `apt` and the package is declared for the deployment
+   image — and they need real dashboard photographs. They are inherently field
+   observations and are carried in §12's checklist, items 1–3, where CER can
+   produce them. What *is* tested without the binary is the half that can go
+   wrong in code: how the engine's output is interpreted, which thresholds
+   accept or reject, and what happens when it is ambiguous, absent, slow or
+   broken.
 2. **Suggestion quality on real fleet photographs remains `PENDING VALIDATION`,**
    as the preflight already stated. It is CER field validation and Development
    must not declare it. The seven-segment limit in §3 is a prediction from

@@ -354,3 +354,51 @@ async def test_una_foto_solo_guardada_en_el_aparato_no_confirma_nada(
 
     assert intento.status_code == 409, intento.text
     assert "photo" in intento.json()["detail"].lower()
+
+
+# ── §14 Security: lo que el servidor rechaza ───────────────────────────────
+
+
+async def test_no_se_puede_subir_una_foto_a_la_jornada_de_otro(
+    seeded, alpha_client, beta_client
+):
+    """La foto de odómetro se sube a **tu** jornada, y sólo a la tuya.
+
+    Importa más desde que la foto se guarda en el aparato: el reintento manda
+    la jornada en la URL, así que si el servidor no comprobara de quién es, un
+    identificador cambiado a mano subiría evidencia a la jornada de otro — y de
+    otro tenant. El aislamiento local por clave es comodidad; esto es el
+    control.
+
+    Se espera **404 y no 403**, que es la regla del repositorio: a quien
+    pregunta por un recurso de otra compañía no se le confirma que exista.
+    """
+    set_odometer_reader(_LectorPorTurnos(None))
+    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+
+    # El mismo identificador, pedido desde el otro tenant.
+    await beta_client.login(seeded.beta.users["supervisor"].email)
+    intruso = await beta_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+
+    assert intruso.status_code == 404, intruso.text
+
+    # Y no se escribió nada en absoluto: ni una clave de almacenamiento, ni
+    # la fila de evidencia que `ensure_row` habría creado al aceptar la foto.
+    # Se consulta con `scalar` y no con `one` a propósito: "no hay fila" es el
+    # resultado correcto aquí, y exigir una lo convertiría en un error.
+    async with async_session_maker() as sesion:
+        claves = (
+            await sesion.execute(
+                text(
+                    "SELECT storage_key FROM odometer_evidence "
+                    "WHERE work_session_id = :s AND evidence_type = 'start'"
+                ),
+                {"s": jornada["id"]},
+            )
+        ).scalars().all()
+    assert all(k is None for k in claves), (
+        f"la petición del otro tenant dejó algo escrito: {claves}"
+    )

@@ -37,6 +37,8 @@ que Android mate el renderer por memoria no se puede provocar aquí.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from playwright.async_api import expect
 from sqlalchemy import select
@@ -93,6 +95,19 @@ async def _evidencia(company_id: int, tipo: str = "start") -> OdometerEvidence |
                 OdometerEvidence.company_id == company_id,
                 OdometerEvidence.evidence_type == tipo,
             )
+        )
+
+
+async def _jornada_actual(company_id: int):
+    """La última jornada de la compañía, para comprobar que sigue abierta."""
+    from app.routers_api.worksessions.models import WorkSession
+
+    async with async_session_maker() as session:
+        return await session.scalar(
+            select(WorkSession)
+            .where(WorkSession.company_id == company_id)
+            .order_by(WorkSession.id.desc())
+            .limit(1)
         )
 
 
@@ -366,4 +381,307 @@ async def test_el_campo_de_lectura_no_finge_una_lectura_detectada(
             confirmar = page.get_by_role("button", name="Confirm reading")
             await expect(confirmar).to_be_disabled()
         finally:
+            await navegador.close()
+
+
+# ── El cierre del día: la otra mitad que CP2 exige ──────────────────────────
+
+
+async def _llegar_a_la_tarea_de_cierre(page) -> None:
+    """Hasta `End Work`, resolviendo el inicio por el camino normal.
+
+    El recorrido es el de RTE06 porque es el que el producto impone: no se
+    puede pedir la lectura de cierre sin haber salido y vuelto.
+    """
+    await page.goto("/route")
+    await page.get_by_role("button", name="Start Work").click()
+    await page.get_by_role("button", name="Return Home").click()
+    await page.get_by_role("button", name="Start Trip").click()
+    await expect(page.get_by_text(CAPTURA)).to_have_count(1, timeout=20_000)
+    await _elegir_foto(page)
+    await page.locator("#odometer-reading").fill("90000")
+    await page.get_by_role("button", name="Confirm reading").click()
+    await page.get_by_role("button", name="Arrived Home").click()
+    await expect(page.get_by_text("What's next?")).to_have_count(1, timeout=20_000)
+    await page.get_by_role("button", name="End Work").click()
+    await expect(page.get_by_text("One last thing")).to_have_count(1, timeout=20_000)
+
+
+async def test_la_foto_de_cierre_tambien_sobrevive_y_se_sube_sola(
+    seeded, alpha_client, live_server,
+):
+    """END, el mismo contrato que START (PR-04 y CP2).
+
+    Se prueba aparte y entero en vez de parametrizar porque el camino de
+    cierre **no** es el de inicio con otra etiqueta: hay que salir, volver y
+    pedir `End Work`, y el servidor tiene una guarda propia para la foto
+    tardía. Un parámetro habría probado dos veces el mismo recorrido.
+
+    Y se comprueba lo que RTE06 dejó fijado: restaurar la pantalla de cierre
+    no puede reabrir la jornada.
+    """
+    from playwright.async_api import async_playwright
+
+    await _preparar_vehiculo(alpha_client, seeded, "V-RTE10-E")
+    supervisor = seeded.alpha.users["supervisor"]
+
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=MOVIL)
+            page = await contexto.new_page()
+            await abrir_sesion(page, supervisor.email)
+            await _llegar_a_la_tarea_de_cierre(page)
+
+            # Sin cobertura, se hace la foto de cierre.
+            await contexto.route("**/api/odometer/**/photo", lambda ruta: ruta.abort())
+            await _elegir_foto(page)
+            await expect(
+                page.get_by_text(GUARDADA_SIN_SUBIR)
+            ).to_have_count(1, timeout=20_000)
+
+            en_espera = await _fotos_en_espera(page)
+            assert len(en_espera) == 1, f"no quedó guardada: {en_espera}"
+            assert en_espera[0]["end"] == "end", (
+                f"se guardó con el extremo equivocado: {en_espera[0]}"
+            )
+            fin = await _evidencia(seeded.alpha.id, "end")
+            assert fin.captured_at is None, "la subida se abortó"
+
+            # Android recrea la pestaña, y la foto de cierre sigue ahí.
+            await page.reload()
+            await expect(page.get_by_text("One last thing")).to_have_count(
+                1, timeout=20_000
+            )
+            assert len(await _fotos_en_espera(page)) == 1, (
+                "la foto de cierre no sobrevivió a recrear la página"
+            )
+
+            # Vuelve la cobertura y sube sola.
+            await contexto.unroute("**/api/odometer/**/photo")
+            await page.evaluate("() => window.dispatchEvent(new Event('online'))")
+            await expect(page.locator("#odometer-reading")).to_have_count(
+                1, timeout=20_000
+            )
+            fin = await _evidencia(seeded.alpha.id, "end")
+            assert fin.captured_at is not None, "la foto de cierre debía llegar"
+            assert await _fotos_en_espera(page) == [], "la copia local no se limpió"
+
+            # Y restaurar la pantalla de cierre no reabrió el día.
+            jornada = await _jornada_actual(seeded.alpha.id)
+            assert jornada.status == "active", (
+                "la lectura de cierre se pide antes de terminar el día"
+            )
+        finally:
+            await navegador.close()
+
+
+# ── Caso 10 de §8: la página muere con el OCR en vuelo ─────────────────────
+
+
+async def test_recrear_la_pagina_con_el_ocr_en_vuelo_no_pierde_la_foto(
+    seeded, alpha_client, live_server,
+):
+    """§8.10, el caso que el OCR añade a la ventana de riesgo.
+
+    Reconocer tarda, y ese tiempo se suma a la subida: la ventana en la que
+    Android puede matar la pestaña con la foto a medio camino es ahora más
+    larga que antes de este checkpoint. Si la foto no estuviera guardada
+    **antes** de la red, activar el OCR habría empeorado justo el problema
+    que el checkpoint viene a arreglar.
+
+    La espera se simula retrasando la petición, que es lo que un OCR lento
+    produce desde el punto de vista del cliente.
+    """
+    import asyncio as _asyncio
+
+    from playwright.async_api import async_playwright
+
+    await _preparar_vehiculo(alpha_client, seeded, "V-RTE10-F")
+    supervisor = seeded.alpha.users["supervisor"]
+
+    async def _lenta(ruta):
+        await _asyncio.sleep(6)
+        await ruta.continue_()
+
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=MOVIL)
+            page = await contexto.new_page()
+            await abrir_sesion(page, supervisor.email)
+            await _abrir_tarea_de_inicio(page)
+
+            await contexto.route("**/api/odometer/**/photo", _lenta)
+            await _elegir_foto(page)
+
+            # La foto ya está guardada en el aparato aunque la petición siga
+            # en vuelo: eso es lo que hace que lo siguiente no la pierda. No se
+            # espera a ninguna señal de pantalla porque todavía no hay ninguna:
+            # la subida no ha vuelto, y es justo ese instante el que se prueba.
+            en_vuelo = await _fotos_en_espera(page)
+            assert len(en_vuelo) == 1, (
+                f"la foto no se guardó antes de la red: {en_vuelo}"
+            )
+            assert en_vuelo[0]["bytes"] == len(FOTO_PNG)
+
+            # Y ahora muere, con el reconocimiento a medias.
+            await page.reload()
+            await expect(page.get_by_text(CAPTURA)).to_have_count(1, timeout=20_000)
+            assert len(await _fotos_en_espera(page)) >= 1, (
+                "la foto se perdió al recrear la página con el OCR en vuelo"
+            )
+        finally:
+            await navegador.close()
+
+
+# ── AC-8: una respuesta de OCR que llega tarde no puede ganar ──────────────
+
+
+def _respuesta_de_foto(sugerencia: str | None, *, version: int) -> dict:
+    """Un cuerpo válido para `odometerPhotoResultSchema`, construido a mano.
+
+    Se construye en vez de reenviar el del servidor porque `Route.fetch` no
+    sirve en este arnés: resolvería `alpha.localhost` con el resolutor del
+    sistema, que no tiene por qué conocer los subdominios de `localhost` —el
+    mismo límite que documenta el conftest—. La primera versión de este test
+    lo usaba, el manejador reventaba, y el test **pasaba en vacío**: ninguna
+    sugerencia llegaba nunca, así que no demostraba nada.
+
+    Cuánta confianza merece un cuerpo escrito aquí lo decide la fase de
+    control del test, que comprueba que con este mismo cuerpo la sugerencia
+    sí aparece en pantalla. Sin esa fase, un cuerpo que Zod rechazara daría
+    otra vez un verde vacío.
+    """
+    return {
+        "evidence": {
+            "id": 1,
+            "work_session_id": 1,
+            "vehicle_id": 1,
+            "evidence_type": "start",
+            "status": "pending",
+            "evidence_method": None,
+            "confirmed_reading": None,
+            "ocr_detected_reading": sugerencia,
+            "captured_at": "2026-10-05T12:00:00+00:00",
+            "confirmed_at": None,
+            "confirmed_by": None,
+            "version": version,
+        },
+        "ocr_suggestion": sugerencia,
+    }
+
+
+async def test_la_sugerencia_de_la_foto_descartada_no_puede_llegar_tarde_y_ganar(
+    seeded, alpha_client, live_server,
+):
+    """AC-8, ejecutado y con control positivo.
+
+    Por qué la carrera es alcanzable
+    ---------------------------------
+    El botón se deshabilita durante la subida, así que pulsarlo dos veces no
+    produce dos envíos. Pero `setBusy(true)` no es inmediato: entre el primer
+    toque y el render que deshabilita el botón hay una ventana, y el `input` de
+    tipo fichero puede recibir un segundo fichero sin pasar por el botón. El
+    test usa esa vía porque reproduce la ventana sin inventar nada que el
+    navegador no pueda hacer.
+
+    Dos fases, y la primera es la que hace creíble a la segunda
+    -----------------------------------------------------------
+    **Control**: una sola subida, contestada con la sugerencia. Si el campo no
+    la muestra, el cuerpo construido no sirve y el test se detiene aquí en vez
+    de dar un verde que no significa nada.
+
+    **Carrera**: dos subidas con el orden invertido —la primera contesta tarde
+    y con sugerencia, la segunda enseguida y sin ninguna—. Sin el guardia, la
+    sugerencia de la foto descartada aterrizaría al final y se quedaría en el
+    campo, atada a una fotografía que el supervisor reemplazó.
+    """
+    import asyncio as _asyncio
+
+    from playwright.async_api import async_playwright
+
+    await _preparar_vehiculo(alpha_client, seeded, "V-RTE10-G")
+    supervisor = seeded.alpha.users["supervisor"]
+
+    # Lo que viaja por el cable y lo que se ve en el campo no son la misma
+    # cadena: el componente pasa la sugerencia por `readingAsNumber`, así que
+    # la décima a cero desaparece al pintarla. Se distinguen las dos para que
+    # el test compruebe lo que el supervisor ve de verdad.
+    DESCARTADA = "11111.0"
+    DESCARTADA_EN_PANTALLA = "11111"
+
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=MOVIL)
+            page = await contexto.new_page()
+            await abrir_sesion(page, supervisor.email)
+            await _abrir_tarea_de_inicio(page)
+
+            # ── Fase de control ────────────────────────────────────────────
+            async def _con_sugerencia(ruta):
+                await ruta.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(_respuesta_de_foto(DESCARTADA, version=2)),
+                )
+
+            await contexto.route("**/api/odometer/**/photo", _con_sugerencia)
+            await _elegir_foto(page)
+
+            campo = page.locator("#odometer-reading")
+            await expect(campo).to_have_count(1, timeout=20_000)
+            await expect(campo).to_have_value(DESCARTADA_EN_PANTALLA, timeout=20_000), (
+                "el cuerpo construido no llega a la pantalla: sin esto, la "
+                "segunda fase daría un verde vacío"
+            )
+            await contexto.unroute("**/api/odometer/**/photo", _con_sugerencia)
+
+            # ── Fase de carrera ────────────────────────────────────────────
+            peticiones = {"n": 0}
+
+            async def _desordenar(ruta):
+                peticiones["n"] += 1
+                if peticiones["n"] == 1:
+                    # La foto que el supervisor va a descartar: tarda, y trae
+                    # la sugerencia que no debe sobrevivir.
+                    await _asyncio.sleep(5)
+                    cuerpo = _respuesta_de_foto(DESCARTADA, version=3)
+                else:
+                    cuerpo = _respuesta_de_foto(None, version=4)
+                await ruta.fulfill(
+                    status=200,
+                    content_type="application/json",
+                    body=json.dumps(cuerpo),
+                )
+
+            await contexto.route("**/api/odometer/**/photo", _desordenar)
+
+            await _elegir_foto(page)
+            await page.wait_for_timeout(300)
+            await _elegir_foto(page)
+
+            # La segunda contesta enseguida y deja el campo vacío.
+            await expect(campo).to_have_value("", timeout=20_000)
+
+            # Y ahora se deja llegar a la primera.
+            await page.wait_for_timeout(8000)
+            assert peticiones["n"] == 2, (
+                f"se esperaban dos subidas y hubo {peticiones['n']}"
+            )
+            await expect(campo).to_have_value("", timeout=5_000)
+            # Y no aparece en ningún sitio de la página, no sólo en el campo:
+            # la línea "Suggested from the photo: …" también la enseñaría. Se
+            # busca por texto en vez de leer la sección entera porque la
+            # sección puede haberse remontado, y lo que importa es que el
+            # número no esté, no dónde se habría puesto.
+            await expect(
+                page.get_by_text(DESCARTADA_EN_PANTALLA, exact=False)
+            ).to_have_count(0, timeout=5_000)
+        finally:
+            # Antes de cerrar: este test retrasa una respuesta a propósito y
+            # puede quedar un manejador dormido, que al cerrarse el navegador
+            # produce un error de cierre sin relación con el producto.
+            await contexto.unroute_all(behavior="ignoreErrors")
             await navegador.close()
