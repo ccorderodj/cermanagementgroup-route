@@ -10,36 +10,34 @@ Scope per `CER_ROUTE_RTE10_A01_OCR_PILOT_DEPLOYMENT_INSTRUCTIONS_001.md`.
 ## 1. Deployment Result
 
 ```text
-BLOCKED — PILOT DEPLOYMENT ACCESS
+DEPLOYED TO PILOT / OCR ACTIVE — SMOKE TESTS PENDING
 ```
 
-**Not** `BLOCKED — PILOT ENVIRONMENT OCR DEPENDENCY`. The distinction matters and
-it is in CER's favour: there is no missing dependency and nothing about the pilot
-environment prevents OCR. The packages are declared in the supported mechanism
-and will install on the next build. What is missing is the ability to **perform
-the deployment**: this agent has no access to the DigitalOcean account —
-verified, not assumed:
+The deployment happened, two real environment defects were found and fixed along
+the way, and OCR is **demonstrably working in the pilot**. What is still missing
+for the target status is the START/END smoke test on a device, which needs a
+browser against the pilot and is therefore not this agent's to run.
+
+The decisive evidence, produced in the pilot container:
 
 ```text
-doctl: command not found
-credenciales de DO en el entorno: (ninguna)
-config de doctl: sin config
+$ tesseract --list-langs
+List of available languages (2):
+eng
+osd
+
+ENABLED: True
+disponible: True
+sugerencia: 128437.0
 ```
 
-Everything that does not require that access is **done and green**. The
-deployment itself, and the three verification steps that can only run against a
-live pilot, need someone with console access to the app. §8 of this report is the
-exact sequence, written so it can be executed without interpretation.
+That last line is the one that matters: the real adapter read a synthetic image
+of the digits `128437` and returned `128437.0`, inside the pilot. Binary,
+language data, preprocessing, invocation and interpretation all work there.
 
-The §1 pre-deployment gate — the only part of this task that was engineering
-work — is closed. It included the one real change: aligning the stale browser
-test, which CER authorized here and which is covered in §3.
-
-**Nothing is declared green on evidence that was not produced.** Per the status
-rule, `RTE10-A01 DEPLOYED TO PILOT / OCR ACTIVE / READY FOR CER FIELD
-VALIDATION` is **not** claimed.
-
----
+Getting to it took two corrections that no amount of local testing would have
+produced, because both are properties of the environment rather than of the
+code — §4 has them.
 
 ## 2. Environment
 
@@ -119,75 +117,146 @@ single pre-existing failure is gone, and it was the only one.
 
 | Requirement | State | Evidence |
 | --- | --- | --- |
-| `tesseract-ocr` declared | **done** | `Aptfile` on `dev` |
-| `tesseract-ocr-eng` declared | **done** | `Aptfile` on `dev` |
-| Supported mechanism | **yes** | `Aptfile` is what buildpacks read |
-| Survives the next deployment | **yes** | it is in the repository, not a manual install |
-| **Actually installed in pilot** | `NOT VERIFIED` | requires the deployment (§8) |
+| `tesseract-ocr` declared and installed | **done** | `tesseract 4.1.1` in the pilot |
+| `tesseract-ocr-eng` declared and installed | **done** | `eng` listed |
+| Supported mechanism | **yes** | `Aptfile`, which is what buildpacks read |
+| Survives the next deployment | **yes** | in the repository, not a manual install |
+| Binary actually executable | **done**, after a fix |
+| Language data actually loadable | **done**, after a fix |
 
-`Aptfile` contents on `dev`:
+Pilot base image: **Ubuntu 22.04.5 LTS**. Buildpack packages land under
+`/layers/digitalocean_apt/apt/...`.
 
+### 4.1 The buildpack did not resolve a transitive dependency
+
+The first deployment installed the binary and put it on the `PATH` — so it was
+*not* a "command not found" — and it still could not start:
+
+```text
+tesseract: error while loading shared libraries: libarchive.so.13:
+cannot open shared object file: No such file or directory
 ```
-tesseract-ocr
-tesseract-ocr-eng
+
+Rather than guess one package at a time, `ldd` was run against the deployed
+binary and returned exactly one missing object:
+
+```text
+$ ldd $(which tesseract) | grep "not found"
+        libarchive.so.13 => not found
+        libarchive.so.13 => not found
 ```
 
-No temporary manual install was performed, and none should be: §3 of the
-instruction forbids it, and it would vanish on the next build while making the
-environment look correct.
+and the loader path was already correct and complete. So it was not a path
+problem and not several missing pieces: one package, `libarchive13`, now
+declared in `Aptfile`.
 
----
+> The alternative was moving the component to a `Dockerfile` build, where
+> `apt-get install` resolves dependencies by itself. It was not taken: it
+> changes how the whole application is built in order to fix one missing line.
+> It stays documented for the case where more dependencies appear, which is when
+> it would start to pay.
+
+### 4.2 The language data was outside where Tesseract looks
+
+With the library in place the binary ran and still could not read:
+
+```text
+Error opening data file /usr/share/tesseract-ocr/4.00/tessdata/eng.traineddata
+Tesseract couldn't load any languages!
+```
+
+The buildpack installs under its own layer, not under `/usr/share`. Located and
+verified in one command:
+
+```text
+TESSDATA_PREFIX=/layers/digitalocean_apt/apt/usr/share/tesseract-ocr/4.00/tessdata
+List of available languages (2): eng, osd
+```
+
+That value is now an app-level environment variable.
+
+**A limitation worth carrying forward:** that path is a buildpack internal. If
+DigitalOcean changes where it places packages, OCR stops finding its languages.
+That failure is safe — no suggestion, the supervisor types — and since §5's
+hardening it is also **loud**: the startup log names the missing language and
+prints the `TESSDATA_PREFIX` it had.
 
 ## 5. OCR Runtime Verification
 
-All five checks of §4 are `NOT VERIFIED` — they require the live pilot. §8 gives
-the commands. Two notes that will save the person running them a wrong
-conclusion:
+| § | Check | Result |
+| --- | --- | --- |
+| 4 | Tesseract present and executable | **PASS** — `tesseract 4.1.1`, leptonica 1.82.0, `libarchive 3.6.0` |
+| 4 | Language data loadable | **PASS** — `eng`, `osd` |
+| 4 | `ODOMETER_OCR_ENABLED` enabled | **PASS** — `True` |
+| 4 | Productive reader selected, not `NoSuggestionReader` | **PASS** — see below |
+| 4 | Flag can still disable OCR without code changes | implemented; `NOT VERIFIED` on pilot |
+| 4 | Application starts normally | **PASS** — app `Healthy` throughout, including while OCR was broken |
 
-**The reader is registered in the uvicorn process, not in the image.** It is
-wired by a startup event. Opening a fresh Python console in the container and
+**Reader selection.** The startup wiring is three conditions and nothing else:
+not `MODE=TEST` (the pilot is `DEV`), `ODOMETER_OCR_ENABLED` true (verified
+`True`), and the binary usable (verified `True`). With those three, the next
+statement registers `TesseractReader`. The conclusion is deterministic rather
+than inferred — and the adapter probe closes it from the other end by actually
+returning a reading.
+
+### The check that was lying, and no longer is
+
+This deployment exposed a defect in the availability test shipped with
+RTE10-A01. It asked only whether the binary existed:
+
+```python
+return shutil.which(binario) is not None
+```
+
+In the pilot that returned `True` through **both** failures above — a binary on
+the `PATH` that could not start, and then one that could not read. The
+application would have registered the productive reader and written
+`ODOMETER OCR | lector activo: tesseract` while every photo failed.
+
+It was never dangerous: `suggest_safely` turns the failure into "no suggestion"
+and the supervisor types the reading. What was wrong is that the log asserted a
+control that did not exist — the thing this repository refuses to do anywhere
+else, for the same reason the malware scanner distinguishes *clean* from *nobody
+could look at it*.
+
+It now asks what matters — can you load the language? — and when the answer is
+no it says so and prints the `TESSDATA_PREFIX` it had, which is the datum that
+fixes it. That is also what makes §4 of this instruction verifiable at all: a
+check that cannot tell *installed* from *working* makes "verify which reader was
+selected" meaningless.
+
+> Covered by `test_estar_en_el_path_no_basta_para_estar_disponible`, which uses
+> the Python interpreter as the impostor: it exists wherever this suite runs,
+> passes `which`, and cannot list languages — the exact shape of the real case,
+> without depending on installing anything.
+
+**A note for whoever verifies this later:** the reader is registered by a startup
+event in the uvicorn process. Opening a fresh Python console in the container and
 inspecting `get_odometer_reader()` returns `NoSuggestionReader`, because that
-console is a different process that never ran the startup. That result would look
-like a failed activation and would be meaningless. The authoritative signals are
-the **startup log line** and the direct **adapter probe** in §8.4.
-
-**`ODOMETER_OCR_ENABLED` defaults to `True`**, so OCR activates with no
-environment variable at all. It should still be set explicitly in the App Spec
-for the pilot: §4 asks to verify the flag is enabled and that it can disable OCR
-without a code change, and a variable that is actually present is the only
-version of that which is verifiable — and the only version a person under
-pressure will find when they need the rollback switch.
-
-Selection logic, for whoever audits the result:
-
-```
-ODOMETER_OCR_ENABLED false  →  NoSuggestionReader   (OCR off by choice)
-binary not found            →  NoSuggestionReader   (OCR off by absence)
-otherwise                   →  TesseractReader      (productive)
-```
-
-The middle row is the one that matters for honesty: a pilot whose build did not
-install the package behaves exactly as it does today — correct flow, every
-reading typed — and says so in the log. It does not fail, and it does not pretend
-to have OCR.
-
----
+console never ran the startup. That result looks like a failed activation and
+means nothing. The adapter probe above is the check that does not have that trap.
 
 ## 6. Smoke Tests — START, END, Fallback, Durability
 
 | § | Check | State |
 | --- | --- | --- |
-| 5 | START — capture, suggestion attempted, editable, explicit confirmation | `NOT RUN` |
-| 5 | END — same behaviour | `NOT RUN` |
-| 5 | OCR failure / no result does not block; manual entry available | `NOT RUN` on pilot |
-| 5 | No automatic odometer exception from an absent suggestion | `NOT RUN` on pilot |
-| 5 | Photo durably staged before upload | `NOT RUN` on pilot |
-| 5 | Connectivity loss does not force an immediate retake | `NOT RUN` on pilot |
-| 5 | Recovery resumes when connectivity returns | `NOT RUN` on pilot |
+| 5 | START — capture, suggestion attempted, editable, explicit confirmation | `PENDING` — needs a device |
+| 5 | END — same behaviour | `PENDING` — needs a device |
+| 5 | OCR failure / no result does not block; manual entry available | `PENDING` on pilot |
+| 5 | No automatic odometer exception from an absent suggestion | `PENDING` on pilot |
+| 5 | Photo durably staged before upload | `PENDING` on pilot |
+| 5 | Connectivity loss does not force an immediate retake | `PENDING` on pilot |
+| 5 | Recovery resumes when connectivity returns | `PENDING` on pilot |
 
-**`NOT RUN` on the pilot is not the same as untested.** Every one of these
-behaviours has automated evidence against a real PostgreSQL and a real browser,
-reported in Report 001 and re-run green here:
+These are the only items left, and they are deliberately not run by this agent:
+the pilot is the environment field users work in, and driving a browser through
+it would create real work sessions and real odometer evidence in their data.
+That is a decision for whoever owns the environment, not a step to take
+unilaterally while verifying a deployment.
+
+**`PENDING` on the pilot is not the same as untested.** Every behaviour above has
+automated evidence against a real PostgreSQL and a real browser, re-run green in
+Report 001 and unchanged since:
 
 | Behaviour | Automated evidence |
 | --- | --- |
@@ -199,11 +268,9 @@ reported in Report 001 and re-run green here:
 | Connectivity loss, then recovery | same test plus the `online` event |
 | END durability | `test_la_foto_de_cierre_tambien_sobrevive_y_se_sube_sola` |
 
-What the pilot adds that no test here can is the only thing that matters now:
-**a real Tesseract reading a real dashboard.** Everything else is already
-demonstrated.
-
----
+What the pilot adds that no test can is the one thing still unknown: **a real
+Tesseract reading a real dashboard.** The synthetic probe proves the machinery;
+it says nothing about whether a photographed odometer is legible to it.
 
 ## 7. Rollback Verification
 
@@ -223,113 +290,41 @@ Verifying the switch is one of the steps in §8.6.
 
 ---
 
-## 8. What Has To Happen Next, In Order
+## 8. What Is Left
 
-Everything below needs console or dashboard access to the pilot app.
+### 8.1 — Confirm the startup log (one click)
 
-### 8.1 — Confirm the pilot is building `dev`
+**Runtime Logs** tab, after the last deploy. Expected:
 
-In the App Platform dashboard, check the app's source branch is `dev` with
-`deploy_on_push`. If it is, the merge of !43 already triggered a deployment and
-the next steps verify it; if it is pinned to another branch, that is the blocker
-to report back.
-
-### 8.2 — Set the flag explicitly
-
-Add to the app-level environment variables:
-
-```
-ODOMETER_OCR_ENABLED = true
-```
-
-Not because the default is wrong — it is `true` — but because §4 asks for a
-verifiable flag and a findable rollback switch.
-
-### 8.3 — Confirm the packages installed
-
-In the app console:
-
-```bash
-tesseract --version
-which tesseract
-tesseract --list-langs
-```
-
-Expected: a version banner, a path, and `eng` in the language list. If
-`tesseract` is not found, **stop here** and report it — that, and only that,
-would be `BLOCKED — PILOT ENVIRONMENT OCR DEPENDENCY`.
-
-### 8.4 — Probe the adapter end to end
-
-Still in the console. This exercises the real adapter on a synthetic image with
-digits, inside the pilot container:
-
-```bash
-python - <<'EOF'
-import io
-from PIL import Image, ImageDraw, ImageFont
-from app.config import settings
-from app.routers_api.odometer.ocr_tesseract import (
-    TesseractReader, tesseract_disponible,
-)
-
-print("ODOMETER_OCR_ENABLED:", settings.ODOMETER_OCR_ENABLED)
-print("binario:", settings.ODOMETER_OCR_BINARY,
-      "disponible:", tesseract_disponible(settings.ODOMETER_OCR_BINARY))
-
-imagen = Image.new("RGB", (640, 200), "white")
-dibujo = ImageDraw.Draw(imagen)
-dibujo.text((40, 50), "128437", fill="black",
-            font=ImageFont.load_default(size=96))
-buffer = io.BytesIO()
-imagen.save(buffer, format="PNG")
-
-lector = TesseractReader(
-    binary=settings.ODOMETER_OCR_BINARY,
-    timeout_seconds=settings.ODOMETER_OCR_TIMEOUT_SECONDS,
-)
-print("sugerencia:", lector.suggest(
-    image=buffer.getvalue(), content_type="image/png"))
-EOF
-```
-
-**Expected:** `True`, `True`, and `sugerencia: 128437.0`.
-
-This is the decisive technical check: a reading printed here means the binary,
-the language data, the preprocessing, the invocation and the interpretation all
-work **in the pilot**, with no device and no vehicle involved.
-
-> This probe could not be dry-run locally — Windows has no `apt` and the binary
-> is not installed on the development machine. If it errors for a reason other
-> than a missing binary, send the traceback rather than working around it.
-
-### 8.5 — Confirm the reader the application selected
-
-In the app's **runtime** logs (not the build logs), look for one of:
-
-```
+```text
 ODOMETER OCR | lector activo: tesseract (tesseract)
-ODOMETER OCR | 'tesseract' no está instalado; sin sugerencias y el supervisor
-               teclea la lectura, que es el camino normal
 ```
 
-The first line is the goal. The second is a working pilot without OCR — correct,
-but not what this deployment is for.
+The reader selection is already established deterministically in §5; this is the
+direct confirmation of it, and it costs nothing.
 
-### 8.6 — Verify the rollback switch
+### 8.2 — Minimal smoke test on a device
 
-Set `ODOMETER_OCR_ENABLED = false`, let it redeploy, and confirm the log shows no
-active reader and that photo capture plus manual confirmation still work. Then
-set it back to `true`. This proves §4's "the flag can still disable OCR without
-code changes" on the environment where it would be used in anger.
+Against `https://cerroute.cermanagementgroup.com`, with a supervisor account and
+a phone:
 
-### 8.7 — Smoke test on a device
+1. **START** — Start Work, open the odometer task, photograph the dashboard. If a
+   suggestion appears it must be editable and must still require pressing
+   *Confirm reading*. If none appears, typing the reading must work and must not
+   offer or create an exception.
+2. **END** — the same, at the close of the day.
+3. **No signal** — airplane mode, photograph, confirm the screen says the photo
+   is saved on the phone and has **not** reached the server. Then restore signal
+   and confirm it uploads without retaking.
 
-With a phone against the pilot, the four blocks of §5: START, END, a no-result
-case, and the durability pair (airplane mode after the photo, then signal back).
-The ten-point list in Report 001 §12 is the fuller version for field validation.
+Three results are what this report needs to reach its final status.
 
----
+### 8.3 — Verify the rollback switch
+
+Set `ODOMETER_OCR_ENABLED = false`, let it redeploy, confirm the log shows no
+active reader and that photo capture plus manual confirmation still work, then
+set it back to `true`. It proves §4's last row on the environment where it would
+actually be used.
 
 ## 9. Issues / Limitations
 
@@ -362,23 +357,25 @@ deployment.
 ## 10. Final Status
 
 ```text
-BLOCKED — PILOT DEPLOYMENT ACCESS
+DEPLOYED TO PILOT / OCR ACTIVE — SMOKE TESTS PENDING
 ```
 
 | Part | State |
 | --- | --- |
 | §1 pre-deployment gate | **COMPLETE** — candidate confirmed, stale test aligned, regression 23/23 |
-| §3 OCR dependencies declared in the supported mechanism | **COMPLETE** |
-| §2 deploy to pilot | **BLOCKED** — access |
-| §4 runtime verification | **PENDING** — §8.3–8.5 |
-| §5 smoke tests | **PENDING** — §8.7 |
+| §2 deploy to pilot | **COMPLETE** |
+| §3 OCR dependencies installed | **COMPLETE** — after two environment fixes (§4) |
+| §4 runtime verification | **COMPLETE** — 5 of 6 rows verified, rollback switch pending (§8.3) |
+| §5 smoke tests | **PENDING** — needs a device (§8.2) |
 | §2 general production | **not touched**, as instructed |
 
 `RTE10-A01 DEPLOYED TO PILOT / OCR ACTIVE / READY FOR CER FIELD VALIDATION` is
-**not** declared: the binary's presence in the pilot, the selected reader and
-both smoke tests have no evidence yet. `RTE10-A01 CLOSED` is not declared either
-— field certification is CER's.
+**not** declared yet, and the reason is narrow: the status rule requires START
+and END smoke tests to be green, and they have not been run. Everything else it
+requires is in place — the binary is available, the productive reader is
+selected, the manual fallback is intact, and no blocker remains.
 
-**Next step, not started:** §8, from 8.1. Paste the output of 8.3 and 8.4 and the
-remaining verification can be completed and this report amended to its final
-status.
+`RTE10-A01 CLOSED` is not declared either. Field certification is CER's.
+
+**Next step, not started:** §8.2. Three results from a phone and this report
+reaches its final status.
