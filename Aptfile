@@ -4,8 +4,21 @@
 # (DigitalOcean App Platform lo soporta con la convención de Heroku); la imagen
 # de Docker instala los mismos en su propia etapa, ver `Dockerfile`.
 
-# OCR del odómetro (RTE10-A01). Sin estos dos, `app/main.py` no enchufa el
-# lector y el supervisor teclea la lectura: el camino normal sigue funcionando,
+# OCR del odómetro (RTE10-A01). Sin estos, `app/main.py` no enchufa el lector y
+# el supervisor teclea la lectura: el camino normal sigue funcionando,
 # simplemente sin sugerencia. No es un requisito de arranque.
 tesseract-ocr
 tesseract-ocr-eng
+
+# Dependencia transitiva que el buildpack **no** resuelve por su cuenta.
+#
+# Medido en el piloto, no supuesto: con sólo los dos paquetes de arriba el
+# binario queda instalado y en el PATH, pero no arranca —
+#
+#     tesseract: error while loading shared libraries: libarchive.so.13
+#     ldd $(which tesseract) | grep "not found"  →  libarchive.so.13 (x2)
+#
+# y es la única que falta: el resto de las bibliotecas sí están y el
+# `LD_LIBRARY_PATH` del buildpack las encuentra. Declararla aquí es lo que
+# convierte un binario presente en un binario que corre.
+libarchive13
