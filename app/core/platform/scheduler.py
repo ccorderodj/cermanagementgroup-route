@@ -78,9 +78,9 @@ class PlatformScheduler:
 
     async def _heartbeat(self) -> None:
         from app.core.platform.diagnostics import write_heartbeat
-        from app.database import DATABASE_URL
+        from app.database import libpq_dsn
 
-        dsn = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
+        dsn = libpq_dsn()
         if await self.try_leadership(dsn):
             await write_heartbeat()
 

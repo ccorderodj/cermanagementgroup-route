@@ -85,3 +85,52 @@ def test_lo_que_alembic_anade_sigue_siendo_una_url_valida():
 def test_acepta_los_modos_de_libpq(modo):
     """No se inventa un vocabulario propio: son los modos de siempre."""
     assert _url(DB_SSL=modo).endswith(f"?ssl={modo}")
+
+
+# ── La URL que entiende asyncpg a pelo ─────────────────────────────────────
+
+
+def test_el_dsn_crudo_traduce_ssl_a_sslmode():
+    """El arreglo de un incidente medido en el piloto, no de una sospecha.
+
+    Las dos conexiones crudas del proyecto —el escucha de configuración y la
+    elección de líder del scheduler— construían el DSN quitando sólo el
+    dialecto. Con `DB_SSL=require` la cadena llegaba a `asyncpg.connect()` con
+    `?ssl=require`, y asyncpg no reconoce `ssl` como opción de conexión: lo
+    manda al servidor como parámetro de sesión y PostgreSQL contesta
+
+        CantChangeRuntimeParamError: parameter "ssl" cannot be changed now
+
+    No es que se ignorara y la conexión quedara sin cifrar —que fue lo que se
+    supuso la primera vez que se identificó esto— sino que **no se abría**.
+
+    Lo que se rompía con ello es lo que hace que merezca un test propio: sin
+    líder, el scheduler no ejecuta **ningún** trabajo programado, y los jobs
+    siguen apareciendo en el log como "executed successfully" porque el
+    envoltorio `_only_leader` sí termina bien. Un barrido que no barre, en
+    silencio.
+    """
+    from app.database import libpq_dsn
+
+    assert libpq_dsn("postgresql+asyncpg://u:p@h:5432/d") == (
+        "postgresql://u:p@h:5432/d"
+    )
+    assert libpq_dsn("postgresql+asyncpg://u:p@h:5432/d?ssl=require") == (
+        "postgresql://u:p@h:5432/d?sslmode=require"
+    )
+    # Y cuando no es el primer parámetro, que es como lo deja alembic.
+    assert libpq_dsn("postgresql+asyncpg://u:p@h/d?async_fallback=True&ssl=require") == (
+        "postgresql://u:p@h/d?async_fallback=True&sslmode=require"
+    )
+
+
+def test_el_dsn_crudo_no_inventa_cifrado():
+    """Sin `DB_SSL`, el DSN crudo no lleva `sslmode` de ninguna clase.
+
+    Añadirlo "por si acaso" rompería el desarrollo local, donde el PostgreSQL
+    de `docker-compose` no ofrece TLS — exactamente el motivo por el que
+    `DB_SSL` está vacío por defecto.
+    """
+    from app.database import libpq_dsn
+
+    assert "sslmode" not in libpq_dsn("postgresql+asyncpg://u:p@localhost:5432/d")
