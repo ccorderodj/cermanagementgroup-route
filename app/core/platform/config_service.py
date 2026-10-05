@@ -166,9 +166,9 @@ async def listen_for_changes(stop: asyncio.Event) -> None:
     """
     import asyncpg
 
-    from app.database import DATABASE_URL
+    from app.database import libpq_dsn
 
-    dsn = DATABASE_URL.replace("postgresql+asyncpg://", "postgresql://", 1)
+    dsn = libpq_dsn()
     while not stop.is_set():
         conexion = None
         try:

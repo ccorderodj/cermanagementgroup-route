@@ -61,6 +61,44 @@ else:
     }
 
 
+def libpq_dsn(url: str = "") -> str:
+    """La misma base, en la forma que entiende `asyncpg.connect()` a pelo.
+
+    Dos traducciones, y la segunda costó un incidente
+    -------------------------------------------------
+    1. `postgresql+asyncpg://` es el dialecto de SQLAlchemy; libpq quiere
+       `postgresql://`.
+    2. **`ssl=` pasa a `sslmode=`.** Es el que importa. SQLAlchemy acepta
+       `?ssl=require` y lo traduce al llamar al driver, pero `asyncpg.connect()`
+       recibe la cadena tal cual y no reconoce `ssl` como opción de conexión:
+       lo manda al servidor como parámetro de sesión, y PostgreSQL responde
+
+           CantChangeRuntimeParamError: parameter "ssl" cannot be changed now
+
+       y la conexión **no se abre**. No es que se ignore y quede sin cifrar —
+       que es lo que se supuso la primera vez— sino que falla entera.
+
+    Qué se rompía cuando fallaba
+    ----------------------------
+    Las dos únicas conexiones crudas del proyecto, y ninguna de las dos avisa a
+    gritos:
+
+    * el escucha de configuración de plataforma, que deja de enterarse de los
+      cambios de integraciones y políticas;
+    * la elección de líder del scheduler — y sin líder **ningún trabajo
+      programado se ejecuta**. Los jobs siguen apareciendo en el log como
+      "executed successfully" porque `_only_leader` los envuelve y el envoltorio
+      sí termina bien; lo que no corre es el trabajo de dentro. Un barrido de
+      millaje que no barre y una purga que no purga, en silencio.
+
+    Por eso esto vive aquí y no duplicado en cada sitio: hay dos llamadas
+    crudas, y la tercera que alguien escriba debe encontrar la traducción hecha.
+    """
+    cruda = url or DATABASE_URL
+    sin_dialecto = cruda.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return sin_dialecto.replace("?ssl=", "?sslmode=").replace("&ssl=", "&sslmode=")
+
+
 engine = create_async_engine(DATABASE_URL, **DATABASE_PARAMS)
 
 
