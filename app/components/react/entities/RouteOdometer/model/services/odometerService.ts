@@ -18,18 +18,29 @@ import {
 /**
  * Servicio de la evidencia de odómetro.
  *
- * Por qué **nada de esto se encola**
- * -----------------------------------
- * La cola durable de RTE03 guarda cuerpos JSON en IndexedDB, y aquí el hecho
- * central es una fotografía: encolar binarios de varios megabytes es otro
- * problema —cuota del navegador, expulsión silenciosa, reintentos parciales— y
- * RTE04 declara explícitamente que no lo resuelve.
+ * Qué se guarda en el aparato y qué no
+ * -------------------------------------
+ * **La foto sí** (RTE10-A01 FR-06). Se escribe en IndexedDB antes de intentar
+ * subirla y se retira cuando el servidor confirma que la tiene, de forma que
+ * una página recreada por falta de memoria o un túnel sin cobertura no obliguen
+ * al supervisor a volver al vehículo a repetirla. El carril vive en
+ * `shared/lib/offlineQueue`, en la misma base que los otros dos.
  *
- * Y aunque se resolviera, encolar sería la decisión equivocada para esta
- * pantalla: lo que el supervisor necesita saber es si **ya puede salir**. Una
- * confirmación encolada le diría que sí mientras el servidor todavía puede
+ * Hasta RTE04 esto no se hacía, y el motivo escrito entonces era bueno: encolar
+ * binarios de varios megabytes trae cuota del navegador, expulsión silenciosa y
+ * reintentos parciales. Lo que cambió es que el coste del otro lado se midió en
+ * campo —el supervisor perdía la foto— y FR-06 lo pide de forma acotada: sólo
+ * la foto, sólo hasta que el servidor la confirme.
+ *
+ * **La confirmación de la lectura no**, y por la razón de RTE04, que sigue
+ * valiendo entera: lo que el supervisor necesita saber es si **ya puede salir**.
+ * Una confirmación encolada le diría que sí mientras el servidor todavía puede
  * rechazarla, y volvería a arrancar el coche con la evidencia sin resolver.
  * Aquí se prefiere un error honesto de conexión.
+ *
+ * La diferencia entre las dos es que la foto **no afirma nada del dominio**: es
+ * el archivo que la evidencia necesitará cuando llegue. La confirmación sí
+ * afirma, y por eso no se puede prometer en nombre del servidor.
  */
 
 export async function fetchSessionOdometer(

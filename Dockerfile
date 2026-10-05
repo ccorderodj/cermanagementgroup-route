@@ -40,6 +40,18 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /code
 
+# OCR del odómetro (RTE10-A01). Los mismos paquetes que `Aptfile` instala en el
+# despliegue por buildpack, para que la imagen y la plataforma se comporten
+# igual. Son ~30 MB entre binario y datos de idioma.
+#
+# Si faltaran, la aplicación arranca igual: `app/main.py` comprueba la presencia
+# del binario y se queda sin sugerencias. Por eso no hay `--no-install-recommends`
+# que haya que auditar ni una verificación de versión: es una dependencia
+# opcional de verdad, no una que esté disfrazada.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng \
+    && rm -rf /var/lib/apt/lists/*
+
 # `uv` resuelve desde el lockfile, así que la imagen instala exactamente las
 # mismas versiones que hay en desarrollo.
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv

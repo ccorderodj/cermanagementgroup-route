@@ -7,11 +7,18 @@ export {
     listPendingLocationEvidence,
     removeLocationEvidence,
     markLocationEvidenceFailed,
+    odometerPhotoKey,
+    stageOdometerPhoto,
+    findStagedOdometerPhoto,
+    removeStagedOdometerPhoto,
+    markStagedOdometerPhotoFailed,
+    listStagedOdometerPhotos,
 } from './offlineQueue';
 export type {
     PendingAction,
     PendingActionStatus,
     PendingLocationEvidence,
+    PendingOdometerPhoto,
     FlushResult,
 } from './offlineQueue';
 export {

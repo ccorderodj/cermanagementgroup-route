@@ -83,7 +83,7 @@ async def _evidencia_pendiente(page) -> list[dict]:
     """
     return await page.evaluate(
         """() => new Promise((resolver) => {
-            const solicitud = indexedDB.open('cer-route-offline', 2);
+            const solicitud = indexedDB.open('cer-route-offline');
             solicitud.onerror = () => resolver([]);
             solicitud.onsuccess = () => {
                 const db = solicitud.result;

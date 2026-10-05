@@ -44,7 +44,7 @@ from app.routers_api.odometer.models import (
     OdometerExceptionStatus,
     OdometerStatus,
 )
-from app.routers_api.odometer.ocr import get_odometer_reader
+from app.routers_api.odometer.ocr import suggest_safely
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
 
 
@@ -222,7 +222,7 @@ class OdometerService:
             scope=f"odometer/{company_id}",
         )
 
-        sugerencia = get_odometer_reader().suggest(image=image, content_type=tipo)
+        sugerencia = await suggest_safely(image=image, content_type=tipo)
         ahora = datetime.now(timezone.utc)
 
         await OdometerService.ensure_row(

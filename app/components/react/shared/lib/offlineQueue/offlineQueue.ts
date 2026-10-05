@@ -45,17 +45,17 @@
 
 const DATABASE_NAME = 'cer-route-offline';
 /**
- * 2 desde RTE06: se añadió el almacén de evidencia de ubicación.
+ * 3 desde RTE10-A01: se añadió el almacén de fotos de odómetro en espera.
  *
  * Misma base y mismo módulo a propósito. §7 de RTE06 prohíbe una segunda cola,
- * y esto no lo es: es el mismo mecanismo de durabilidad con **dos carriles**,
- * porque los dos datos tienen semánticas de orden distintas y meterlos en el
- * mismo carril rompería una de las dos.
+ * y esto no lo es: es el mismo mecanismo de durabilidad con **tres carriles**,
+ * porque los datos tienen semánticas de orden distintas y meterlos en el mismo
+ * carril rompería alguna de ellas.
  *
  * `onupgradeneeded` crea lo que falte y no toca lo que hay, así que un
- * dispositivo con la versión 1 y acciones pendientes las conserva.
+ * dispositivo con la versión 1 o 2 y cosas pendientes las conserva.
  */
-const DATABASE_VERSION = 2;
+const DATABASE_VERSION = 3;
 const STORE_NAME = 'pending_actions';
 /**
  * Evidencia de ubicación pendiente de enviar.
@@ -68,6 +68,22 @@ const STORE_NAME = 'pending_actions';
  * las acciones operativas que van detrás.
  */
 const LOCATION_STORE = 'pending_location_evidence';
+/**
+ * Fotos de odómetro ya tomadas y todavía no confirmadas por el servidor
+ * (RTE10-A01 FR-06).
+ *
+ * Tercer carril, y por un motivo distinto a los otros dos: aquí lo que se
+ * guarda es un **binario de varios megabytes**, no un cuerpo JSON. El comentario
+ * de `odometerService.ts` decía que RTE04 no resolvía esto, y era cierto
+ * entonces; FR-06 lo pide ahora de forma explícita y acotada a la foto.
+ *
+ * Lo que sigue sin encolarse es la **confirmación de la lectura**, y la razón de
+ * RTE04 no ha cambiado: lo que el supervisor necesita saber es si ya puede
+ * salir, y una confirmación encolada le diría que sí mientras el servidor
+ * todavía puede rechazarla. La foto es distinta porque no afirma nada del
+ * dominio: es el archivo que la evidencia necesitará cuando llegue.
+ */
+const ODOMETER_PHOTO_STORE = 'pending_odometer_photos';
 
 export type PendingActionStatus = 'pending' | 'failed';
 
@@ -108,6 +124,13 @@ function openDatabase(): Promise<IDBDatabase> {
                 // idempotencia empieza en el dispositivo y no depende de que el
                 // servidor la arregle después.
                 db.createObjectStore(LOCATION_STORE, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(ODOMETER_PHOTO_STORE)) {
+                // `id` es la tupla usuario-jornada-extremo, por lo mismo: una
+                // foto nueva para la misma tarea **reemplaza** a la anterior en
+                // vez de apilarse. Es lo que hace que rehacer la foto no pueda
+                // dejar dos candidatas y que la vieja no pueda ganar después.
+                db.createObjectStore(ODOMETER_PHOTO_STORE, { keyPath: 'id' });
             }
         };
 
@@ -237,6 +260,134 @@ export async function markLocationEvidenceFailed(
         lastError: error.slice(0, 300),
     };
     await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(actualizada));
+}
+
+// ── Fotos de odómetro en espera (RTE10-A01) ─────────────────────────────────
+
+/**
+ * Una foto que el dispositivo ya produjo y que el servidor todavía no confirmó.
+ *
+ * `blob` se guarda **tal cual**, como Blob. IndexedDB los almacena de forma
+ * nativa, y eso importa en un teléfono con poca memoria: convertir la foto a
+ * base64 la infla un 33% y la deja como una cadena en el montón de JavaScript,
+ * que es justo la presión que este checkpoint intenta reducir.
+ *
+ * `uploaded` no existe a propósito. Una entrada en este almacén significa
+ * exactamente una cosa —"tomada, no confirmada por el servidor"— y se **borra**
+ * al confirmarse. Un booleano permitiría el estado "guardada y marcada como
+ * subida" sin que nadie lo hubiera comprobado, que es la mentira que FR-08
+ * prohíbe.
+ */
+export interface PendingOdometerPhoto {
+    /** `${userId}:${sessionId}:${end}`. Ver `odometerPhotoKey`. */
+    id: string;
+    sessionId: number;
+    end: 'start' | 'end';
+    blob: Blob;
+    fileName: string;
+    contentType: string;
+    /** Cuándo la tomó el dispositivo. No se recalcula al reintentar. */
+    capturedAt: string;
+    attempts: number;
+    lastError?: string;
+}
+
+/**
+ * La clave de una foto en espera, y con ella su alcance (FR-09).
+ *
+ * Lleva usuario, jornada y extremo. **No lleva compañía, y no le hace falta**:
+ * cada tenant vive en su propio subdominio, así que es un origen distinto para
+ * el navegador y tiene su propia IndexedDB. El aislamiento entre tenants lo da
+ * el modelo de orígenes, que es más fuerte que cualquier prefijo que se pudiera
+ * escribir aquí.
+ *
+ * El usuario sí hace falta: dos supervisores pueden compartir un teléfono, y la
+ * foto de uno no puede aparecerle al otro. Sale de la cookie `user_data`, que
+ * es legible y editable —así que esto es **aislamiento local, no
+ * autorización**—. Quien decide si la foto puede subirse a esa jornada es el
+ * servidor, en cada petición.
+ */
+export function odometerPhotoKey(
+    userId: number,
+    sessionId: number,
+    end: 'start' | 'end',
+): string {
+    return `${userId}:${sessionId}:${end}`;
+}
+
+/**
+ * Guarda la foto, y **se resuelve sólo cuando IndexedDB confirmó la escritura**.
+ *
+ * Quien llama debe esperar esto *antes* de intentar la subida: es lo que hace
+ * que "el dispositivo tiene la foto" sea un hecho y no una intención. Si se
+ * lanzara en paralelo con el POST, una página recreada en medio podría dejar la
+ * foto sin guardar en ningún sitio, que es el caso que FR-06 existe para evitar.
+ */
+export async function stageOdometerPhoto(
+    entrada: Omit<PendingOdometerPhoto, 'attempts' | 'lastError'>,
+): Promise<void> {
+    // `put` con la misma clave reemplaza: una foto nueva para la misma tarea
+    // sustituye a la anterior, y los intentos empiezan de cero porque es otra
+    // foto y los fallos de la vieja no dicen nada de ésta.
+    await withNamedStore(ODOMETER_PHOTO_STORE, 'readwrite', (store) => store.put({
+        ...entrada,
+        attempts: 0,
+    } satisfies PendingOdometerPhoto));
+}
+
+/** La foto en espera de esta tarea, si la hay. */
+export async function findStagedOdometerPhoto(
+    id: string,
+): Promise<PendingOdometerPhoto | undefined> {
+    return withNamedStore<PendingOdometerPhoto | undefined>(
+        ODOMETER_PHOTO_STORE,
+        'readonly',
+        (store) => store.get(id) as IDBRequest<PendingOdometerPhoto | undefined>,
+    );
+}
+
+/**
+ * Retira la foto. Se llama cuando el servidor confirmó que la tiene, o cuando
+ * el supervisor la reemplazó o descartó: las tres condiciones terminales de
+ * FR-06. No se llama "nunca por si acaso" — mientras la entrada exista,
+ * significa que el dispositivo es el único que tiene esa foto.
+ */
+export async function removeStagedOdometerPhoto(id: string): Promise<void> {
+    await withNamedStore(ODOMETER_PHOTO_STORE, 'readwrite', (store) => store.delete(id));
+}
+
+/** Anota un intento fallido, sin perder la foto. */
+export async function markStagedOdometerPhotoFailed(
+    id: string,
+    error: string,
+): Promise<void> {
+    const entrada = await findStagedOdometerPhoto(id);
+    if (!entrada) return;
+    await withNamedStore(ODOMETER_PHOTO_STORE, 'readwrite', (store) => store.put({
+        ...entrada,
+        attempts: entrada.attempts + 1,
+        lastError: error.slice(0, 300),
+    } satisfies PendingOdometerPhoto));
+}
+
+/**
+ * Todas las fotos en espera de este usuario.
+ *
+ * La usa el barrido que reintenta al volver la conexión. Se filtra por usuario
+ * para no intentar subir la foto de quien ya no tiene la sesión abierta.
+ */
+export async function listStagedOdometerPhotos(
+    userId: number,
+): Promise<PendingOdometerPhoto[]> {
+    const todas = await withNamedStore<PendingOdometerPhoto[]>(
+        ODOMETER_PHOTO_STORE,
+        'readonly',
+        (store) => store.getAll() as IDBRequest<PendingOdometerPhoto[]>,
+    );
+    const prefijo = `${userId}:`;
+    return todas
+        .filter((f) => f.id.startsWith(prefijo))
+        .sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
 }
 
 export async function listPendingActions(): Promise<PendingAction[]> {
