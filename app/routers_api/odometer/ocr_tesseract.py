@@ -69,47 +69,50 @@ logger = logging.getLogger(__name__)
 _PSM_TEXTO_DISPERSO = "11"
 _CARACTERES = "0123456789."
 
-#: Lado mayor de la imagen base. Por encima se reduce; por debajo **no se
-#: amplía aquí**, porque ampliar mucho destruye los dígitos pequeños: medido
-#: sobre un recorte real de 185 px, a 1600 px no se reconoce nada y a tamaño
-#: nativo se lee al 96% de confianza.
+#: Lado mayor de la imagen. Por encima se reduce; por debajo **no se amplía**,
+#: y eso ya no es sólo una precaución: ver `VARIANTES`.
 TOPE_BASE = 2400
 
-#: Lado mayor que puede alcanzar una variante ampliada. Pasado, la variante se
-#: descarta en vez de producir una imagen que tarda y no aporta.
-TOPE_VARIANTE = 3600
+#: Umbral de la máscara de enfoque, común a todas las pasadas: por debajo de
+#: esta diferencia local no se realza nada, que es lo que evita amplificar el
+#: grano del sensor en las zonas planas del salpicadero.
+NITIDEZ_UMBRAL = 2
 
-#: Las pasadas, como `(factor, aplicar nitidez)`.
+#: Las pasadas, como `(nombre, radio, porcentaje)` de la máscara de enfoque.
+#: Todas a **resolución nativa**: la diversidad está en la preparación.
 #:
-#: Por qué el factor no basta, y esto es el arreglo de un defecto real
-#: --------------------------------------------------------------------
-#: Antes las pasadas se pedían por dimensión absoluta —2400, 3200, 1600— sobre
-#: `normalize_image`, que **sólo reduce**. Con una imagen de 185 px las tres
-#: producían exactamente la misma imagen efectiva, y tres lecturas idénticas de
-#: la misma entrada se contaban como "acuerdo multiescala". Medido:
+#: Qué se midió para elegir estas cuatro
+#: --------------------------------------
+#: Se puntuaron todos los subconjuntos de un repertorio de diez preparaciones
+#: sobre 25 imágenes con verdades distintas (no sólo la de referencia), 20
+#: positivas y 5 negativas, con Tesseract 5.5.3. El criterio fue primero el
+#: número de **consensos equivocados** y sólo después el de aciertos, porque una
+#: sugerencia errónea que el supervisor acepta sin mirar cuesta más que un
+#: campo vacío.
 #:
-#:     escala 2400 -> dim efectiva (185, 72) -> 151517
-#:     escala 3200 -> dim efectiva (185, 72) -> 151517
-#:     escala 1600 -> dim efectiva (185, 72) -> 151517
+#:     conjunto                              aciertos  equivocados  callados
+#:     r1.0-180 r1.5-180 r1.2-240 r2.0-240       17          1          7
+#:     r1.0-180 r1.2-180 r1.5-180 (el de §7)     13          2          6
+#:     r1.2-180 sin-nitidez x2 (MR !54)          12          1          8
 #:
-#: El resultado era correcto y el razonamiento no: repetir la misma evidencia no
-#: es confianza adicional. Ahora las variantes se diferencian por **escala y por
-#: preprocesado**, que sí produce entradas materialmente distintas, y las que
-#: coinciden en ambas cosas se descartan por duplicadas.
-#:
-#: La variante sin nitidez no es relleno: es una preparación distinta de la
-#: misma fuente, con otros modos de fallo. Que dos preparaciones distintas lean
-#: el mismo número es evidencia; que la misma se lea dos veces, no.
-VARIANTES: tuple[tuple[float, bool], ...] = ((1.0, True), (1.0, False), (2.0, True))
+#: Por qué no la familia de un solo radio
+#: ---------------------------------------
+#: La dirección de partida de la instrucción —tres radios al 180%— rinde peor
+#: en las dos columnas que importan. Variar sólo el radio produce errores
+#: **correlacionados**: medido sobre un salpicadero de 1400 px con el odómetro
+#: al 18% del encuadre, `r1.0` y `r1.5` leían *los dos* `191517` donde la
+#: verdad era `151517`, y al coincidir se confirmaban. Un acuerdo entre dos
+#: preparaciones que fallan igual no es evidencia independiente; es el mismo
+#: fallo contado dos veces, que es exactamente lo que PR-04 prohíbe en su otra
+#: forma. Estas cuatro mueven radio **y** porcentaje, y en ese caso se reparten
+#: entre dos valores erróneos distintos, que es lo que deja al sistema callado.
+VARIANTES: tuple[tuple[str, float, int], ...] = (
+    ("r1.0-p180", 1.0, 180),
+    ("r1.5-p180", 1.5, 180),
+    ("r1.2-p240", 1.2, 240),
+    ("r2.0-p240", 2.0, 240),
+)
 
-#: Parámetros de la máscara de enfoque.
-#:
-#: Separa los bordes de los dígitos sin inventar detalle. Medido sobre un
-#: salpicadero donde el odómetro ocupa poco: sin nitidez el motor no encuentra
-#: la lectura en ninguna escala; con ella aparece al 95-96% de confianza. No se
-#: añadió ningún suavizado previo: se probó, y con él una de las imágenes pasó a
-#: producir `191817` en vez de `151517` —una lectura **equivocada**, que es
-#: peor que ninguna.
 #: Variantes distintas que deben coincidir para aceptar una lectura.
 #:
 #: Dos, y no se baja. Si sólo hay una variante distinta disponible no hay
@@ -117,10 +120,6 @@ VARIANTES: tuple[tuple[float, bool], ...] = ((1.0, True), (1.0, False), (2.0, Tr
 #: observación bastara convertiría el control en una formalidad justo en las
 #: imágenes más difíciles, que son las que lo necesitan.
 COINCIDENCIAS_NECESARIAS = 2
-
-NITIDEZ_RADIO = 1.2
-NITIDEZ_PORCENTAJE = 180
-NITIDEZ_UMBRAL = 2
 
 #: Confianza mínima por token, en la escala 0-100 que devuelve Tesseract.
 #: Por debajo, el token se descarta: es ruido de reflejo o de poca luz.
@@ -232,7 +231,11 @@ def tesseract_disponible(binario: str = "tesseract", *, idioma: str = "eng") -> 
 
 
 def _preprocesar(
-    image: bytes, max_dimension: int = TOPE_BASE, *, nitidez: bool = True
+    image: bytes,
+    max_dimension: int = TOPE_BASE,
+    *,
+    radio: float | None = 1.0,
+    porcentaje: int = 180,
 ) -> tuple[bytes, tuple[int, int]]:
     """Deja la foto como Tesseract la lee mejor, y dice a qué tamaño quedó.
 
@@ -248,11 +251,15 @@ def _preprocesar(
     La **nitidez** separa los bordes de los dígitos, que es lo que necesita un
     odómetro de rodillo fotografiado de lejos. No inventa detalle: realza el
     contraste local que ya existe, y por eso sigue siendo preprocesado y no
-    evidencia nueva.
+    evidencia nueva. `radio=None` la desactiva, que es lo que permite medir
+    cuánto aporta en vez de suponerlo.
 
-    Devuelve también la dimensión efectiva porque es lo que permite saber si
-    dos pasadas son de verdad distintas. Sin ese dato, pedir dos escalas sobre
-    una imagen pequeña produce la misma imagen dos veces y nadie se entera.
+    No se añadió ningún suavizado previo: se probó, y con él una de las
+    imágenes pasó a producir `191817` en vez de `151517` —una lectura
+    **equivocada**, que es peor que ninguna.
+
+    Devuelve también la dimensión efectiva porque es parte de lo que se
+    registra por variante cuando hay que diagnosticar una foto de campo.
     """
     import io
 
@@ -267,12 +274,10 @@ def _preprocesar(
     imagen = Image.open(io.BytesIO(normalizada.data))
     imagen.load()
     gris = ImageOps.autocontrast(imagen.convert("L"))
-    if nitidez:
+    if radio is not None:
         gris = gris.filter(
             ImageFilter.UnsharpMask(
-                radius=NITIDEZ_RADIO,
-                percent=NITIDEZ_PORCENTAJE,
-                threshold=NITIDEZ_UMBRAL,
+                radius=radio, percent=porcentaje, threshold=NITIDEZ_UMBRAL
             )
         )
 
@@ -284,63 +289,41 @@ def _preprocesar(
 def _variantes(image: bytes) -> list[tuple[str, tuple[int, int], bytes]]:
     """Las entradas realmente distintas que se le van a dar al motor.
 
-    Dos pasadas cuentan como independientes sólo si difieren en **dimensión o
-    preparación**. Las que coinciden en ambas se descartan aquí, antes de
-    invocar nada: así el acuerdo nunca puede satisfacerse repitiendo la misma
-    imagen, que es lo que pasaba y lo que PR-04 prohíbe.
+    Por qué se compara el contenido y no los parámetros
+    ----------------------------------------------------
+    Dos configuraciones distintas pueden producir **la misma imagen**. Medido:
+    sobre un salpicadero sin nada legible —una superficie casi plana— las
+    dieciséis preparaciones del repertorio dieron los mismos bytes exactos,
+    porque realzar el contraste local de una zona sin contraste local no cambia
+    nada. Deduplicar por el nombre de la variante, o por su dimensión, habría
+    dejado pasar esas dieciséis como evidencia independiente.
 
-    La ampliación es acotada a propósito. Medido sobre un recorte de 185 px:
-    nativo y ×2 leen bien, ×6 no lee nada, y por encima el motor empieza a
-    inventar dígitos. Ampliar no añade información que no estuviera; sólo
-    mejora la geometría del borde, y pasado un punto deja de hacerlo.
+    Así que la clave es el **hash del PNG ya preparado**. Es la única definición
+    de "entrada distinta" que no se puede satisfacer por accidente, y es la
+    forma honesta de la regla que ya estaba escrita: repetir la misma evidencia
+    no es confianza.
     """
-    import io
-
-    from PIL import Image
-
-    base_bytes, base_dim = _preprocesar(image, TOPE_BASE, nitidez=False)
-    base = Image.open(io.BytesIO(base_bytes))
+    import hashlib
 
     salida: list[tuple[str, tuple[int, int], bytes]] = []
-    vistas: set[tuple[int, int, bool]] = set()
+    vistas: set[str] = set()
 
-    for factor, nitidez in VARIANTES:
-        ancho, alto = round(base.width * factor), round(base.height * factor)
-        if max(ancho, alto) > TOPE_VARIANTE:
+    for nombre, radio, porcentaje in VARIANTES:
+        png, dim = _preprocesar(
+            image, TOPE_BASE, radio=radio, porcentaje=porcentaje
+        )
+        huella = hashlib.sha256(png).hexdigest()
+        if huella in vistas:
+            logger.debug(
+                "ODOMETER OCR | variante %s produce una entrada ya vista: "
+                "se descarta",
+                nombre,
+            )
             continue
-        clave = (ancho, alto, nitidez)
-        if clave in vistas:
-            continue
-        vistas.add(clave)
-
-        if factor == 1.0:
-            png, dim = _preprocesar(image, TOPE_BASE, nitidez=nitidez)
-        else:
-            ampliada = base.resize((ancho, alto), Image.Resampling.LANCZOS)
-            png, dim = _aplicar_realce(ampliada, nitidez)
-        salida.append((f"x{factor:g}{'+nitidez' if nitidez else ''}", dim, png))
+        vistas.add(huella)
+        salida.append((nombre, dim, png))
 
     return salida
-
-
-def _aplicar_realce(imagen, nitidez: bool) -> tuple[bytes, tuple[int, int]]:
-    """Contraste y, si procede, nitidez sobre una imagen ya en gris."""
-    import io
-
-    from PIL import ImageFilter, ImageOps
-
-    gris = ImageOps.autocontrast(imagen.convert("L"))
-    if nitidez:
-        gris = gris.filter(
-            ImageFilter.UnsharpMask(
-                radius=NITIDEZ_RADIO,
-                percent=NITIDEZ_PORCENTAJE,
-                threshold=NITIDEZ_UMBRAL,
-            )
-        )
-    salida = io.BytesIO()
-    gris.save(salida, format="PNG", optimize=False)
-    return salida.getvalue(), gris.size
 
 
 def _candidatos(tsv: str) -> list[str]:
@@ -496,37 +479,46 @@ class TesseractReader:
         return _a_lectura(_candidatos(tsv))
 
     def suggest(self, *, image: bytes, content_type: str) -> Decimal | None:
-        """Lee en variantes distintas y sugiere sólo cuando dos coinciden.
+        """Lee todas las variantes y sugiere sólo si **un** valor tiene acuerdo.
 
-        Qué cuenta como acuerdo, y por qué se corrigió
-        -----------------------------------------------
-        Dos lecturas iguales sólo valen si vienen de entradas **materialmente
-        distintas**. Antes las pasadas se pedían por dimensión absoluta sobre un
-        normalizador que sólo reduce, así que con una imagen pequeña las tres
-        eran la misma: el acuerdo se satisfacía repitiendo la misma evidencia.
-        Daba el resultado correcto por un motivo que no se sostiene, y el día
-        que esa única lectura fuera errónea la habría confirmado tres veces.
+        Por qué se leen todas antes de decidir
+        ---------------------------------------
+        La versión anterior devolvía en cuanto un valor llegaba a dos
+        coincidencias. Con eso, el resultado dependía del **orden de la tupla**
+        de variantes, y no en teoría: medido sobre un salpicadero de 1400 px
+        donde la verdad era `151517`, dos preparaciones leían `191517` y otras
+        dos `191817`.
 
-        Ahora las variantes se distinguen por escala y por preparación, las
-        duplicadas se descartan antes de invocar nada, y si sólo queda una
-        pasada distinta **no hay acuerdo posible y no se sugiere**. Es la regla
-        conservadora: una sola observación no es confirmación, y bajar el
-        listón para que lo fuera sería justo lo que no se puede hacer.
+            primero-en-llegar -> `191517` o `191817`, según el orden
+            un-solo-ganador   -> sin sugerencia
+
+        Las mismas lecturas y el mismo repertorio; sólo cambia la regla. La
+        primera entrega un número equivocado con cara de confirmado y la
+        segunda se calla, que es lo correcto cuando la foto no distingue.
+
+        Así que ahora se leen todas las variantes y se exige que exactamente un
+        valor alcance el acuerdo. Si lo alcanzan dos, hay conflicto y no se
+        sugiere nada: no se escoge "el más confiado" para tener algo que
+        enseñar. Cuesta una invocación más en el caso bueno —se midió— y el
+        precio compra un resultado que no depende de cómo esté escrita una
+        constante.
         """
         lecturas: list[Decimal] = []
         variantes = _variantes(image)
 
         for nombre, dim, png in variantes:
             lectura = self._leer_variante(png)
-            logger.debug(
+            # A nivel INFO a propósito: cuando el piloto devuelve
+            # `ocr_suggestion: null` esto es lo único que explica por qué, y
+            # sin él la única respuesta posible era "no sugirió". No lleva la
+            # imagen, ni el vehículo, ni la sesión: sólo la variante, el tamaño
+            # efectivo y el número.
+            logger.info(
                 "ODOMETER OCR | variante %s %sx%s -> %s",
                 nombre, dim[0], dim[1], lectura,
             )
-            if lectura is None:
-                continue
-            lecturas.append(lectura)
-            if lecturas.count(lectura) >= COINCIDENCIAS_NECESARIAS:
-                return lectura
+            if lectura is not None:
+                lecturas.append(lectura)
 
         if len(variantes) < COINCIDENCIAS_NECESARIAS:
             logger.info(
@@ -534,9 +526,31 @@ class TesseractReader:
                 "sin sugerencia",
                 len(variantes),
             )
-        elif lecturas:
+            return None
+
+        con_acuerdo = [
+            valor
+            for valor in dict.fromkeys(lecturas)
+            if lecturas.count(valor) >= COINCIDENCIAS_NECESARIAS
+        ]
+
+        if len(con_acuerdo) == 1:
             logger.info(
-                "ODOMETER OCR | las variantes no coinciden (%s): sin sugerencia",
-                ", ".join(str(v) for v in lecturas),
+                "ODOMETER OCR | acuerdo %d/%d -> %s",
+                lecturas.count(con_acuerdo[0]), len(variantes), con_acuerdo[0],
+            )
+            return con_acuerdo[0]
+
+        if len(con_acuerdo) > 1:
+            logger.info(
+                "ODOMETER OCR | acuerdo en conflicto (%s): sin sugerencia",
+                ", ".join(str(v) for v in con_acuerdo),
+            )
+        else:
+            logger.info(
+                "ODOMETER OCR | sin acuerdo entre %d variantes (%s): "
+                "sin sugerencia",
+                len(variantes),
+                ", ".join(str(v) for v in lecturas) or "ninguna leyó",
             )
         return None
