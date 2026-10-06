@@ -255,78 +255,242 @@ def test_el_modo_de_segmentacion_es_texto_disperso():
     assert _PSM_TEXTO_DISPERSO == "11"
 
 
-# ── La cascada de escalas y el acuerdo ─────────────────────────────────────
+# ── Las variantes y el acuerdo ─────────────────────────────────────────────
 
 
-class _EscalasFijas:
-    """Un lector que devuelve una lectura distinta por escala, sin Tesseract.
+class _VariantesFijas:
+    """Un lector que devuelve una lectura distinta por variante, sin Tesseract.
 
-    Se sustituye `_leer_una_escala` porque lo que se prueba aquí no es el
-    reconocimiento —eso depende del binario y de la fotografía— sino **la
-    regla de decisión**: cuándo se acepta una lectura y cuándo se calla.
+    Se sustituye `_leer_variante` porque lo que se prueba aquí no es el
+    reconocimiento —eso depende del binario y de la fotografía— sino **la regla
+    de decisión**: cuándo se acepta una lectura y cuándo se calla.
     """
 
-    def __init__(self, *por_escala):
-        self.por_escala = list(por_escala)
+    def __init__(self, *por_variante):
+        self.por_variante = list(por_variante)
         self.pasadas = 0
 
-    def __call__(self, image, max_dimension):
-        indice = min(self.pasadas, len(self.por_escala) - 1)
+    def __call__(self, png):
+        indice = min(self.pasadas, len(self.por_variante) - 1)
         self.pasadas += 1
-        return self.por_escala[indice]
+        return self.por_variante[indice]
 
 
-def _con_escalas(monkeypatch, *valores):
-    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+def _con_variantes(monkeypatch, *valores, n_variantes=3):
+    """Fija las lecturas por variante y cuántas variantes distintas hay."""
+    from app.routers_api.odometer import ocr_tesseract as m
 
-    falso = _EscalasFijas(*valores)
-    monkeypatch.setattr(TesseractReader, "_leer_una_escala",
-                        lambda self, image, max_dimension: falso(image, max_dimension))
-    lector = TesseractReader()
+    falso = _VariantesFijas(*valores)
+    monkeypatch.setattr(m.TesseractReader, "_leer_variante",
+                        lambda self, png: falso(png))
+    monkeypatch.setattr(
+        m, "_variantes",
+        lambda image: [(f"v{i}", (100 + i, 50), b"x") for i in range(n_variantes)],
+    )
+    lector = m.TesseractReader()
     return lector.suggest(image=b"irrelevante", content_type="image/jpeg"), falso
 
 
-def test_dos_escalas_que_coinciden_producen_la_sugerencia(monkeypatch):
-    """El caso normal: la foto está bien y las escalas dicen lo mismo."""
-    valor, falso = _con_escalas(monkeypatch, Decimal("128437.0"), Decimal("128437.0"))
-    assert valor == Decimal("128437.0")
+def test_dos_variantes_que_coinciden_producen_la_sugerencia(monkeypatch):
+    """El caso normal: la foto está bien y dos preparaciones dicen lo mismo."""
+    valor, falso = _con_variantes(
+        monkeypatch, Decimal("151517.0"), Decimal("151517.0")
+    )
+    assert valor == Decimal("151517.0")
     assert falso.pasadas == 2, "con acuerdo a la segunda no hace falta la tercera"
 
 
-def test_escalas_que_discrepan_no_sugieren_nada(monkeypatch):
+def test_variantes_que_discrepan_no_sugieren_nada(monkeypatch):
     """El caso que esto existe para evitar.
 
-    Medido sobre una foto real de 4000 px con el odómetro pequeño: a 2400 se
-    leía `128437` y a 3200 `128497` — un `3` confundido con un `9`. Sin acuerdo
-    entre escalas, una de las dos habría llegado a la pantalla, y el supervisor
-    puede confirmarla sin mirar. Entonces entra como kilometraje confirmado por
-    una persona, que es el daño que no se deshace.
+    Una lectura equivocada que el supervisor confirma sin mirar entra como
+    kilometraje confirmado por una persona, y ese daño no se deshace. Si las
+    preparaciones no coinciden, la respuesta honesta es que no se sabe.
     """
-    valor, falso = _con_escalas(
-        monkeypatch, Decimal("128437.0"), Decimal("128497.0"), Decimal("128407.0")
+    valor, falso = _con_variantes(
+        monkeypatch, Decimal("151517.0"), Decimal("151577.0"), Decimal("151507.0")
     )
     assert valor is None
-    assert falso.pasadas == 3, "sin acuerdo se agotan las escalas"
+    assert falso.pasadas == 3
 
 
-def test_una_sola_escala_que_lee_no_basta(monkeypatch):
-    """Leer en una escala y nada en las otras no es confianza suficiente.
-
-    Es lo que pasaba cuando el odómetro quedaba ilegible y sólo sobrevivía otro
-    indicador del tablero: un número aparecía en una pasada y en ninguna más.
-    """
-    valor, _ = _con_escalas(monkeypatch, Decimal("60.0"), None, None)
+def test_una_sola_variante_que_lee_no_basta(monkeypatch):
+    """Leer en una preparación y nada en las otras no es confianza suficiente."""
+    valor, _ = _con_variantes(monkeypatch, Decimal("60000.0"), None, None)
     assert valor is None
+
+
+def test_con_una_sola_variante_distinta_no_hay_acuerdo_posible(monkeypatch):
+    """La regla conservadora cuando el deduplicado deja una sola pasada.
+
+    Si sólo queda una entrada materialmente distinta no se baja el listón para
+    que una observación baste: se calla. Relajarlo convertiría el control en una
+    formalidad justo en las imágenes difíciles, que son las que lo necesitan.
+    """
+    valor, falso = _con_variantes(
+        monkeypatch, Decimal("151517.0"), n_variantes=1
+    )
+    assert valor is None
+    assert falso.pasadas == 1
 
 
 def test_el_minimo_de_digitos_descarta_otros_indicadores():
     """Un salpicadero está lleno de números de dos y tres dígitos.
 
     La velocidad, la temperatura, la marcha, el nivel de combustible. Con el
-    mínimo en 2 —como estaba— el velocímetro se colaba como lectura de odómetro
-    en cuanto el odómetro no se leía bien: medido, una foto donde el odómetro
-    quedaba ilegible sugería `60`.
+    mínimo en 2 el velocímetro se colaba como lectura de odómetro en cuanto el
+    odómetro no se leía bien.
     """
     assert leer((95.0, "60")) is None
     assert leer((95.0, "120")) is None
     assert leer((95.0, "1284")) == Decimal("1284.0")
+
+
+# ── Las variantes son materialmente distintas ──────────────────────────────
+
+
+def test_las_variantes_no_repiten_la_misma_entrada():
+    """El defecto que corrige este checkpoint, fijado.
+
+    Antes las pasadas se pedían por dimensión absoluta —2400, 3200, 1600— sobre
+    un normalizador que **sólo reduce**. Con una imagen de 185 px las tres
+    producían exactamente la misma imagen, y tres lecturas idénticas de la misma
+    entrada se contaban como acuerdo multiescala. Medido entonces:
+
+        escala 2400 -> (185, 72) -> 151517
+        escala 3200 -> (185, 72) -> 151517
+        escala 1600 -> (185, 72) -> 151517
+
+    El resultado era correcto y el razonamiento no: repetir la misma evidencia
+    no es confianza adicional.
+    """
+    from app.routers_api.odometer.ocr_tesseract import _variantes
+    from tests.fixtures_odometer import odometro_rodillo
+
+    variantes = _variantes(odometro_rodillo())
+
+    assert len(variantes) >= 2, "una imagen pequeña debe dar más de una pasada"
+    # Ninguna entrada se repite: ni los bytes ni la combinación de dimensión y
+    # preparación.
+    bytes_vistos = [png for _, _, png in variantes]
+    assert len(set(bytes_vistos)) == len(bytes_vistos), (
+        "dos variantes producen exactamente la misma imagen"
+    )
+
+
+def test_las_variantes_duplicadas_se_descartan(monkeypatch):
+    """Y si alguien configurara dos variantes iguales, se colapsan.
+
+    Es la red de debajo: la configuración actual no puede producir duplicados,
+    pero una edición futura sí podría, y el acuerdo no debe poder satisfacerse
+    por ahí.
+    """
+    from app.routers_api.odometer import ocr_tesseract as m
+    from tests.fixtures_odometer import odometro_rodillo
+
+    monkeypatch.setattr(m, "VARIANTES", ((1.0, True), (1.0, True), (1.0, True)))
+    assert len(m._variantes(odometro_rodillo())) == 1
+
+
+def test_el_preprocesado_devuelve_su_dimension_efectiva():
+    """Sin ese dato no se puede saber si dos pasadas son distintas."""
+    from app.routers_api.odometer.ocr_tesseract import _preprocesar
+    from tests.fixtures_odometer import odometro_rodillo
+
+    png, dim = _preprocesar(odometro_rodillo(), 2400)
+    assert dim == (185, 72), "una imagen pequeña no se amplía en el preprocesado"
+    assert png[:4] == bytes((0x89, 0x50, 0x4E, 0x47)), "sigue siendo un PNG"
+
+
+def test_la_nitidez_es_determinista():
+    """La misma entrada produce exactamente la misma salida.
+
+    Importa porque el acuerdo entre variantes se apoya en que cada preparación
+    sea reproducible: si el preprocesado tuviera cualquier aleatoriedad, dos
+    ejecuciones del mismo caso podrían decidir cosas distintas.
+    """
+    from app.routers_api.odometer.ocr_tesseract import _preprocesar
+    from tests.fixtures_odometer import odometro_rodillo
+
+    foto = odometro_rodillo()
+    assert _preprocesar(foto, 2400)[0] == _preprocesar(foto, 2400)[0]
+
+
+def test_la_nitidez_cambia_la_imagen():
+    """Y la variante sin nitidez es de verdad otra entrada, no la misma."""
+    from app.routers_api.odometer.ocr_tesseract import _preprocesar
+    from tests.fixtures_odometer import odometro_rodillo
+
+    foto = odometro_rodillo()
+    con, _ = _preprocesar(foto, 2400, nitidez=True)
+    sin, _ = _preprocesar(foto, 2400, nitidez=False)
+    assert con != sin, (
+        "si la nitidez no cambiara nada, contarlas como dos pasadas "
+        "distintas sería la misma mentira que se viene a corregir"
+    )
+
+
+def test_el_preprocesado_no_escribe_en_disco(tmp_path, monkeypatch):
+    """Una foto de salpicadero no puede quedar en un temporal sin dueño."""
+    from app.routers_api.odometer.ocr_tesseract import _preprocesar
+    from tests.fixtures_odometer import odometro_rodillo
+
+    monkeypatch.chdir(tmp_path)
+    antes = set(tmp_path.rglob("*"))
+    _preprocesar(odometro_rodillo(), 2400)
+    assert set(tmp_path.rglob("*")) == antes
+
+
+# ── Contra Tesseract de verdad ─────────────────────────────────────────────
+
+
+@pytest.mark.skipif(
+    not tesseract_disponible(),
+    reason=(
+        "Tesseract no está instalado aquí. El resto de este archivo prueba la "
+        "lógica de decisión sin el binario; este caso necesita el motor y se "
+        "ejecuta donde está, no se silencia en todas partes."
+    ),
+)
+def test_el_recorte_de_referencia_produce_la_lectura_esperada():
+    """La clase de imagen que CER reportó: recorte ajustado, baja resolución.
+
+    Es el caso que motivó este checkpoint. El fixture reproduce sus propiedades
+    técnicas —185×72, dígitos claros sobre rodillos oscuros con costuras,
+    desenfoque suave— sin guardar la fotografía de campo, que lleva salpicadero
+    y a veces matrícula.
+
+    Lo que demuestra: que con el preprocesado y las variantes corregidas la
+    lectura sale. Lo que **no** demuestra: que el motor lea un salpicadero real,
+    con su reflejo, su ángulo y la fuente del fabricante. Eso es validación de
+    campo y es de CER.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import LECTURA_DE_REFERENCIA, odometro_rodillo
+
+    lectura = TesseractReader().suggest(
+        image=odometro_rodillo(), content_type="image/png"
+    )
+
+    assert lectura == Decimal(f"{LECTURA_DE_REFERENCIA}.0"), (
+        f"la referencia debía leerse como {LECTURA_DE_REFERENCIA}, salió {lectura}"
+    )
+
+
+@pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")
+def test_un_salpicadero_sin_odometro_legible_no_sugiere_el_velocimetro():
+    """La protección contra falsos positivos, con el motor real.
+
+    Un tablero donde el odómetro no se lee pero sí se ve una velocidad corta no
+    puede convertirse en una sugerencia de kilometraje: el supervisor podría
+    confirmarla sin mirar y entraría como un hecho confirmado por una persona.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import salpicadero
+
+    lectura = TesseractReader().suggest(
+        image=salpicadero(odometro=None, parcial=None, velocidad="60"),
+        content_type="image/jpeg",
+    )
+
+    assert lectura is None, f"se sugirió {lectura} sin odómetro legible"

@@ -69,31 +69,58 @@ logger = logging.getLogger(__name__)
 _PSM_TEXTO_DISPERSO = "11"
 _CARACTERES = "0123456789."
 
-#: Las escalas a las que se intenta leer, en orden.
-#:
-#: No hay una resolución buena, y eso se midió antes de decidirlo. Sobre fotos
-#: de 4000 px con el odómetro ocupando poco del encuadre:
-#:
-#:     odómetro al 8%     1600 -> sólo el velocímetro
-#:                        2400 -> 128437  (correcto)
-#:                        3200 -> 128497  (un 3 leído como 9)
-#:     odómetro con desenfoque
-#:                        1600 -> sólo el velocímetro
-#:                        3200 -> 128437  (correcto)
-#:
-#: Reducir mucho borra los dígitos pequeños; reducir poco deja ruido que el
-#: motor confunde. Por eso se lee a varias y **se exige que dos coincidan**:
-#: dos escalas distintas que leen el mismo número es una señal de confianza
-#: real, no un umbral inventado, y cuando discrepan la respuesta honesta es que
-#: no se sabe. Es lo que convierte `128437` frente a `128497` en "sin
-#: sugerencia" en vez de en una lectura equivocada.
-#:
-#: El orden importa: las dos primeras son las que más aciertan, así que la foto
-#: bien encuadrada —el caso normal— se resuelve en dos pasadas y no en tres.
-ESCALAS = (2400, 3200, 1600)
+#: Lado mayor de la imagen base. Por encima se reduce; por debajo **no se
+#: amplía aquí**, porque ampliar mucho destruye los dígitos pequeños: medido
+#: sobre un recorte real de 185 px, a 1600 px no se reconoce nada y a tamaño
+#: nativo se lee al 96% de confianza.
+TOPE_BASE = 2400
 
-#: Coincidencias necesarias para aceptar una lectura.
+#: Lado mayor que puede alcanzar una variante ampliada. Pasado, la variante se
+#: descarta en vez de producir una imagen que tarda y no aporta.
+TOPE_VARIANTE = 3600
+
+#: Las pasadas, como `(factor, aplicar nitidez)`.
+#:
+#: Por qué el factor no basta, y esto es el arreglo de un defecto real
+#: --------------------------------------------------------------------
+#: Antes las pasadas se pedían por dimensión absoluta —2400, 3200, 1600— sobre
+#: `normalize_image`, que **sólo reduce**. Con una imagen de 185 px las tres
+#: producían exactamente la misma imagen efectiva, y tres lecturas idénticas de
+#: la misma entrada se contaban como "acuerdo multiescala". Medido:
+#:
+#:     escala 2400 -> dim efectiva (185, 72) -> 151517
+#:     escala 3200 -> dim efectiva (185, 72) -> 151517
+#:     escala 1600 -> dim efectiva (185, 72) -> 151517
+#:
+#: El resultado era correcto y el razonamiento no: repetir la misma evidencia no
+#: es confianza adicional. Ahora las variantes se diferencian por **escala y por
+#: preprocesado**, que sí produce entradas materialmente distintas, y las que
+#: coinciden en ambas cosas se descartan por duplicadas.
+#:
+#: La variante sin nitidez no es relleno: es una preparación distinta de la
+#: misma fuente, con otros modos de fallo. Que dos preparaciones distintas lean
+#: el mismo número es evidencia; que la misma se lea dos veces, no.
+VARIANTES: tuple[tuple[float, bool], ...] = ((1.0, True), (1.0, False), (2.0, True))
+
+#: Parámetros de la máscara de enfoque.
+#:
+#: Separa los bordes de los dígitos sin inventar detalle. Medido sobre un
+#: salpicadero donde el odómetro ocupa poco: sin nitidez el motor no encuentra
+#: la lectura en ninguna escala; con ella aparece al 95-96% de confianza. No se
+#: añadió ningún suavizado previo: se probó, y con él una de las imágenes pasó a
+#: producir `191817` en vez de `151517` —una lectura **equivocada**, que es
+#: peor que ninguna.
+#: Variantes distintas que deben coincidir para aceptar una lectura.
+#:
+#: Dos, y no se baja. Si sólo hay una variante distinta disponible no hay
+#: acuerdo posible y no se sugiere nada: relajar esto para que una sola
+#: observación bastara convertiría el control en una formalidad justo en las
+#: imágenes más difíciles, que son las que lo necesitan.
 COINCIDENCIAS_NECESARIAS = 2
+
+NITIDEZ_RADIO = 1.2
+NITIDEZ_PORCENTAJE = 180
+NITIDEZ_UMBRAL = 2
 
 #: Confianza mínima por token, en la escala 0-100 que devuelve Tesseract.
 #: Por debajo, el token se descarta: es ruido de reflejo o de poca luz.
@@ -204,20 +231,32 @@ def tesseract_disponible(binario: str = "tesseract", *, idioma: str = "eng") -> 
     return True
 
 
-def _preprocesar(image: bytes, max_dimension: int = 2400) -> bytes:
-    """Deja la foto como Tesseract la lee mejor: derecha, gris y contrastada.
+def _preprocesar(
+    image: bytes, max_dimension: int = TOPE_BASE, *, nitidez: bool = True
+) -> tuple[bytes, tuple[int, int]]:
+    """Deja la foto como Tesseract la lee mejor, y dice a qué tamaño quedó.
 
     La orientación importa más de lo que parece: un teléfono guarda la foto
     girada con una etiqueta EXIF, y Tesseract no mira la etiqueta. Una foto de
-    costado no produce una lectura mala — no produce ninguna.
+    costado no produce una lectura mala — no produce ninguna. Eso lo resuelve
+    `normalize_image`, que además limita el lado mayor y quita el EXIF.
 
-    Reutiliza `normalize_image`, que ya aplica la orientación, limita el lado
-    mayor y quita el EXIF. Escribir aquí un segundo abridor de imágenes sería
-    duplicar código con límites de bomba de descompresión propios.
+    Gris y contraste automático rescatan las fotos con poca luz y las que
+    tienen el reflejo en una esquina. No se binariza con un umbral fijo a
+    propósito: uno que va bien a mediodía deja en negro la foto de un parking.
+
+    La **nitidez** separa los bordes de los dígitos, que es lo que necesita un
+    odómetro de rodillo fotografiado de lejos. No inventa detalle: realza el
+    contraste local que ya existe, y por eso sigue siendo preprocesado y no
+    evidencia nueva.
+
+    Devuelve también la dimensión efectiva porque es lo que permite saber si
+    dos pasadas son de verdad distintas. Sin ese dato, pedir dos escalas sobre
+    una imagen pequeña produce la misma imagen dos veces y nadie se entera.
     """
     import io
 
-    from PIL import Image, ImageOps
+    from PIL import Image, ImageFilter, ImageOps
 
     from app.core.storage.media import normalize_image
 
@@ -227,15 +266,81 @@ def _preprocesar(image: bytes, max_dimension: int = 2400) -> bytes:
 
     imagen = Image.open(io.BytesIO(normalizada.data))
     imagen.load()
-    # Gris y contraste automático: es lo que rescata las fotos con poca luz y
-    # las que tienen el reflejo en una esquina. No se binariza con un umbral
-    # fijo a propósito —un umbral que va bien a mediodía deja en negro la foto
-    # de un parking cubierto.
     gris = ImageOps.autocontrast(imagen.convert("L"))
+    if nitidez:
+        gris = gris.filter(
+            ImageFilter.UnsharpMask(
+                radius=NITIDEZ_RADIO,
+                percent=NITIDEZ_PORCENTAJE,
+                threshold=NITIDEZ_UMBRAL,
+            )
+        )
 
     salida = io.BytesIO()
     gris.save(salida, format="PNG", optimize=False)
-    return salida.getvalue()
+    return salida.getvalue(), gris.size
+
+
+def _variantes(image: bytes) -> list[tuple[str, tuple[int, int], bytes]]:
+    """Las entradas realmente distintas que se le van a dar al motor.
+
+    Dos pasadas cuentan como independientes sólo si difieren en **dimensión o
+    preparación**. Las que coinciden en ambas se descartan aquí, antes de
+    invocar nada: así el acuerdo nunca puede satisfacerse repitiendo la misma
+    imagen, que es lo que pasaba y lo que PR-04 prohíbe.
+
+    La ampliación es acotada a propósito. Medido sobre un recorte de 185 px:
+    nativo y ×2 leen bien, ×6 no lee nada, y por encima el motor empieza a
+    inventar dígitos. Ampliar no añade información que no estuviera; sólo
+    mejora la geometría del borde, y pasado un punto deja de hacerlo.
+    """
+    import io
+
+    from PIL import Image
+
+    base_bytes, base_dim = _preprocesar(image, TOPE_BASE, nitidez=False)
+    base = Image.open(io.BytesIO(base_bytes))
+
+    salida: list[tuple[str, tuple[int, int], bytes]] = []
+    vistas: set[tuple[int, int, bool]] = set()
+
+    for factor, nitidez in VARIANTES:
+        ancho, alto = round(base.width * factor), round(base.height * factor)
+        if max(ancho, alto) > TOPE_VARIANTE:
+            continue
+        clave = (ancho, alto, nitidez)
+        if clave in vistas:
+            continue
+        vistas.add(clave)
+
+        if factor == 1.0:
+            png, dim = _preprocesar(image, TOPE_BASE, nitidez=nitidez)
+        else:
+            ampliada = base.resize((ancho, alto), Image.Resampling.LANCZOS)
+            png, dim = _aplicar_realce(ampliada, nitidez)
+        salida.append((f"x{factor:g}{'+nitidez' if nitidez else ''}", dim, png))
+
+    return salida
+
+
+def _aplicar_realce(imagen, nitidez: bool) -> tuple[bytes, tuple[int, int]]:
+    """Contraste y, si procede, nitidez sobre una imagen ya en gris."""
+    import io
+
+    from PIL import ImageFilter, ImageOps
+
+    gris = ImageOps.autocontrast(imagen.convert("L"))
+    if nitidez:
+        gris = gris.filter(
+            ImageFilter.UnsharpMask(
+                radius=NITIDEZ_RADIO,
+                percent=NITIDEZ_PORCENTAJE,
+                threshold=NITIDEZ_UMBRAL,
+            )
+        )
+    salida = io.BytesIO()
+    gris.save(salida, format="PNG", optimize=False)
+    return salida.getvalue(), gris.size
 
 
 def _candidatos(tsv: str) -> list[str]:
@@ -346,10 +451,8 @@ class TesseractReader:
         self.timeout = timeout_seconds
         self.language = language
 
-    def _leer_una_escala(self, image: bytes, max_dimension: int) -> Decimal | None:
-        """Una pasada: preparar a esa escala, invocar, interpretar."""
-        preparada = _preprocesar(image, max_dimension=max_dimension)
-
+    def _leer_variante(self, png: bytes) -> Decimal | None:
+        """Una pasada: invocar el binario sobre esa entrada e interpretar."""
         orden = [
             self.binary,
             "stdin",
@@ -358,21 +461,16 @@ class TesseractReader:
             "--psm", _PSM_TEXTO_DISPERSO,
             "-c", f"tessedit_char_whitelist={_CARACTERES}",
             # El TSV se pide por **parámetro**, no por el fichero de
-            # configuración `tsv`.
-            #
-            # Son equivalentes cuando ese fichero existe, y la diferencia
-            # importa cuando no: Tesseract avisa por stderr —"Can't open
-            # tsv"—, **devuelve 0** y cae a texto plano. El texto plano tiene
-            # una columna, el parser espera doce, así que no se reconocía
-            # ningún candidato y el adaptador devolvía `None` con cualquier
-            # fotografía, sin un solo error.
+            # configuración `tsv`: donde ese fichero no está, Tesseract avisa
+            # por stderr, devuelve 0 y cae a texto plano, y el parser no
+            # reconocía ningún candidato con **ninguna** fotografía.
             "-c", "tessedit_create_tsv=1",
         ]
 
         try:
             resultado = subprocess.run(
                 orden,
-                input=preparada,
+                input=png,
                 capture_output=True,
                 timeout=self.timeout,
                 check=False,
@@ -392,47 +490,53 @@ class TesseractReader:
 
         tsv = resultado.stdout.decode("utf-8", "replace")
         if not tsv.startswith(_CABECERA_TSV):
-            # Si la salida no es TSV, no hay candidatos que interpretar — y
-            # devolver `None` aquí sería indistinguible de "no vi nada". Son
-            # cosas distintas: una es la foto, la otra es la instalación, y
-            # sólo la segunda se arregla.
             raise TesseractUnavailable(
                 f"{self.binary} no devolvió TSV: {tsv.splitlines()[:1]}"
             )
         return _a_lectura(_candidatos(tsv))
 
     def suggest(self, *, image: bytes, content_type: str) -> Decimal | None:
-        """Lee a varias escalas y sugiere sólo cuando dos coinciden.
+        """Lee en variantes distintas y sugiere sólo cuando dos coinciden.
 
-        Por qué no basta una pasada
-        ----------------------------
-        Medido sobre fotografías de teléfono con el odómetro ocupando poco del
-        encuadre, que es lo que manda cualquiera: a 1600 px los dígitos
-        pequeños desaparecen y lo único que sobrevive es el velocímetro; a
-        3200 px aparece ruido que el motor confunde —un `3` leído como `9`—. No
-        hay una resolución que acierte siempre.
+        Qué cuenta como acuerdo, y por qué se corrigió
+        -----------------------------------------------
+        Dos lecturas iguales sólo valen si vienen de entradas **materialmente
+        distintas**. Antes las pasadas se pedían por dimensión absoluta sobre un
+        normalizador que sólo reduce, así que con una imagen pequeña las tres
+        eran la misma: el acuerdo se satisfacía repitiendo la misma evidencia.
+        Daba el resultado correcto por un motivo que no se sostiene, y el día
+        que esa única lectura fuera errónea la habría confirmado tres veces.
 
-        Dos escalas que leen el mismo número es una señal de confianza real, y
-        cuando discrepan la respuesta honesta es que no se sabe. Eso convierte
-        un `128437` frente a un `128497` en silencio en vez de en una lectura
-        equivocada, que es lo que de verdad cuesta: el supervisor puede
-        confirmarla sin mirar y entra como kilometraje de una persona.
-
-        Se para en cuanto hay acuerdo, así que la foto bien encuadrada —el caso
-        normal— cuesta dos pasadas y no tres.
+        Ahora las variantes se distinguen por escala y por preparación, las
+        duplicadas se descartan antes de invocar nada, y si sólo queda una
+        pasada distinta **no hay acuerdo posible y no se sugiere**. Es la regla
+        conservadora: una sola observación no es confirmación, y bajar el
+        listón para que lo fuera sería justo lo que no se puede hacer.
         """
         lecturas: list[Decimal] = []
-        for escala in ESCALAS:
-            lectura = self._leer_una_escala(image, escala)
+        variantes = _variantes(image)
+
+        for nombre, dim, png in variantes:
+            lectura = self._leer_variante(png)
+            logger.debug(
+                "ODOMETER OCR | variante %s %sx%s -> %s",
+                nombre, dim[0], dim[1], lectura,
+            )
             if lectura is None:
                 continue
             lecturas.append(lectura)
             if lecturas.count(lectura) >= COINCIDENCIAS_NECESARIAS:
                 return lectura
 
-        if lecturas:
+        if len(variantes) < COINCIDENCIAS_NECESARIAS:
             logger.info(
-                "ODOMETER OCR | las escalas no coinciden (%s): sin sugerencia",
+                "ODOMETER OCR | sólo %d variante distinta: sin acuerdo posible, "
+                "sin sugerencia",
+                len(variantes),
+            )
+        elif lecturas:
+            logger.info(
+                "ODOMETER OCR | las variantes no coinciden (%s): sin sugerencia",
                 ", ".join(str(v) for v in lecturas),
             )
         return None
