@@ -57,13 +57,22 @@ export const businessNavigation: INavMainItem[] = [
                 url: '/route',
                 requiredPermission: 'route.worksession.execute',
             },
+            {
+                // El estado operativo del día. Es de administración: el
+                // supervisor ejecuta su jornada, no vigila la de los demás,
+                // así que pide `route.live.read` y no la capacidad de ejecución.
+                title: 'Today / Live',
+                url: '/admin/route/today',
+                requiredPermission: 'route.live.read',
+            },
         ],
     },
     {
-        // Configuración operativa de CER Route. Today/Live, Activity y Reports
-        // **no** están aquí: sus módulos llegan en checkpoints posteriores, y
-        // un encabezado con destinos que no existen es un enlace muerto
-        // disfrazado de sección.
+        // Configuración operativa de CER Route. Activity y Reports **no** están
+        // aquí: sus módulos llegan en checkpoints posteriores, y un encabezado
+        // con destinos que no existen es un enlace muerto disfrazado de
+        // sección. Today / Live sí está, en el grupo de trabajo, porque es
+        // operación y no configuración.
         title: 'CER Route Configuration',
         url: '#',
         icon: Car,

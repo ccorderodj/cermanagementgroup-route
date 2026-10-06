@@ -83,14 +83,19 @@ CAPABILITIES: tuple[Capability, ...] = (
     _cap("integrations", "manage", "Register webhook endpoints and subscriptions, rotate their secrets"),
     # ── CER Route ───────────────────────────────────────────────────────────
     #
-    # Solo las capacidades que RTE02 **exige de verdad** en un endpoint. El
-    # catálogo certificado de RTE01 contempla además `route.live.read`,
-    # `route.activity.read`, `route.reports.read`, `route.reports.export`
-    # y `route.fuelreference.manage`: entran con el
-    # checkpoint que construya su superficie protegida, porque
-    # `test_permission_catalog.py` rechaza —a propósito— una capacidad que
-    # ningún endpoint pide. Declararlas antes concedería autoridad sobre algo
-    # que todavía no existe.
+    # Solo las capacidades que algún endpoint **exige de verdad**. El catálogo
+    # certificado de RTE01 contempla además `route.activity.read`,
+    # `route.reports.read`, `route.reports.export` y
+    # `route.fuelreference.manage`: entran con el checkpoint que construya su
+    # superficie protegida, porque `test_permission_catalog.py` rechaza —a
+    # propósito— una capacidad que ningún endpoint pide. Declararlas antes
+    # concedería autoridad sobre algo que todavía no existe.
+    #
+    # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
+    # superficie: la vista Today / Live. Es de **lectura** y de alcance de
+    # compañía; cuando exista jerarquía organizativa, será el servidor quien
+    # estreche el conjunto autorizado, no esta capacidad ni el frontend.
+    _cap("route", "live.read", "View the Today / Live operational status of supervisors"),
     _cap("route", "vehicles.read", "View Route vehicles and their assignments"),
     _cap("route", "vehicles.manage", "Create and edit Route vehicles and assign them to supervisors"),
     # Leer para elegir y administrar la lista son dos autorizaciones, no una
@@ -280,6 +285,10 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             # A02/BR-02: el Administrador también sale a ruta. Usa la misma
             # experiencia móvil que el Supervisor, con la misma capacidad.
             "route.worksession.execute",
+            # RTE07: leer el estado operativo del día. Es de administración —el
+            # Supervisor ve su propia jornada, no la de los demás— y por eso no
+            # se concede al rol de supervisor.
+            "route.live.read",
         ),
     ),
 )

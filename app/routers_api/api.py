@@ -35,6 +35,7 @@ from app.routers_api.standardvalues.router import router as router_standard_valu
 from app.routers_api.vehicles.router import router as router_vehicles
 from app.routers_api.vehicles.router import supervisors_router as router_supervisors
 from app.routers_api.odometer.router import router as router_odometer
+from app.routers_api.live.router import router as router_live
 from app.routers_api.trips.router import router as router_trips
 from app.routers_api.activities.router import router as router_activities
 from app.routers_api.location.router import router as router_location
@@ -101,6 +102,9 @@ api_router.include_router(router_trips)
 # Comparte prefijo con `trips` a propósito: es la misma parada.
 api_router.include_router(router_activities)
 api_router.include_router(router_odometer)
+# Today / Live (RTE07): un modelo de **lectura** sobre jornada, viaje,
+# actividad y millaje oficial. No posee ningún dato: los consume.
+api_router.include_router(router_live)
 
 api_router.include_router(router_platform_settings)
 api_router.include_router(router_platform_diagnostics)
