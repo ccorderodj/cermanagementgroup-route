@@ -9,14 +9,19 @@ import {
  * Tres bloques, en el orden de la línea base: la cabecera con la persona y sus
  * millas, el contexto actual, y las dos mini-estadísticas.
  *
- * Sobre el combustible estimado
- * ------------------------------
+ * Sobre el combustible estimado — decisión D-01 de CER, aprobada
+ * ---------------------------------------------------------------
  * V0.7 lo enseña como `millas / mpg × precio`. El **precio por galón no existe
  * en el dominio** —el catálogo lo reserva como `route.fuelreference.manage`,
  * una capacidad futura— así que aquí se presenta el estado neutro en vez de un
- * número inventado. El hueco se conserva para que el día que exista la
- * referencia se rellene sin tocar la maquetación aprobada. Está listado como
- * desviación en el reporte de entrega.
+ * número inventado.
+ *
+ * Esto dejó de ser una desviación abierta: CER revisó el caso y aprobó este
+ * tratamiento. El hueco **se conserva** con el valor neutro `—` hasta que
+ * exista una fuente autorizada de precio, y entonces se rellena sin tocar la
+ * maquetación aprobada. Lo que no se hace, y es el fondo de la decisión, es
+ * inventar un precio por defecto: un coste estimado a partir de un número
+ * fabricado se lee como un hecho y nadie sabría que no lo es.
  */
 interface LiveSupervisorDetailProps {
     supervisor: LiveSupervisor | null;
