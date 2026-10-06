@@ -44,6 +44,16 @@ SUBTITULO_TABLA = "Select a supervisor to inspect current activity"
 MINI_ESTADISTICA = "activities today"
 
 
+def _hueco_de_combustible(page):
+    """El valor de la mini-estadística `estimated fuel`, no su etiqueta.
+
+    Se localiza por la estructura —el `<b>` hermano de la etiqueta— porque lo
+    que D-01 aprueba es el **valor neutro**, y comprobar sólo que la etiqueta
+    existe dejaría pasar un número inventado debajo de ella.
+    """
+    return page.locator("div:has(> span:text-is('estimated fuel')) > b")
+
+
 async def _preparar_supervisor(alpha_client, seeded, unidad: str) -> None:
     """Un supervisor con vehículo y jornada abierta, por API."""
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
@@ -128,6 +138,10 @@ async def test_el_escritorio_tiene_la_estructura_aprobada(
             # supervisor seleccionado, como en la línea base.
             await expect(page.get_by_text(MINI_ESTADISTICA)).to_have_count(1)
             await expect(page.get_by_text("estimated fuel")).to_have_count(1)
+            # D-01 de CER: el hueco se conserva y enseña el valor neutro. No un
+            # coste calculado con un precio por galón inventado, que es lo que
+            # la decisión descarta: un número fabricado se lee como un hecho.
+            await expect(_hueco_de_combustible(page)).to_have_text("—")
 
             assert await _sin_desborde(page), "el escritorio desborda en horizontal"
         finally:
@@ -248,6 +262,8 @@ async def test_el_detalle_movil_es_pantalla_completa_y_vuelve(
             # Pantalla completa: ni la lista detrás ni el panel de escritorio.
             await expect(page.get_by_text("Vehicle", exact=True)).to_have_count(1)
             await expect(page.get_by_text(SUBTITULO_TABLA)).to_have_count(0)
+            # D-01 también aquí: el detalle móvil conserva el hueco neutro.
+            await expect(_hueco_de_combustible(page)).to_have_text("—")
 
             await volver.click()
 

@@ -462,3 +462,146 @@ async def test_dos_supervisores_salen_los_dos_y_el_resumen_los_cuenta(
     assert seeded.alpha.users["supervisor"].id in ids
     assert seeded.alpha.users["route_admin"].id in ids
     assert cuerpo["summary"]["supervisors_total"] == len(cuerpo["supervisors"])
+
+
+# ── Varios supervisores a la vez ────────────────────────────────────────────
+
+
+async def _promover_a_supervisor(alpha_client, seeded, usuario: str) -> None:
+    """Da el rol de supervisor a un usuario, por el camino del producto.
+
+    Hace falta porque sólo `supervisor` y `route_admin` traen
+    `route.worksession.execute` en los roles por defecto, y este test necesita
+    cuatro jornadas simultáneas en estados distintos. Se concede con
+    `PUT /api/users/{id}`, que es la pantalla real de administración: inventar
+    la capacidad por SQL probaría un estado que el producto no puede alcanzar.
+    """
+    await alpha_client.login(seeded.alpha.users["owner"].email)
+    respuesta = await alpha_client.put(
+        f"/api/users/{seeded.alpha.users[usuario].id}",
+        json={"role_id": seeded.alpha.roles["supervisor"]},
+    )
+    assert respuesta.status_code == 200, respuesta.text
+
+
+async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_client):
+    """Cinco supervisores, cinco estados distintos, una sola lectura.
+
+    Cierra el caso límite 17 del reporte 001, que quedó sin evidencia propia.
+    Lo que se defiende no es cada estado por separado —eso ya tiene su test—
+    sino que **conviven**: que la fila de cada uno reciba lo suyo, que las
+    tarjetas del resumen cuenten lo que la lista enseña, y que el total de
+    millas sea la suma de las filas y no un número calculado aparte.
+
+    El riesgo real de un modelo de lectura con seis consultas fijas es
+    precisamente éste: una unión mal escrita no falla, mezcla. Y un panel que
+    atribuye la actividad de uno al vehículo de otro se cree durante meses.
+    """
+    # Cada uno con su perfil y su vehículo, para que un cruce se vea.
+    perfiles = {}
+    for usuario, unidad in (
+        ("supervisor", "V-MIX-ACT"), ("route_admin", "V-MIX-RUTA"),
+        ("manager", "V-MIX-FIN"), ("viewer", "V-MIX-TRAB"),
+        ("owner", "V-MIX-SIN"),
+    ):
+        perfil, _ = await _perfil_y_vehiculo(
+            alpha_client, seeded, unidad=unidad, usuario=usuario
+        )
+        perfiles[usuario] = perfil
+
+    await _promover_a_supervisor(alpha_client, seeded, "manager")
+    await _promover_a_supervisor(alpha_client, seeded, "viewer")
+
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    # 1. `supervisor` -> In Activity (viaje llegado y actividad en curso).
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    await _resolver_odometro(alpha_client, jornada["id"])
+    viaje = (
+        await alpha_client.post(
+            "/api/trips",
+            json={"purpose": "office", "context_reference": "Acme",
+                  "standard_value_id": valor},
+        )
+    ).json()
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+    await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start", json={"activity_ids": []}
+    )
+
+    # 2. `route_admin` -> On Route (viaje en tránsito).
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    jornada_ruta = (await alpha_client.post("/api/worksessions", json={})).json()
+    await _resolver_odometro(alpha_client, jornada_ruta["id"])
+    viaje_ruta = (
+        await alpha_client.post(
+            "/api/trips",
+            json={"purpose": "office", "context_reference": "Globex",
+                  "standard_value_id": valor},
+        )
+    ).json()
+    await alpha_client.post(f"/api/trips/{viaje_ruta['id']}/start", json={})
+
+    # 3. `manager` -> Work Ended.
+    await alpha_client.login(seeded.alpha.users["manager"].email)
+    jornada_fin = (await alpha_client.post("/api/worksessions", json={})).json()
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada_fin['id']}/end", json={}
+    )
+    assert cierre.status_code == 200, cierre.text
+
+    # 4. `viewer` -> Working (jornada abierta sin viajes).
+    await alpha_client.login(seeded.alpha.users["viewer"].email)
+    abierta = await alpha_client.post("/api/worksessions", json={})
+    assert abierta.status_code in (200, 201), abierta.text
+
+    # 5. `owner` -> Not started (perfil sin jornada). No hace nada.
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _live(alpha_client)
+    lista = cuerpo["supervisors"]
+    resumen = cuerpo["summary"]
+
+    esperado = {
+        "supervisor": "activity", "route_admin": "route", "manager": "ended",
+        "viewer": "working", "owner": "not_started",
+    }
+    obtenido = {
+        usuario: _de(cuerpo, seeded.alpha.users[usuario].id)["status"]
+        for usuario in esperado
+    }
+    assert obtenido == esperado, f"los estados se cruzaron: {obtenido}"
+
+    # Cinco estados distintos de verdad: si el modelo colapsara dos, el
+    # diccionario de arriba seguiría cuadrando por casualidad en algún caso.
+    assert len(set(obtenido.values())) == 5
+
+    # Nada se filtra de una fila a otra: el vehículo y la actividad son del
+    # dueño de la jornada y de nadie más.
+    en_actividad = _de(cuerpo, seeded.alpha.users["supervisor"].id)
+    en_ruta = _de(cuerpo, seeded.alpha.users["route_admin"].id)
+    assert en_actividad["vehicle_label"] != en_ruta["vehicle_label"]
+    assert en_actividad["activity_reference"] == "Acme"
+    assert en_ruta["activity_reference"] == "Globex"
+    assert en_actividad["activities_today"] == 1
+    assert en_ruta["activities_today"] == 0
+    sin_empezar = _de(cuerpo, seeded.alpha.users["owner"].id)
+    assert sin_empezar["since"] is None
+    assert sin_empezar["activity_label"] is None
+
+    # El resumen cuenta lo que la lista enseña, no un agregado aparte.
+    assert resumen["supervisors_total"] == len(lista) == 5
+    assert resumen["on_route"] == 1
+    assert resumen["in_activity"] == 1
+    assert resumen["supervisors_working"] == 3, (
+        "trabajando son los que no han terminado ni dejado de empezar"
+    )
+
+    # Y el millaje agregado es la suma de las filas, no otra consulta.
+    from decimal import Decimal
+
+    assert Decimal(resumen["total_miles"]) == sum(
+        (Decimal(s["official_miles"]) for s in lista), Decimal("0")
+    )
