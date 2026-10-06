@@ -297,7 +297,68 @@ def test_dos_variantes_que_coinciden_producen_la_sugerencia(monkeypatch):
         monkeypatch, Decimal("151517.0"), Decimal("151517.0")
     )
     assert valor == Decimal("151517.0")
-    assert falso.pasadas == 2, "con acuerdo a la segunda no hace falta la tercera"
+    assert falso.pasadas == 3, (
+        "se leen todas las variantes antes de decidir: cortar en la segunda "
+        "hacía que el resultado dependiera del orden de la tupla"
+    )
+
+
+def test_tres_variantes_donde_dos_coinciden_sugieren_ese_valor(monkeypatch):
+    """La mayoría vale aunque una preparación discrepe.
+
+    Es el caso corriente de la clase de imagen que reportó CER: en el
+    salpicadero de 524 px una de las cuatro preparaciones no encuentra nada y
+    las otras tres leen lo mismo. Exigir unanimidad dejaría sin sugerencia
+    justo las fotos que sí se pueden leer.
+    """
+    valor, _ = _con_variantes(
+        monkeypatch, Decimal("151517.0"), None, Decimal("151517.0")
+    )
+    assert valor == Decimal("151517.0")
+
+
+def test_el_orden_de_las_variantes_no_cambia_el_resultado(monkeypatch):
+    """El defecto de la regla anterior, fijado.
+
+    Con "devuelve en cuanto un valor llega a dos", dos lecturas empatadas a dos
+    hacían que **el orden de la tupla** decidiera cuál se sugería. Medido sobre
+    un salpicadero de 1400 px donde la verdad era `151517`:
+
+        primero-en-llegar -> `191517` o `191817`, según el orden
+        un-solo-ganador   -> sin sugerencia
+
+    Las mismas lecturas y el mismo repertorio; sólo cambia la regla. La primera
+    entrega un número equivocado con cara de confirmado.
+    """
+    import itertools
+
+    lecturas = (Decimal("191517.0"), Decimal("191517.0"),
+                Decimal("191817.0"), Decimal("191817.0"))
+
+    resultados = {
+        _con_variantes(monkeypatch, *orden, n_variantes=4)[0]
+        for orden in itertools.permutations(lecturas)
+    }
+
+    assert resultados == {None}, (
+        f"el resultado depende del orden de las variantes: {resultados}"
+    )
+
+
+def test_dos_valores_con_acuerdo_son_un_conflicto_no_una_mayoria(monkeypatch):
+    """Si dos valores distintos alcanzan el acuerdo, no se elige ninguno.
+
+    No se escoge "el más confiado" para tener algo que enseñar: que dos
+    preparaciones confirmen `A` y otras dos `B` significa que la foto no
+    distingue, y entonces el campo vacío es la respuesta correcta.
+    """
+    valor, _ = _con_variantes(
+        monkeypatch,
+        Decimal("151517.0"), Decimal("151517.0"),
+        Decimal("161617.0"), Decimal("161617.0"),
+        n_variantes=4,
+    )
+    assert valor is None
 
 
 def test_variantes_que_discrepan_no_sugieren_nada(monkeypatch):
@@ -388,8 +449,34 @@ def test_las_variantes_duplicadas_se_descartan(monkeypatch):
     from app.routers_api.odometer import ocr_tesseract as m
     from tests.fixtures_odometer import odometro_rodillo
 
-    monkeypatch.setattr(m, "VARIANTES", ((1.0, True), (1.0, True), (1.0, True)))
+    monkeypatch.setattr(
+        m, "VARIANTES",
+        (("a", 1.2, 180), ("b", 1.2, 180), ("c", 1.2, 180)),
+    )
     assert len(m._variantes(odometro_rodillo())) == 1
+
+
+def test_configuraciones_distintas_que_dan_la_misma_imagen_se_colapsan():
+    """El duplicado que no se ve en los parámetros, medido.
+
+    Sobre una superficie casi plana —un salpicadero donde no hay nada legible—
+    realzar el contraste local no cambia nada, y las cuatro preparaciones
+    producen **los mismos bytes exactos**. Deduplicar por el nombre de la
+    variante, o por su dimensión, habría dejado pasar las cuatro como evidencia
+    independiente justo en la imagen donde no hay ninguna evidencia.
+
+    Por eso la clave del deduplicado es el hash del PNG preparado: es la única
+    definición de "entrada distinta" que no se puede satisfacer por accidente.
+    """
+    from app.routers_api.odometer.ocr_tesseract import _variantes
+    from tests.fixtures_odometer import salpicadero
+
+    plano = salpicadero(odometro=None, parcial=None, velocidad=None)
+
+    assert len(_variantes(plano)) == 1, (
+        "cuatro configuraciones distintas sobre una imagen sin contraste local "
+        "dan la misma entrada, y sólo puede contar una vez"
+    )
 
 
 def test_el_preprocesado_devuelve_su_dimension_efectiva():
@@ -417,17 +504,28 @@ def test_la_nitidez_es_determinista():
 
 
 def test_la_nitidez_cambia_la_imagen():
-    """Y la variante sin nitidez es de verdad otra entrada, no la misma."""
-    from app.routers_api.odometer.ocr_tesseract import _preprocesar
+    """Y cada preparación del repertorio es de verdad otra entrada.
+
+    No basta con que los parámetros difieran: lo que tiene que diferir son los
+    píxeles. Si dos preparaciones dieran la misma imagen, contarlas como dos
+    pasadas sería la misma mentira que este checkpoint viene a corregir en su
+    otra forma.
+    """
+    from app.routers_api.odometer.ocr_tesseract import VARIANTES, _preprocesar
     from tests.fixtures_odometer import odometro_rodillo
 
     foto = odometro_rodillo()
-    con, _ = _preprocesar(foto, 2400, nitidez=True)
-    sin, _ = _preprocesar(foto, 2400, nitidez=False)
-    assert con != sin, (
-        "si la nitidez no cambiara nada, contarlas como dos pasadas "
-        "distintas sería la misma mentira que se viene a corregir"
+    sin, _ = _preprocesar(foto, 2400, radio=None)
+    preparadas = {
+        nombre: _preprocesar(foto, 2400, radio=radio, porcentaje=pct)[0]
+        for nombre, radio, pct in VARIANTES
+    }
+
+    assert len(set(preparadas.values())) == len(VARIANTES), (
+        f"dos preparaciones del repertorio dan la misma imagen: "
+        f"{[n for n in preparadas]}"
     )
+    assert sin not in preparadas.values(), "alguna variante no realza nada"
 
 
 def test_el_preprocesado_no_escribe_en_disco(tmp_path, monkeypatch):
@@ -475,6 +573,130 @@ def test_el_recorte_de_referencia_produce_la_lectura_esperada():
     assert lectura == Decimal(f"{LECTURA_DE_REFERENCIA}.0"), (
         f"la referencia debía leerse como {LECTURA_DE_REFERENCIA}, salió {lectura}"
     )
+
+
+@pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")
+def test_el_salpicadero_de_referencia_produce_la_lectura_esperada():
+    """La otra clase que reportó CER: salpicadero completo a 524 px de ancho.
+
+    Es la que devolvía `ocr_suggestion: null` en el piloto. Con el repertorio
+    anterior las variantes discrepaban —una leía la verdad, la ampliación ×2
+    leía otro número por encima del umbral de confianza— y el acuerdo no se
+    alcanzaba. Con cuatro preparaciones a resolución nativa, tres coinciden.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import LECTURA_DE_REFERENCIA, salpicadero
+
+    lectura = TesseractReader().suggest(
+        image=salpicadero(reducir_a=524), content_type="image/jpeg"
+    )
+
+    assert lectura == Decimal(f"{LECTURA_DE_REFERENCIA}.0"), (
+        f"la clase de salpicadero debía leerse como {LECTURA_DE_REFERENCIA}, "
+        f"salió {lectura}"
+    )
+
+
+@pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")
+def test_el_cuentaparcial_no_desplaza_al_odometro_en_el_salpicadero():
+    """Odómetro y cuentaparcial en el mismo encuadre, con el motor real.
+
+    La regla de dígitos elige el que acumula frente al que se pone a cero, y
+    tiene que seguir haciéndolo cuando el acuerdo se calcula sobre cuatro
+    preparaciones en vez de tres.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import LECTURA_DE_REFERENCIA, salpicadero
+
+    lectura = TesseractReader().suggest(
+        image=salpicadero(parcial="241.6", reducir_a=524),
+        content_type="image/jpeg",
+    )
+
+    assert lectura == Decimal(f"{LECTURA_DE_REFERENCIA}.0")
+
+
+@pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")
+def test_un_odometro_pequeno_en_el_encuadre_no_produce_una_lectura_equivocada():
+    """El límite conocido, y que al menos se calle en vez de equivocarse.
+
+    Con el salpicadero a 1400 px y el odómetro ocupando el 18% del encuadre los
+    dígitos quedan en unos pocos píxeles de alto, y el motor confunde el `5`
+    con un `9`. Lo que este caso fija no es que lea —no lee— sino que **no
+    sugiera un número equivocado**: las cuatro preparaciones se reparten entre
+    `191517` y `191817`, dos valores con acuerdo, y eso es un conflicto.
+
+    Con la regla anterior, el mismo reparto devolvía uno de los dos según el
+    orden de la tupla de variantes.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import LECTURA_DE_REFERENCIA, salpicadero
+
+    lectura = TesseractReader().suggest(
+        image=salpicadero(), content_type="image/jpeg"
+    )
+
+    assert lectura is None or lectura == Decimal(f"{LECTURA_DE_REFERENCIA}.0"), (
+        f"se sugirió {lectura}, que no es la lectura real: un odómetro "
+        f"demasiado pequeño en el encuadre debe quedarse sin sugerencia"
+    )
+
+
+@pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")
+def test_un_desenfoque_destructivo_todavia_puede_enganar_al_acuerdo():
+    """Un límite del mecanismo de acuerdo, medido y escrito, no disimulado.
+
+    Con un desenfoque de σ=4.0 sobre el recorte, el `5` **se convierte** en un
+    `6` dentro de la propia imagen. Las diez preparaciones que se probaron
+    leyeron `161617` con confianzas de 84 a 91: no es que una variante falle,
+    es que la imagen ya sostiene el número equivocado.
+
+        sin-nitidez  161617 @ 89.71      r1.2-p240  161617 @ 91.23
+        r1.0-p180    161617 @ 90.09      r2.0-p240  161617 @ 84.44
+
+    De ahí la frase que importa para el piloto: **el acuerdo entre
+    preparaciones detecta fragilidad del preprocesado, no ambigüedad de la
+    imagen.** Ninguna composición de variantes lo resuelve, y subir el umbral
+    de confianza a 92 para taparlo dejaría sin sugerencia todo lo demás. Es
+    anterior a este checkpoint y sigue después: el control que queda es la
+    confirmación del supervisor, que por esto no es una formalidad.
+
+    Este test documenta el límite. Si algún día deja de cumplirse porque el
+    motor mejora, se borra — no se ajusta para que siga pasando.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TesseractReader
+    from tests.fixtures_odometer import LECTURA_DE_REFERENCIA, odometro_rodillo
+
+    lectura = TesseractReader().suggest(
+        image=odometro_rodillo(desenfoque=4.0), content_type="image/png"
+    )
+
+    assert lectura != Decimal(f"{LECTURA_DE_REFERENCIA}.0"), (
+        "si ahora se lee bien un desenfoque destructivo, este límite ya no "
+        "existe y este test sobra"
+    )
+
+
+def test_el_repertorio_no_amplia_la_imagen():
+    """Ninguna variante trabaja sobre una imagen ampliada, y es una decisión.
+
+    La ampliación ×2 se midió y salió: sobre 25 imágenes no aportó **ningún**
+    acierto que las preparaciones nativas no dieran ya, y por su cuenta produjo
+    tres lecturas equivocadas —`191817`, `131517`, `161617`— dos de ellas con
+    valores que ninguna variante nativa genera. Es decir, metía en el conjunto
+    errores nuevos con los que otro error podría coincidir.
+
+    Ampliar sigue siendo una opción de preprocesado, no una regla; lo que no es
+    es evidencia adicional.
+    """
+    from app.routers_api.odometer.ocr_tesseract import TOPE_BASE, _variantes
+    from tests.fixtures_odometer import odometro_rodillo
+
+    for nombre, dim, _ in _variantes(odometro_rodillo()):
+        assert dim == (185, 72), (
+            f"la variante {nombre} trabaja a {dim}: el repertorio es nativo"
+        )
+        assert max(dim) <= TOPE_BASE
 
 
 @pytest.mark.skipif(not tesseract_disponible(), reason="Tesseract no está instalado aquí")

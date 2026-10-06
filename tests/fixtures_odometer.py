@@ -78,12 +78,18 @@ def salpicadero(
     alto: int = 1050,
     fraccion_odometro: float = 0.18,
     desenfoque: float = 0.0,
+    reducir_a: int | None = None,
 ) -> bytes:
     """Un salpicadero completo con el odómetro ocupando poco del encuadre.
 
     `odometro=None` produce el caso de falso positivo: el odómetro no se lee y
     sólo queda visible un número corto de otro indicador, que **no** debe
     convertirse en una sugerencia.
+
+    `reducir_a` reescala el resultado al ancho pedido. Se dibuja grande y se
+    reduce después a propósito: es lo que hace una cámara seguida de un
+    reescalado, y no es lo mismo que dibujar directamente pequeño. La clase de
+    imagen que CER midió —524 px de ancho— se obtiene así.
     """
     from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
@@ -112,6 +118,12 @@ def salpicadero(
 
     if desenfoque:
         img = img.filter(ImageFilter.GaussianBlur(desenfoque))
+
+    if reducir_a:
+        img = img.resize(
+            (reducir_a, round(img.height * reducir_a / img.width)),
+            Image.Resampling.LANCZOS,
+        )
 
     salida = io.BytesIO()
     img.save(salida, format="JPEG", quality=84)
