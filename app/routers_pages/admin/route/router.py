@@ -7,10 +7,10 @@ de excepciones de odómetro. Cada una exige en el servidor la misma capacidad qu
 exige su API, para que el enlace no lleve a una pantalla que después devuelve 403
 (AUD-FE-013).
 
-Today/Live, Activity y Reports **no se registran aquí**. Son de checkpoints
-posteriores, y una ruta registrada con una pantalla vacía sería exactamente lo
-que las instrucciones prohíben: representar como implementado algo que no lo
-está.
+Today / Live entra con RTE07 y su pantalla existe de verdad. Activity y Reports
+siguen **sin registrarse**: son de checkpoints posteriores, y una ruta con una
+pantalla vacía sería exactamente lo que las instrucciones prohíben —representar
+como implementado algo que no lo está.
 """
 
 from fastapi import APIRouter, Depends, Request
@@ -53,6 +53,21 @@ async def get_route_supervisors_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="admin/route/supervisors.html",
+        context={},
+    )
+
+
+@router.get(
+    "/today",
+    name="RouteTodayLivePage",
+    # La misma capacidad que exige `GET /api/live/today`. Pedir aquí una
+    # distinta llevaría a una pantalla que después devuelve 403 (AUD-FE-013).
+    dependencies=[Depends(require_page_permissions(["route.live.read"]))],
+)
+async def get_route_today_live_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/today-live.html",
         context={},
     )
 

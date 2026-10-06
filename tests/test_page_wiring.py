@@ -198,6 +198,7 @@ PAGE_TEMPLATES = [
     "admin/route/supervisors.html",
     "admin/route/vehicles.html",
     "admin/route/standard-values.html",
+    "admin/route/today-live.html",
     "admin/route/odometer-exceptions.html",
     # CER Route: espacio móvil del supervisor.
     "route/my-route.html",
