@@ -84,12 +84,20 @@ CAPABILITIES: tuple[Capability, ...] = (
     # ── CER Route ───────────────────────────────────────────────────────────
     #
     # Solo las capacidades que algún endpoint **exige de verdad**. El catálogo
-    # certificado de RTE01 contempla además `route.activity.read`,
-    # `route.reports.read`, `route.reports.export` y
-    # `route.fuelreference.manage`: entran con el checkpoint que construya su
-    # superficie protegida, porque `test_permission_catalog.py` rechaza —a
-    # propósito— una capacidad que ningún endpoint pide. Declararlas antes
-    # concedería autoridad sobre algo que todavía no existe.
+    # certificado de RTE01 contempla además `route.reports.read`,
+    # `route.reports.export` y `route.fuelreference.manage`: entran con el
+    # checkpoint que construya su superficie protegida, porque
+    # `test_permission_catalog.py` rechaza —a propósito— una capacidad que
+    # ningún endpoint pide. Declararlas antes concedería autoridad sobre algo
+    # que todavía no existe.
+    #
+    # `route.activity.read` entra con RTE08, que es el checkpoint que crea su
+    # superficie: el Activity Explorer. Lee **historia** de toda la compañía,
+    # que es distinto de ejecutar la jornada propia: un supervisor ve sus
+    # paradas en su móvil y no las de los demás, así que esto no se concede al
+    # rol de supervisor. Cuando exista jerarquía organizativa, será el servidor
+    # quien estreche el conjunto autorizado.
+    _cap("route", "activity.read", "Explore the recorded Route activity history"),
     #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
@@ -289,6 +297,9 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             # Supervisor ve su propia jornada, no la de los demás— y por eso no
             # se concede al rol de supervisor.
             "route.live.read",
+            # RTE08: explorar la historia registrada. Misma razón que la
+            # anterior, en pasado.
+            "route.activity.read",
         ),
     ),
 )
