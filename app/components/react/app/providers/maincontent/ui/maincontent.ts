@@ -47,5 +47,6 @@ export enum ComponentRoot {
     ROUTEVEHICLES = 'RouteVehiclesPage',
     ROUTESTANDARDVALUES = 'RouteStandardValuesPage',
     ROUTETODAYLIVE = 'RouteTodayLivePage',
+    ROUTEACTIVITYEXPLORER = 'RouteActivityExplorerPage',
     ROUTEODOMETEREXCEPTIONS = 'RouteOdometerExceptionsPage',
 }

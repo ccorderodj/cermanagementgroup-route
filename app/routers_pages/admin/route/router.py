@@ -73,6 +73,21 @@ async def get_route_today_live_page(request: Request):
 
 
 @router.get(
+    "/activity",
+    name="RouteActivityExplorerPage",
+    # La misma capacidad que exige `GET /api/activity-explorer`. Pedir aquí una
+    # distinta llevaría a una pantalla que después devuelve 403 (AUD-FE-013).
+    dependencies=[Depends(require_page_permissions(["route.activity.read"]))],
+)
+async def get_route_activity_explorer_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/activity.html",
+        context={},
+    )
+
+
+@router.get(
     "/vehicles",
     name="RouteVehiclesPage",
     dependencies=[Depends(require_page_permissions(["route.vehicles.read"]))],

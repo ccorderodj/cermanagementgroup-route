@@ -65,14 +65,28 @@ export const businessNavigation: INavMainItem[] = [
                 url: '/admin/route/today',
                 requiredPermission: 'route.live.read',
             },
+            {
+                // La historia registrada. El mockup aprobado la llama
+                // **Activity** en el menú lateral, no "Activity Explorer", y la
+                // pone justo después de Today / Live: §17 prohíbe cambiar la
+                // terminología porque otra palabra parezca más descriptiva.
+                //
+                // Pide `route.activity.read`, la misma que exige
+                // `GET /api/activity-explorer`. Sin ella el destino no se
+                // enseña, que es lo que FR-01 pide: llegar por navegación
+                // normal, y no estar a la vista de quien no puede entrar.
+                title: 'Activity',
+                url: '/admin/route/activity',
+                requiredPermission: 'route.activity.read',
+            },
         ],
     },
     {
-        // Configuración operativa de CER Route. Activity y Reports **no** están
-        // aquí: sus módulos llegan en checkpoints posteriores, y un encabezado
-        // con destinos que no existen es un enlace muerto disfrazado de
-        // sección. Today / Live sí está, en el grupo de trabajo, porque es
-        // operación y no configuración.
+        // Configuración operativa de CER Route. Reports **no** está aquí: su
+        // módulo llega en un checkpoint posterior, y un encabezado con destinos
+        // que no existen es un enlace muerto disfrazado de sección. Today / Live
+        // y Activity sí están, en el grupo de trabajo, porque son operación y no
+        // configuración.
         title: 'CER Route Configuration',
         url: '#',
         icon: Car,

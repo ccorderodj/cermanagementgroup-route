@@ -33,6 +33,7 @@ import { RouteUsersPage } from '@/pages/RouteUsersPage';
 import { RouteSupervisorsPage } from '@/pages/RouteSupervisorsPage';
 import { RouteVehiclesPage } from '@/pages/RouteVehiclesPage';
 import { RouteStandardValuesPage } from '@/pages/RouteStandardValuesPage';
+import { RouteActivityExplorerPage } from '@/pages/RouteActivityExplorerPage';
 import { RouteTodayLivePage } from '@/pages/RouteTodayLivePage';
 import { RouteOdometerExceptionsPage } from '@/pages/RouteOdometerExceptionsPage';
 
@@ -71,5 +72,6 @@ export const RootComponents: Record<string, ReactNode> = {
     [ComponentRoot.ROUTEVEHICLES]: <RouteVehiclesPage />,
     [ComponentRoot.ROUTESTANDARDVALUES]: <RouteStandardValuesPage />,
     [ComponentRoot.ROUTETODAYLIVE]: <RouteTodayLivePage />,
+    [ComponentRoot.ROUTEACTIVITYEXPLORER]: <RouteActivityExplorerPage />,
     [ComponentRoot.ROUTEODOMETEREXCEPTIONS]: <RouteOdometerExceptionsPage />,
 };
