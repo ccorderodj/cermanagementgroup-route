@@ -5,6 +5,19 @@
 **Rama:** `feature/rte08-activity-explorer` (desde `dev`, con RTE07 certificado)
 **Fecha:** 2026-10-06
 
+> **Aviso de supersesión — sólo afecta a la acción operativa.**
+> La acción operativa que este reporte indica en §18 y §21 —`bootstrap` para
+> sembrar `route.activity.read`— **queda superseded**. El comando correcto es
+> `uv run python -m app.db.scripts.align_role_capabilities`, por el motivo que
+> explica
+> `CER_ROUTE_RTE08_ROLE_CAPABILITY_ALIGNMENT_CLOSURE_REPORT_002.md`: `bootstrap`
+> alinea las concesiones de **una sola** compañía y, sin
+> `BOOTSTRAP_COMPANY_SUBDOMAIN`, crearía una compañía nueva en vez de alinear la
+> existente.
+>
+> El resto del reporte queda **tal como se entregó**; esta nota se añade para
+> que nadie ejecute el comando equivocado leyéndolo.
+
 ---
 
 ## 1. Resultado ejecutivo
