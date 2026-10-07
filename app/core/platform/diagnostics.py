@@ -49,7 +49,35 @@ DEGRADED = "degraded"
 AUTH_FAILED = "auth_failed"
 UNREACHABLE = "unreachable"
 NOT_APPLICABLE = "not_applicable"
+#: Estados que son un fallo **por sí mismos**: la capacidad está configurada y
+#: no responde como debería.
 FAILURES = (DEGRADED, AUTH_FAILED, UNREACHABLE)
+
+
+def es_regresion(anterior: str | None, estado: str) -> bool:
+    """¿Algo que estaba sano dejó de estarlo?
+
+    Por qué no basta con `estado in FAILURES`
+    ------------------------------------------
+    `not_applicable` significa «no está configurado», y como estado **inicial**
+    es correcto y no es una alarma: que todavía no se haya configurado el correo
+    no es un incidente, es una decisión pendiente.
+
+    Pero pasar de `healthy` a `not_applicable` es otra cosa distinta: algo que
+    **estaba** configurado dejó de estarlo. Eso no es una ausencia, es una
+    pérdida — y es exactamente el evento que hay que oír.
+
+    Ocurrió en campo. La integración de routing desapareció, el chequeo lo
+    detectó en la ejecución siguiente y lo repitió **77 veces durante seis
+    días** sin avisar a nadie, porque `not_applicable` no estaba en `FAILURES`.
+    Se descubrió porque alguien miró una pantalla llena de ceros.
+
+    La regla correcta es más simple que cualquier lista de estados: **estaba
+    sano y ya no lo está**. Así, un estado nuevo que se añada mañana queda
+    cubierto sin que nadie tenga que acordarse de incluirlo aquí.
+    """
+    return anterior == HEALTHY and estado != HEALTHY
+
 
 SCHEDULER_KEY = "platform.scheduler"
 HEARTBEAT_KEY = "platform.scheduler_heartbeat"
@@ -391,12 +419,24 @@ async def run_check(
         key=key, status=estado, detail=detalle, checked_at=ahora, duration_ms=duracion,
         trigger=trigger, actor_user_id=actor_user_id,
     )
-    if alert and anterior == HEALTHY and estado in FAILURES:
+    if alert and es_regresion(anterior, estado):
+        # El asunto distingue las dos regresiones porque la accion es distinta:
+        # una pide investigar por que falla; la otra, volver a configurarlo.
+        perdida = estado == NOT_APPLICABLE
+        titular = "is no longer configured" if perdida else "is failing"
+        explicacion = (
+            f"{definicion.title} was configured and working, and the scheduled "
+            f"check now reports that it is not configured at all. Something "
+            f"removed it."
+            if perdida
+            else f"{definicion.title} was healthy and the scheduled check now "
+            f"reports {estado}."
+        )
         await notify_platform_admins(
-            subject=f"{settings.APP_NAME} — {definicion.title} is failing",
+            subject=f"{settings.APP_NAME} — {definicion.title} {titular}",
             body=(
-                f"{definicion.title} was healthy and the scheduled check now reports {estado}.\n\n"
-                f"{detalle}\n\nOpen Diagnostics to see the history."
+                f"{explicacion}\n\n{detalle}\n\n"
+                "Open Diagnostics to see the history."
             ),
         )
     return RunOutcome(key, estado, detalle, ahora, duracion, anterior)
