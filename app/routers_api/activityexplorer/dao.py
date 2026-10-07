@@ -43,16 +43,16 @@ from app.routers_api.activities.models import (
     ActivityExecutionStatus,
 )
 from app.routers_api.mileage.models import MileageState, TripMileage
+from app.routers_api.mileage.read import (
+    metros_calculados,
+    millas_oficiales,
+    pendientes,
+)
 from app.routers_api.standardvalues.models import StandardValue
 from app.routers_api.trips.models import Trip
 from app.routers_api.users.models import Users
 from app.routers_api.vehicles.models import SupervisorProfile
 from app.routers_api.worksessions.models import WorkSession
-
-#: Un metro en millas. El millaje oficial se persiste en metros; la pantalla
-#: aprobada enseña millas. Es la misma constante que usa Today / Live, y por el
-#: mismo motivo: la conversión es de presentación, no un dato que se guarde.
-MILLAS_POR_METRO = Decimal("0.000621371")
 
 #: El nivel por el que agrupa cada rango, según `groupRows()` de la línea base.
 AGRUPA_POR: dict[str, str] = {"year": "month", "month": "week", "week": "day"}
@@ -150,24 +150,6 @@ async def supervisores(company_id: int) -> list[dict]:
     ]
 
 
-def _metros_calculados():
-    """Los metros que ya están calculados. Lo pendiente no suma como cero."""
-    return case(
-        (
-            TripMileage.state == MileageState.CALCULATED.value,
-            TripMileage.total_meters,
-        ),
-        else_=0,
-    )
-
-
-def _pendiente():
-    return case(
-        (TripMileage.state == MileageState.PENDING_CALCULATION.value, 1),
-        else_=0,
-    )
-
-
 def _duracion_segundos():
     """Segundos de un bloque **terminado**. Uno en curso no tiene duración.
 
@@ -206,8 +188,8 @@ async def agregados_por_dia(
             await session.execute(
                 select(
                     WorkSession.session_date.label("dia"),
-                    func.coalesce(func.sum(_metros_calculados()), 0).label("metros"),
-                    func.coalesce(func.sum(_pendiente()), 0).label("pendientes"),
+                    func.coalesce(func.sum(metros_calculados()), 0).label("metros"),
+                    func.coalesce(func.sum(pendientes()), 0).label("pendientes"),
                     func.coalesce(
                         func.sum(
                             case((ActivityExecution.id.is_not(None), 1), else_=0)
@@ -296,9 +278,7 @@ def componer_grupos(
                 "start": sub_inicio,
                 "end": sub_fin,
                 "drill_date": sub_inicio,
-                "official_miles": (metros * MILLAS_POR_METRO).quantize(
-                    Decimal("0.1")
-                ),
+                "official_miles": millas_oficiales(metros),
                 "mileage_pending": any(d["pendientes"] for d in dias),
                 "activities": sum(d["paradas"] for d in dias),
                 "activity_seconds": sum(d["segundos"] for d in dias),
@@ -431,9 +411,7 @@ async def paradas_del_dia(
                 "arrived_at": f.arrived_at,
                 "started_at": f.started_at,
                 "ended_at": f.ended_at,
-                "official_miles": (metros * MILLAS_POR_METRO).quantize(
-                    Decimal("0.1")
-                ),
+                "official_miles": millas_oficiales(metros),
                 "mileage_pending": f.millaje_estado
                 == MileageState.PENDING_CALCULATION.value,
                 "terminal_action": f.terminal_action,

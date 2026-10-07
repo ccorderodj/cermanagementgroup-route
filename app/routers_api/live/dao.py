@@ -31,23 +31,23 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import Integer, case, func, select
+from sqlalchemy import Integer, func, select
 
 from app.core.db.session import db_session
 from app.routers_api.activities.models import (
     ActivityExecution,
     ActivityExecutionStatus,
 )
-from app.routers_api.mileage.models import MileageState, TripMileage
+from app.routers_api.mileage.models import TripMileage
+from app.routers_api.mileage.read import (
+    metros_calculados,
+    millas_oficiales,
+    pendientes,
+)
 from app.routers_api.trips.models import Trip, TripStatus
 from app.routers_api.users.models import Users
 from app.routers_api.vehicles.models import SupervisorProfile, Vehicle
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
-
-#: Un metro en millas. El millaje oficial se persiste en metros; la pantalla
-#: aprobada enseña millas.
-MILLAS_POR_METRO = Decimal("0.000621371")
-
 
 def _iniciales(nombre: str, apellido: str) -> str:
     return f"{(nombre or '?')[:1]}{(apellido or '')[:1]}".upper() or "?"
@@ -212,30 +212,10 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
                     select(
                         Trip.work_session_id,
                         func.coalesce(
-                            func.sum(
-                                case(
-                                    (
-                                        TripMileage.state
-                                        == MileageState.CALCULATED.value,
-                                        TripMileage.total_meters,
-                                    ),
-                                    else_=0,
-                                )
-                            ),
-                            0,
+                            func.sum(metros_calculados()), 0
                         ).label("metros"),
                         func.coalesce(
-                            func.sum(
-                                case(
-                                    (
-                                        TripMileage.state
-                                        == MileageState.PENDING_CALCULATION.value,
-                                        1,
-                                    ),
-                                    else_=0,
-                                ).cast(Integer)
-                            ),
-                            0,
+                            func.sum(pendientes().cast(Integer)), 0
                         ).label("pendientes"),
                     )
                     .join(
@@ -258,9 +238,9 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
             viajes.get(f.sesion_id),
             actividades.get(f.sesion_id),
             int(cuentas.get(f.sesion_id, 0)),
-            Decimal(str(millaje[f.sesion_id].metros)) * MILLAS_POR_METRO
-            if f.sesion_id in millaje
-            else Decimal("0"),
+            millas_oficiales(
+                millaje[f.sesion_id].metros if f.sesion_id in millaje else None
+            ),
             bool(f.sesion_id in millaje and millaje[f.sesion_id].pendientes),
         )
         for f in filas

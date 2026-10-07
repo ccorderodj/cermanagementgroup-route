@@ -40,6 +40,7 @@ from app.db.model_registry import load_all_models
 from app.routers_api.companies.models import Company
 from app.routers_api.location.models import LocationFix, MissingLocationEvent
 from app.routers_api.mileage.models import TripMileage, TripMileageSegment
+from app.routers_api.mileage.read import millas_oficiales
 from app.routers_api.trips.models import Trip
 from app.routers_api.worksessions.models import WorkSession
 
@@ -48,14 +49,11 @@ from app.routers_api.worksessions.models import WorkSession
 # los routers, así que hay que registrarlos igual que hace la aplicación.
 load_all_models()
 
-#: Metros a millas, el mismo factor que publica el producto.
-MILLAS_POR_METRO = Decimal("0.000621371")
-
-
 def _millas(metros) -> str:
+    """La misma conversion que publican las pantallas. Nunca otra."""
     if metros is None:
         return "-"
-    return str((Decimal(str(metros)) * MILLAS_POR_METRO).quantize(Decimal("0.1")))
+    return str(millas_oficiales(metros))
 
 
 def _punto(fix, *, coordenadas: bool) -> str:
