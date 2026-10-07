@@ -35,7 +35,9 @@ import {
     type WorkSession,
 } from '@/entities/RouteWorkSessions';
 import { listPendingActions } from '@/shared/lib/offlineQueue';
-import { captureFor, PermisoDeUbicacionRequerido } from '@/shared/lib/location';
+import {
+    captureFor, PermisoDeUbicacionRequerido, type PermisoOperativo,
+} from '@/shared/lib/location';
 import { LocationGate } from '@/features/RouteLocationGate';
 
 /**
@@ -279,6 +281,10 @@ export const RouteMyRoutePage = () => {
     const [capturandoInicio, setCapturandoInicio] = useState(false);
     // La revisión de End Work con un viaje en ruta (D-07).
     const [revisandoCierre, setRevisandoCierre] = useState(false);
+    // Lo que la puerta de ubicación sabe del permiso. `null` mientras no ha
+    // contestado: entonces no se retira nada, y la guarda de la cola sigue
+    // siendo la que impide abrir trabajo sin acceso.
+    const [permisoUbicacion, setPermisoUbicacion] = useState<PermisoOperativo | null>(null);
     const ultimaJornada = useRef<WorkSession | null>(null);
     // La última vista que el servidor confirmó. Es a la que se vuelve sin
     // red: ver la parada de hace un minuto es cierto, y ofrecer
@@ -729,10 +735,20 @@ export const RouteMyRoutePage = () => {
     //
     // Sin jornada abierta no hay nada que cerrar, así que la puerta es total.
     const hayOperacionAbierta = !['loading', 'error', 'no-session'].includes(view.phase);
+    // Sin acceso a la ubicacion y con algo abierto, la pantalla solo ofrece
+    // CERRAR (§8). Lo que abre trabajo nuevo desaparece: un boton que existe y
+    // falla al pulsarlo es exactamente el estado "normal y accionable" que §5.1
+    // prohibe, y es lo que se vio en campo con la primera version de la puerta.
+    const soloCierre = permisoUbicacion !== null
+        && permisoUbicacion !== 'granted'
+        && hayOperacionAbierta;
 
     return (
         <RouteMobileShell title="My Route" active="my-route">
-            <LocationGate hayOperacionAbierta={hayOperacionAbierta}>
+            <LocationGate
+                hayOperacionAbierta={hayOperacionAbierta}
+                onPermisoChange={setPermisoUbicacion}
+            >
                 <div data-testid="RouteMyRoutePage" className="flex flex-col gap-4">
                     {view.phase === 'loading' && (
                         <p className="py-12 text-center text-sm text-muted-foreground">
@@ -791,7 +807,7 @@ export const RouteMyRoutePage = () => {
                             {/* El aviso, no un diálogo forzado: `Start Work` no es
                             `Start Driving`, y quien empieza el día con trabajo
                             de oficina no tiene por qué fotografiar nada. */}
-                            {faltaInicio && !capturandoInicio && preparando === null && inicio && (
+                            {!soloCierre && faltaInicio && !capturandoInicio && preparando === null && inicio && (
                                 <OdometerPendingBanner
                                     status={inicio.status}
                                     disabled={busy}
@@ -831,7 +847,7 @@ export const RouteMyRoutePage = () => {
                             {/* Elegido el contexto: sus datos y salir, en una
                             pantalla. Sin `End Work` (FR-11): `Back` devuelve al
                             workbench, que es donde se termina el día. */}
-                            {!capturandoOdometro && preparando !== null && (
+                            {!soloCierre && !capturandoOdometro && preparando !== null && (
                                 <TripContextForm
                                     purpose={preparando}
                                     busy={busy}
@@ -847,19 +863,25 @@ export const RouteMyRoutePage = () => {
                                 <>
                                     {/* Título y subtítulo literales del mockup
                                     V0.7 aprobado: el workbench se presenta, no
-                                    aparece sin más. */}
-                                    <div>
-                                        <p className="text-xl font-bold text-foreground">
-                                            What&apos;s next?
-                                        </p>
-                                        <p className="mt-0.5 text-xs text-muted-foreground">
-                                            Choose one activity to start a trip.
-                                        </p>
-                                    </div>
-                                    <TripContextChoices
-                                        busy={busy}
-                                        onSelect={setPreparando}
-                                    />
+                                    aparece sin más. Sin acceso a la ubicación
+                                    no se ofrece: las siete opciones abren un
+                                    viaje, y abrir es lo que la puerta impide. */}
+                                    {!soloCierre && (
+                                        <>
+                                            <div>
+                                                <p className="text-xl font-bold text-foreground">
+                                                    What&apos;s next?
+                                                </p>
+                                                <p className="mt-0.5 text-xs text-muted-foreground">
+                                                    Choose one activity to start a trip.
+                                                </p>
+                                            </div>
+                                            <TripContextChoices
+                                                busy={busy}
+                                                onSelect={setPreparando}
+                                            />
+                                        </>
+                                    )}
                                     {/* Terminar el día tiene que estar siempre: hay
                                     jornadas sin un solo viaje y no se fabrica un
                                     viaje a casa falso para poder cerrarlas
@@ -894,7 +916,25 @@ export const RouteMyRoutePage = () => {
                             <Cabecera session={view.session} />
                             <Destino trip={view.trip} />
 
-                            {faltaInicio && inicio ? (
+                            {/* Sin acceso a la ubicación, un viaje preparado y
+                            sin salir no está abierto: no hay nada que cerrar en
+                            él, y salir sería abrirlo. Tampoco se pide la lectura
+                            de inicio, que es el primer paso de salir. La única
+                            salida es terminar la jornada, y el servidor la
+                            acepta: un viaje en planificación no deja trabajo
+                            sin resolver. */}
+                            {soloCierre && (
+                                <Button
+                                    variant="destructive"
+                                    size="lg"
+                                    className="h-12 w-full"
+                                    disabled={busy}
+                                    onClick={() => cerrarJornada(view.session)}
+                                >
+                                    End Work
+                                </Button>
+                            )}
+                            {!soloCierre && faltaInicio && inicio && (
                                 <OdometerCapture
                                     sessionId={view.session.id}
                                     end="start"
@@ -902,7 +942,8 @@ export const RouteMyRoutePage = () => {
                                     onResolved={odometroResuelto}
                                     onChanged={reconcile}
                                 />
-                            ) : (
+                            )}
+                            {!soloCierre && !(faltaInicio && inicio) && (
                                 <Button
                                     size="lg"
                                     className="h-16 w-full text-lg"
@@ -940,15 +981,20 @@ export const RouteMyRoutePage = () => {
                                             ? 'Arrived Home'
                                             : 'Arrived'}
                                     </Button>
-                                    <Button
-                                        variant="outline"
-                                        size="lg"
-                                        className="h-14 w-full"
-                                        disabled={busy}
-                                        onClick={() => setCambiandoPlan(true)}
-                                    >
-                                        Change Plan
-                                    </Button>
+                                    {/* Cambiar de plan abre un destino nuevo:
+                                    sin acceso a la ubicación no se ofrece.
+                                    `Arrived`, que cierra el viaje, sí (§8). */}
+                                    {!soloCierre && (
+                                        <Button
+                                            variant="outline"
+                                            size="lg"
+                                            className="h-14 w-full"
+                                            disabled={busy}
+                                            onClick={() => setCambiandoPlan(true)}
+                                        >
+                                            Change Plan
+                                        </Button>
+                                    )}
                                     {/* Sin `End Work` aquí (PD-03). Conduciendo no
                                     se termina el día: se llega —una llegada que
                                     ocurrió— y se cierra desde el workbench. La

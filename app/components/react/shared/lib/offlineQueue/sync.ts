@@ -1,3 +1,5 @@
+import { leerPermisoOperativo } from '../location/permission';
+import { abreTrabajoNuevo } from '../location/operationalActions';
 import { $api } from '@/shared/api';
 import {
     flushQueue,
@@ -175,10 +177,22 @@ export async function flushPendingLocationEvidence(): Promise<{
  * documentada en el reporte; lo que no se hace es fingir que el servidor ve
  * algo que no puede ver.
  */
-function cabecerasDe(accion: PendingAction): Record<string, string> {
+async function cabecerasDe(accion: PendingAction): Promise<Record<string, string>> {
     const cabeceras: Record<string, string> = { 'Idempotency-Key': accion.id };
     if (accion.locationPermission) {
         cabeceras['X-Location-Permission'] = accion.locationPermission;
+    } else if (abreTrabajoNuevo(accion.kind)) {
+        // Una accion de apertura SIN asercion solo puede ser anterior a
+        // RTE10-A02: se encolo con el cliente viejo, antes de que la puerta
+        // existiera. No se sabe -ni se puede saber ya- que permiso habia
+        // cuando se tomo.
+        //
+        // Se adjunta el permiso verificado de AHORA. Es una frontera declarada
+        // en el reporte: para estas acciones la asercion describe el momento
+        // del envio, no el de la accion. La alternativa -enviarla sin nada-
+        // la hacia rechazar y, con la cola de antes, BORRAR: trabajo de campo
+        // real perdido por un cambio de version.
+        cabeceras['X-Location-Permission'] = await leerPermisoOperativo();
     }
     return cabeceras;
 }
@@ -193,7 +207,7 @@ export async function flushPendingActions(): Promise<FlushResult> {
             url: accion.endpoint,
             method: accion.method,
             data: accion.payload,
-            headers: cabecerasDe(accion),
+            headers: await cabecerasDe(accion),
         });
     });
     await flushPendingLocationEvidence();

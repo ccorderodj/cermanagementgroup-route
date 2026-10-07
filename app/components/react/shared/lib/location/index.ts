@@ -10,6 +10,8 @@ export {
     leerPermisoOperativo,
     observarPermiso,
     pedirPermiso,
+    pedirRevisionDelPermiso,
+    REVISAR_PERMISO,
     type EstadoDePermiso,
     type PermisoOperativo,
 } from './permission';

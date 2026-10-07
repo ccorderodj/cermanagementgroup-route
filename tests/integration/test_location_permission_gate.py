@@ -104,6 +104,33 @@ async def test_start_work_sin_permiso_se_rechaza(seeded, alpha_client):
     assert "Location access is required" in respuesta.json()["detail"]
 
 
+async def test_el_rechazo_lleva_la_marca_que_evita_borrar_la_accion(
+    seeded, alpha_client
+):
+    """Defecto de campo corregido: sin esta marca, la cola BORRABA la acción.
+
+    La cola durable trata cualquier 4xx como definitivo y elimina la acción.
+    Una acción tomada sin cobertura antes de que existiera esta puerta llega
+    sin aserción, recibe 403 y desaparecía para siempre — con todo lo que
+    dependía de ella detrás.
+
+    La marca va en una cabecera y no en el texto: cambiar una frase no puede
+    convertir una espera en un borrado.
+    """
+    from app.routers_api.location.permission_gate import RECHAZO
+
+    await _supervisor_listo(alpha_client, seeded, unidad="V-MARCA")
+    respuesta = await alpha_client.post(
+        "/api/worksessions", json={}, headers=SIN_PERMISO
+    )
+
+    assert respuesta.status_code == 403
+    assert respuesta.headers.get(RECHAZO) == "true", (
+        "el 403 de permiso no se distingue de un rechazo definitivo, y la cola "
+        "borraria la accion"
+    )
+
+
 async def test_prompt_tampoco_abre_trabajo(seeded, alpha_client):
     """`prompt` no es `granted`.
 
@@ -133,8 +160,11 @@ async def test_sin_la_cabecera_tampoco(seeded, alpha_client):
     assert respuesta.status_code == 403, respuesta.text
 
 
-async def test_las_cuatro_transiciones_que_abren_estan_cerradas(seeded, alpha_client):
-    """Las cinco de §14, no sólo la primera.
+async def test_las_transiciones_que_abren_estan_cerradas(seeded, alpha_client):
+    """Las de §14 que abren trabajo, no sólo la primera.
+
+    `activity.start` ya no está aquí: CER decidió tras la validación de campo
+    que es un paso de CIERRE. Lo prueba el test de la parada, más abajo.
 
     Con la jornada ya abierta —y el permiso concedido para abrirla—, cada
     transición que abre trabajo nuevo se vuelve a comprobar por su cuenta. Que
@@ -156,8 +186,6 @@ async def test_las_cuatro_transiciones_que_abren_estan_cerradas(seeded, alpha_cl
         ("trip.start", f"/api/trips/{planificado['id']}/start", {}),
         ("trip.change_plan", f"/api/trips/{planificado['id']}/change-plan",
          {"purpose": "office", "context_reference": None}),
-        ("activity.start", f"/api/trips/{planificado['id']}/activity/start",
-         {"activity_ids": []}),
     ]
     for nombre, ruta, cuerpo in casos:
         respuesta = await alpha_client.post(ruta, json=cuerpo, headers=SIN_PERMISO)
@@ -222,6 +250,55 @@ async def test_una_parada_abierta_se_puede_completar_sin_permiso(seeded, alpha_c
     assert respuesta.status_code == 200, (
         f"completar la parada quedó bloqueado: {respuesta.text[:160]}"
     )
+
+
+async def test_una_parada_sin_empezar_se_puede_resolver_sin_permiso(
+    seeded, alpha_client
+):
+    """Decisión de CER tras la validación de campo: empezar la actividad cierra.
+
+    El caso del atrapamiento. El supervisor llegó, todavía no empezó la
+    actividad, y pierde la ubicación. Si `activity.start` exigiera permiso no
+    tendría ninguna salida: no hay «marcharse sin empezar», y terminar la
+    jornada con la parada sin resolver devuelve 409.
+
+    Una actividad sólo se puede empezar en un viaje que YA llegó, así que nunca
+    abre trabajo nuevo: siempre es el primer paso para cerrar uno abierto.
+    """
+    from app.database import async_session_maker as _sm
+    from app.routers_api.standardvalues.provisioning import provision_standard_values
+
+    await _supervisor_listo(alpha_client, seeded, unidad="V-ATRAPADO")
+    async with _sm() as session:
+        await provision_standard_values(session, company_id=seeded.alpha.id)
+        await session.commit()
+
+    await _jornada(alpha_client)
+    viaje = await _viaje_en_ruta(alpha_client)
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    valores = (
+        await alpha_client.get("/api/standard-values/client_visit_activities")
+    ).json()
+
+    # Sin permiso: el paso que antes atrapaba.
+    inicio = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start",
+        json={"activity_ids": [valores[0]["id"]]},
+        headers=SIN_PERMISO,
+    )
+    assert inicio.status_code in (200, 201), (
+        f"la parada sin empezar quedó atrapada: {inicio.status_code} {inicio.text[:160]}"
+    )
+
+    # Y se puede completar, también sin permiso: la parada queda resuelta.
+    resultados = (await alpha_client.get("/api/standard-values/outcomes")).json()
+    fin = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/complete",
+        json={"action": "complete", "outcome_id": resultados[0]["id"]},
+        headers=SIN_PERMISO,
+    )
+    assert fin.status_code == 200, fin.text
 
 
 async def test_la_jornada_se_puede_terminar_sin_permiso(seeded, alpha_client):

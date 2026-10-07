@@ -58,6 +58,27 @@ PROHIBIDO = (
 )
 
 
+#: "Sin señal", hecho determinista: el permiso está concedido y la ubicación del
+#: teléfono encendida, pero el GPS no consigue un punto. Eso es
+#: POSITION_UNAVAILABLE (code 2), nunca PERMISSION_DENIED (code 1).
+#:
+#: No se deja al GPS real de la máquina de pruebas: medido, en un equipo con la
+#: ubicación del sistema apagada su primera respuesta es code 1 en ~150 ms y las
+#: siguientes code 3 a los 4 s. Eso simula "ubicación del dispositivo apagada",
+#: no "sin señal", y con la verificación de RTE10-A02 mostraba la puerta — con
+#: razón. El test tiene que simular lo que su nombre dice.
+SIN_SENAL_JS = """
+(() => {
+    const sinPunto = (ok, err) => setTimeout(() => err && err({
+        code: 2, message: 'Position unavailable',
+        PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3,
+    }), 5);
+    navigator.geolocation.getCurrentPosition = sinPunto;
+    navigator.geolocation.watchPosition = (ok, err) => { sinPunto(ok, err); return 0; };
+})();
+"""
+
+
 @asynccontextmanager
 async def _movil_sin_senal(live_server, email: str):
     """Permiso **concedido** y ninguna coordenada disponible.
@@ -88,6 +109,7 @@ async def _movil_sin_senal(live_server, email: str):
                 # Concedido, pero sin coordenada: permiso sí, señal no.
                 permissions=["geolocation"],
             )
+            await contexto.add_init_script(SIN_SENAL_JS)
             page = await contexto.new_page()
             await abrir_sesion(page, email, conceder_ubicacion=False)
             yield contexto, page
