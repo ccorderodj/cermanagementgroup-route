@@ -161,6 +161,18 @@ class Settings(BaseSettings):
     #: estrategia de fallback y esto es la suya.
     ROUTE_ROUTING_FALLBACK_URL: str = ""
     ROUTE_ROUTING_TIMEOUT_SECONDS: float = Field(default=5.0, gt=0, le=60)
+    #: Clave de TomTom con la que el **despliegue** repone la integración
+    #: `road_routing` si ha desaparecido de la base.
+    #:
+    #: Existe porque una configuración que sólo vive como una fila tecleada a
+    #: mano no tiene quien la restaure: desapareció del entorno compartido y el
+    #: kilometraje estuvo seis días sin calcular. Con esto, el despliegue deja
+    #: de ser lo que puede perderla y pasa a ser lo que la repone.
+    #:
+    #: Vacía = no se toca nada. Nunca sobrescribe una integración existente:
+    #: si un administrador eligió otro proveedor en la pantalla, esa decisión
+    #: es suya y manda.
+    ROUTE_TOMTOM_API_KEY: str = ""
 
     # ── OCR del odómetro (RTE10-A01) ────────────────────────────────────────
     #: Si se intenta leer el odómetro de la foto. En `true` —el valor por
