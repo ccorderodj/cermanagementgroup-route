@@ -425,6 +425,15 @@ class TenantClient:
         token = self._client.cookies.get("cer_csrf_token")
         if token:
             headers[CSRF_HEADER_NAME] = token
+        # Por omisión, este cliente representa un navegador con el permiso de
+        # ubicación **concedido** (RTE10-A02): es la situación normal, y es lo
+        # que permite que los cientos de tests que ya existían sigan hablando
+        # del dominio y no del permiso.
+        #
+        # Un test que quiera probar el bloqueo pasa la cabecera explícitamente
+        # —`headers={"X-Location-Permission": "denied"}`— y entonces gana la
+        # suya, porque `extra` se copia primero.
+        headers.setdefault("X-Location-Permission", "granted")
         return headers
 
     async def get(self, url: str, **kwargs):

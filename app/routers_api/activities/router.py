@@ -35,6 +35,7 @@ from app.routers_api.trips.dao import TripsDAO
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
+from app.routers_api.location.permission_gate import require_location_permission
 
 
 router = APIRouter(prefix="/trips", tags=["Route · Activity execution"])
@@ -90,6 +91,7 @@ async def start_activity(
     payload: ActivityStart,
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    _ubicacion: None = Depends(require_location_permission()),
     company: TenantContext = Depends(get_company_required),
 ) -> ActivityExecutionRead:
     """Empieza el trabajo de la parada. Idempotente: reintentar no duplica."""

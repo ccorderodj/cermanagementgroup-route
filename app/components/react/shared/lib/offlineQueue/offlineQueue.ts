@@ -1,3 +1,5 @@
+import { esOperativo, leerPermisoOperativo } from '../location/permission';
+import { abreTrabajoNuevo, PermisoDeUbicacionRequerido } from '../location/operationalActions';
 /**
  * Cola de acciones durable, independiente de la sesión (RTE03, §14).
  *
@@ -102,6 +104,16 @@ export interface PendingAction {
     status: PendingActionStatus;
     /** Presente solo si `status === 'failed'`: por qué se detuvo la cola. */
     lastError?: string;
+    /**
+     * El permiso de ubicación **en el momento de actuar**, no al vaciar la cola.
+     *
+     * Se guarda con la acción porque la cola es durable: una acción tomada en
+     * una nave sin cobertura puede enviarse horas después, y para entonces el
+     * permiso puede haber cambiado. Lo que el servidor necesita saber es si la
+     * persona tenía concedido el permiso **cuando trabajó**, que es el hecho
+     * que esta aserción transporta.
+     */
+    locationPermission?: string;
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -418,6 +430,31 @@ export async function enqueueAction(
     endpoint: string,
     payload: Record<string, unknown>,
 ): Promise<PendingAction> {
+    // La guarda de RTE10-A02, en el unico sitio por el que pasan TODAS las
+    // acciones operativas. Ponerla en cada pantalla habria dejado la puerta
+    // abierta en la proxima que alguien anada.
+    //
+    // **Solo se consulta al navegador si la accion abre trabajo nuevo.** Las de
+    // cierre -llegar, completar la parada, terminar la jornada- no lo
+    // necesitan: §8 las permite sin permiso precisamente para no atrapar
+    // registros abiertos.
+    //
+    // No es una optimizacion, es correccion. Consultar el permiso en toda
+    // accion anade un `await` al navegador ANTES de escribir en IndexedDB, y
+    // eso ensancha la ventana entre que la pantalla avanza y que la accion es
+    // durable -- justo lo que esta cola existe para que no pase. Se detecto
+    // como una carrera intermitente en el test de desconexion de la parada.
+    //
+    // Cuando si se consulta, se lee AHORA y no un valor en memoria: revocar se
+    // hace en los ajustes del sistema, fuera de la pestana, y un valor cacheado
+    // dejaria pasar justo el caso que este checkpoint cierra.
+    let permiso: string | undefined;
+    if (abreTrabajoNuevo(kind)) {
+        const actual = await leerPermisoOperativo();
+        if (!esOperativo(actual)) throw new PermisoDeUbicacionRequerido(kind);
+        permiso = actual;
+    }
+
     const accion: PendingAction = {
         id: crypto.randomUUID(),
         sequence: await nextSequence(),
@@ -427,6 +464,7 @@ export async function enqueueAction(
         kind,
         createdAt: new Date().toISOString(),
         status: 'pending',
+        locationPermission: permiso,
     };
 
     await withStore('readwrite', (store) => store.add(accion));
