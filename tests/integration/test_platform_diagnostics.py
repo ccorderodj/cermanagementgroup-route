@@ -255,3 +255,90 @@ def test_every_trigger_created_by_a_migration_is_watched():
     assert creados, "no se encontraron disparadores en las migraciones"
     assert creados <= set(EXPECTED_TRIGGERS), f"sin vigilar: {sorted(creados - set(EXPECTED_TRIGGERS))}"
     assert set(EXPECTED_TRIGGERS) <= creados, f"vigilados pero no creados: {sorted(set(EXPECTED_TRIGGERS) - creados)}"
+
+# ── Perder una configuración es una regresión, no una ausencia ──────────────
+
+
+async def test_perder_una_configuracion_avisa_a_los_administradores(
+    seeded, master_key, monkeypatch, outbox
+):
+    """`healthy` -> `not_applicable` es una pérdida, y hay que oírla.
+
+    Es el caso que ocurrió en campo: la integración de routing desapareció, el
+    chequeo lo detectó en la ejecución siguiente y lo repitió 77 veces durante
+    seis días sin avisar, porque `not_applicable` no estaba en `FAILURES`. Se
+    descubrió mirando una pantalla llena de ceros.
+    """
+    estados = iter([("healthy", "answering"), ("not_applicable", "no engine")])
+
+    async def _falso():
+        return next(estados)
+
+    monkeypatch.setattr(diagnostics, "_road_routing", _falso)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+
+    aviso = outbox.last_for(seeded.platform_admin.email)
+    assert aviso is not None, (
+        "la configuración se perdió y nadie recibió nada: vuelve el silencio "
+        "de seis días"
+    )
+    assert "is no longer configured" in aviso.subject, aviso.subject
+    assert "Something removed it" in aviso.body
+
+
+async def test_no_configurado_desde_el_principio_no_es_una_alarma(
+    seeded, master_key, monkeypatch, outbox
+):
+    """El control negativo, y es el que hace válido al test anterior.
+
+    Que una capacidad opcional nunca se haya configurado no es un incidente: es
+    una decisión pendiente. Si esto avisara, cada instalación nueva empezaría
+    mandando correos por el correo que todavía no existe.
+    """
+
+    async def _falso():
+        return ("not_applicable", "no engine")
+
+    monkeypatch.setattr(diagnostics, "_road_routing", _falso)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+
+    assert outbox.last_for(seeded.platform_admin.email) is None, (
+        "avisó de algo que nunca estuvo configurado"
+    )
+
+
+async def test_recuperarse_tampoco_es_una_alarma(
+    seeded, master_key, monkeypatch, outbox
+):
+    """Volver a estar sano no avisa. El aviso es de lo que se rompe."""
+    estados = iter([("not_applicable", "no engine"), ("healthy", "answering")])
+
+    async def _falso():
+        return next(estados)
+
+    monkeypatch.setattr(diagnostics, "_road_routing", _falso)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+    await diagnostics.run_check("road_routing", trigger="scheduled", alert=True)
+
+    assert outbox.last_for(seeded.platform_admin.email) is None
+
+
+def test_la_regla_es_estaba_sano_y_ya_no():
+    """La regla, fijada sin base de datos ni correo.
+
+    Si alguien añade un estado nuevo mañana, queda cubierto sin tener que
+    acordarse de incluirlo en ninguna lista — que es justo lo que falló.
+    """
+    assert diagnostics.es_regresion("healthy", "not_applicable") is True
+    assert diagnostics.es_regresion("healthy", "degraded") is True
+    assert diagnostics.es_regresion("healthy", "unreachable") is True
+    assert diagnostics.es_regresion("healthy", "auth_failed") is True
+    assert diagnostics.es_regresion("healthy", "un_estado_futuro") is True
+
+    assert diagnostics.es_regresion("healthy", "healthy") is False
+    assert diagnostics.es_regresion(None, "not_applicable") is False
+    assert diagnostics.es_regresion("not_applicable", "not_applicable") is False
+    assert diagnostics.es_regresion("degraded", "unreachable") is False
+    assert diagnostics.es_regresion("not_applicable", "healthy") is False
