@@ -1,5 +1,5 @@
 import {
-    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatSince,
+    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatSince, leyendaDeMillas,
     type LiveSupervisor,
 } from '@/entities/RouteLive';
 
@@ -64,7 +64,7 @@ export function LiveSupervisorDetail({ supervisor }: LiveSupervisorDetailProps) 
                         {Number(s.official_miles).toFixed(1)}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                        {s.mileage_pending ? 'miles today · pending' : 'miles today'}
+                        {leyendaDeMillas(s)}
                     </div>
                 </div>
             </div>

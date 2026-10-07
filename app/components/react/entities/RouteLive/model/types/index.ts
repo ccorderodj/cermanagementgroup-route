@@ -71,6 +71,15 @@ export const liveSupervisorSchema = z.object({
     // Pendiente **no** es cero. Un total que presenta un viaje sin calcular
     // como cero millas parece final y no lo es.
     mileage_pending: z.boolean(),
+    /**
+     * Viajes del dia que terminaron SIN kilometraje. Distinto de
+     * `mileage_pending`: aquello es 'todavia no', esto es 'ya no habra
+     * cifra' -- falto evidencia, o el routing agoto su reintento.
+     *
+     * Con valor por defecto para no romper la lectura contra un servidor
+     * que todavia no lo envie.
+     */
+    mileage_unresolved: z.number().int().nonnegative().default(0),
 
     activities_today: z.number(),
     operational_mpg: decimalSchema.nullable().optional(),
@@ -99,6 +108,42 @@ export type LiveToday = z.infer<typeof liveTodaySchema>;
 export const formatMiles = (valor: string | number): string => (
     `${Number(valor).toFixed(1)} mi`
 );
+
+/**
+ * Lo que un cero de millas significa, dicho en vez de callado.
+ *
+ * Tres situaciones se dibujaban como el mismo `0.0 mi`: no haber conducido,
+ * haber conducido sin evidencia de ubicacion, y haber conducido con el routing
+ * caido. Las dos ultimas terminan sin cifra y no la van a tener nunca, asi que
+ * presentarlas como un cero mudo obliga a abrir una consola para saber que paso.
+ *
+ * `pending` y `unresolved` son preguntas distintas y pueden darse a la vez: un
+ * dia con un viaje todavia calculandose y otro que ya fallo.
+ */
+const partesDeMillas = (s: LiveSupervisor): string[] => {
+    const partes: string[] = [];
+    if (s.mileage_pending) partes.push('pending');
+    if (s.mileage_unresolved > 0) {
+        partes.push(`${s.mileage_unresolved} unresolved`);
+    }
+    return partes;
+};
+
+/** Sólo el motivo, sin prefijo: para el listado movil, que ya trae las millas. */
+export const motivoDeMillas = (s: LiveSupervisor): string => (
+    partesDeMillas(s).join(' · ')
+);
+
+/** Para el panel de detalle: `miles today · pending · 2 unresolved`. */
+export const leyendaDeMillas = (s: LiveSupervisor): string => (
+    ['miles today', ...partesDeMillas(s)].join(' · ')
+);
+
+/** Para la tarjeta movil, que ya trae las millas delante. */
+export const sufijoDeMillas = (s: LiveSupervisor): string => {
+    const partes = partesDeMillas(s);
+    return partes.length ? ` · ${partes.join(' · ')}` : '';
+};
 
 /**
  * La hora desde la que dura el estado actual, en el formato del mockup.

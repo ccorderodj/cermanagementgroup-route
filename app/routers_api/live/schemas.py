@@ -76,6 +76,13 @@ class LiveSupervisor(BaseModel):
     #: Si queda algún viaje del día cuyo millaje oficial todavía no está
     #: calculado. La pantalla lo dice en vez de presentar el total como final.
     mileage_pending: bool
+    #: Cuántos viajes del día terminaron **sin** kilometraje: faltó evidencia de
+    #: ubicación, o el routing agotó su reintento acotado.
+    #:
+    #: No es lo mismo que `mileage_pending`. Aquello es «todavía no»; esto es
+    #: «ya no va a haber cifra». Sin este dato las dos situaciones, y también
+    #: «no hubo ningún viaje», se dibujaban como el mismo `0.0 mi` mudo.
+    mileage_unresolved: int = 0
 
     activities_today: int
 

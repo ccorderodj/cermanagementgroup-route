@@ -1,5 +1,6 @@
 import {
-    LIVE_STATUS_LABEL, formatMiles, formatSince, type LiveSupervisor,
+    LIVE_STATUS_LABEL, formatMiles, formatSince, motivoDeMillas,
+    type LiveSupervisor,
 } from '@/entities/RouteLive';
 
 /**
@@ -49,6 +50,18 @@ export function LiveMobileList({ supervisors, onSelect }: LiveMobileListProps) {
                         <b className="whitespace-nowrap font-medium text-foreground">
                             {formatMiles(s.official_miles)}
                         </b>
+                        {/*
+                          * El listado movil es la primera pantalla en telefono y
+                          * no llevaba ningun motivo: ni `pending` ni `unresolved`.
+                          * Un cero mudo aqui obliga a entrar supervisor por
+                          * supervisor para averiguar si alguien condujo sin que
+                          * se pudiera medir.
+                          */}
+                        {motivoDeMillas(s) && (
+                            <span className="whitespace-nowrap text-xs text-muted-foreground">
+                                {motivoDeMillas(s)}
+                            </span>
+                        )}
                         <span className="whitespace-nowrap text-xs text-muted-foreground">
                             Since {formatSince(s.since)}
                         </span>
