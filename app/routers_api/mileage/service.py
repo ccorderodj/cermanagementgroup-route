@@ -48,6 +48,11 @@ from app.routers_api.mileage.models import (
     TripMileage,
     TripMileageSegment,
 )
+from app.routers_api.mileage.read import (
+    DOS_DECIMALES,
+    METROS_POR_MILLA,
+    millas_oficiales,
+)
 from app.routers_api.mileage.routing import (
     Punto,
     RoutingUnavailable,
@@ -56,8 +61,7 @@ from app.routers_api.mileage.routing import (
 )
 from app.routers_api.trips.models import Trip, TripStatus
 
-#: Metros por milla. Exacto por definición internacional de la milla terrestre.
-METROS_POR_MILLA = Decimal("1609.344")
+__all__ = ["METROS_POR_MILLA"]  # se reexporta: era público desde RTE06
 
 
 def _politica() -> dict:
@@ -74,10 +78,15 @@ def miles_from_meters(metros: Decimal | None) -> Decimal | None:
     En la base se guardan metros, que es lo que devuelve el proveedor. Guardar
     las dos unidades sería guardar el mismo hecho dos veces y redondearlo dos
     veces; la segunda copia acabaría no cuadrando con la primera.
+
+    Delega en `millas_oficiales` y conserva su propia firma —`None` entra,
+    `None` sale— porque aquí sí importa distinguir «no hay kilometraje» de
+    «cero millas»: esta función responde por un viaje concreto, no por el total
+    de una pantalla.
     """
     if metros is None:
         return None
-    return (Decimal(metros) / METROS_POR_MILLA).quantize(Decimal("0.01"))
+    return millas_oficiales(metros, precision=DOS_DECIMALES)
 
 
 @dataclass(frozen=True)

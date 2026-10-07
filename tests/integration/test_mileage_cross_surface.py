@@ -37,6 +37,7 @@ import pytest
 from sqlalchemy import text
 
 from app.database import async_session_maker
+from app.routers_api.mileage.read import millas_oficiales
 from app.routers_api.mileage.routing import SegmentResult, set_road_router
 
 pytestmark = pytest.mark.integration
@@ -472,9 +473,9 @@ async def test_dos_viajes_calculados_suman_en_las_dos_superficies(
         )
         await _calcular()
 
-    esperado = str(
-        (METROS_POR_TRAMO * 2 * Decimal("0.000621371")).quantize(Decimal("0.1"))
-    )
+    # Contra la regla autoritativa, no contra una segunda fórmula escrita aquí:
+    # un test que reimplementa la conversión deja de detectar que cambie.
+    esperado = str(millas_oficiales(METROS_POR_TRAMO * 2))
     dia = await _dia_de_la_jornada(jornada["id"])
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
 

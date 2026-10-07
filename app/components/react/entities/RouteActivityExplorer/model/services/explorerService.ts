@@ -10,13 +10,21 @@ import { explorerViewSchema, type ExplorerRange, type ExplorerView } from '../ty
  */
 export async function fetchExplorer(params: {
     range: ExplorerRange;
-    date: string;
+    /**
+     * El dia ancla. `null` significa "no lo se todavia": el servidor resuelve
+     * el dia de negocio de la compania y lo devuelve en `start`. La pantalla
+     * **no** puede suplirlo con la fecha del navegador, porque el calendario
+     * del dispositivo y el dia de negocio del tenant no son el mismo dato.
+     */
+    date: string | null;
     supervisorUserId?: number | null;
 }): Promise<ExplorerView> {
     const query: Record<string, string> = {
         range: params.range,
-        date: params.date,
     };
+    if (params.date) {
+        query.date = params.date;
+    }
     if (params.supervisorUserId != null) {
         query.supervisor_user_id = String(params.supervisorUserId);
     }

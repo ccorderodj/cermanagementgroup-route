@@ -49,18 +49,22 @@ const BAJA_A: Record<string, ExplorerRange> = {
     day: 'day',
 };
 
-function hoyLocal(): string {
-    const d = new Date();
-    const mes = String(d.getMonth() + 1).padStart(2, '0');
-    const dia = String(d.getDate()).padStart(2, '0');
-    return `${d.getFullYear()}-${mes}-${dia}`;
-}
-
 export function RouteActivityExplorerPage() {
     const esMovil = useIsMobile();
 
     const [rango, setRango] = useState<ExplorerRange>('day');
-    const [fecha, setFecha] = useState<string>(hoyLocal);
+    /**
+     * El dia ancla. Arranca en `null` a proposito: el dia de negocio lo decide
+     * el servidor, igual que el supervisor.
+     *
+     * Antes se inicializaba con `new Date()` del navegador, y eso abre la
+     * pantalla en el dia equivocado siempre que el calendario del dispositivo
+     * y el dia de negocio del tenant no coincidan -- un desfase horario, o
+     * sencillamente que uno de los dos ya cruzo la medianoche. El sintoma es
+     * el peor posible: `No recorded activity on this day` sobre una jornada
+     * que si tuvo actividad.
+     */
+    const [fecha, setFecha] = useState<string | null>(null);
     const [supervisor, setSupervisor] = useState<number | null>(null);
 
     const [datos, setDatos] = useState<ExplorerView | null>(null);
@@ -106,6 +110,11 @@ export function RouteActivityExplorerPage() {
             // pantalla todavía no lo sabe. El alcance es suyo, no de aquí.
             if (supervisor == null && cuerpo.supervisor_user_id != null) {
                 setSupervisor(cuerpo.supervisor_user_id);
+            }
+            // Y el dia, por el mismo motivo. En la primera lectura el rango es
+            // `day`, asi que `start` es exactamente el dia de negocio vigente.
+            if (fecha == null) {
+                setFecha(cuerpo.start);
             }
         } catch {
             if (vivo.current && mia === lecturaVigente.current) setError(true);
@@ -156,7 +165,7 @@ export function RouteActivityExplorerPage() {
             supervisors={datos?.supervisors ?? []}
             supervisorUserId={supervisor ?? datos?.supervisor_user_id ?? null}
             onSupervisorChange={setSupervisor}
-            date={fecha}
+            date={fecha ?? datos?.start ?? ''}
             onDateChange={setFecha}
             range={rango}
             onRangeChange={setRango}

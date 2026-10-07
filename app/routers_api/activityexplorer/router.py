@@ -33,6 +33,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
 from app.routers_api.activityexplorer import dao
+from app.routers_api.mileage.read import millas_oficiales
 from app.routers_api.activityexplorer.schemas import (
     ExplorerActivity,
     ExplorerGroup,
@@ -114,11 +115,7 @@ async def explorar(
             supervisor_user_id=elegido,
             groups=[],
             summary=ExplorerSummary(
-                official_miles=(
-                    (datos["metros"] * dao.MILLAS_POR_METRO).quantize(Decimal("0.1"))
-                    if datos
-                    else Decimal("0.0")
-                ),
+                official_miles=millas_oficiales(datos["metros"] if datos else None),
                 mileage_pending=bool(datos and datos["pendientes"]),
                 activity_seconds=datos["segundos"] if datos else 0,
                 has_open_activity=bool(datos and datos["abiertos"]),
