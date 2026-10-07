@@ -35,7 +35,8 @@ import {
     type WorkSession,
 } from '@/entities/RouteWorkSessions';
 import { listPendingActions } from '@/shared/lib/offlineQueue';
-import { captureFor } from '@/shared/lib/location';
+import { captureFor, PermisoDeUbicacionRequerido } from '@/shared/lib/location';
+import { LocationGate } from '@/features/RouteLocationGate';
 
 /**
  * La jornada del supervisor, de principio a fin.
@@ -285,6 +286,11 @@ export const RouteMyRoutePage = () => {
     const ultimaVista = useRef<Vista | null>(null);
 
     const detalleDeError = (err: unknown, porDefecto: string) => {
+        // El permiso de ubicación revocado no es un fallo de red ni un rechazo
+        // del servidor: la acción no llegó a encolarse. Sin esta rama diría
+        // «no se pudo empezar el viaje», que manda a buscar el problema donde
+        // no está.
+        if (err instanceof PermisoDeUbicacionRequerido) return err.message;
         const detalle = (err as { response?: { data?: { detail?: string } } })
             ?.response?.data?.detail;
         return detalle ?? porDefecto;
@@ -716,71 +722,80 @@ export const RouteMyRoutePage = () => {
         setPlanPendiente(null);
     };
 
+    // Hay jornada abierta -> el gate deja pasar, para que se pueda CERRAR lo
+    // que esté abierto (§8). Lo que bloquea entonces no es la pantalla sino la
+    // guarda por acción de `enqueueAction`: se puede llegar, completar y
+    // terminar el día; no se puede empezar nada nuevo.
+    //
+    // Sin jornada abierta no hay nada que cerrar, así que la puerta es total.
+    const hayOperacionAbierta = !['loading', 'error', 'no-session'].includes(view.phase);
+
     return (
         <RouteMobileShell title="My Route" active="my-route">
-            <div data-testid="RouteMyRoutePage" className="flex flex-col gap-4">
-                {view.phase === 'loading' && (
-                    <p className="py-12 text-center text-sm text-muted-foreground">
-                        Loading…
-                    </p>
-                )}
-
-                {view.phase === 'error' && (
-                    <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center">
-                        <p className="text-sm text-destructive">
-                            Your workday could not be loaded. Check your connection.
+            <LocationGate hayOperacionAbierta={hayOperacionAbierta}>
+                <div data-testid="RouteMyRoutePage" className="flex flex-col gap-4">
+                    {view.phase === 'loading' && (
+                        <p className="py-12 text-center text-sm text-muted-foreground">
+                            Loading…
                         </p>
-                        <Button variant="outline" className="mt-3" onClick={() => reconcile()}>
-                            Try again
-                        </Button>
-                    </div>
-                )}
+                    )}
 
-                {error && view.phase !== 'error' && (
-                    <p className="rounded-md bg-destructive/10 p-3 text-center text-sm text-destructive">
-                        {error}
-                    </p>
-                )}
+                    {view.phase === 'error' && (
+                        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4 text-center">
+                            <p className="text-sm text-destructive">
+                                Your workday could not be loaded. Check your connection.
+                            </p>
+                            <Button variant="outline" className="mt-3" onClick={() => reconcile()}>
+                                Try again
+                            </Button>
+                        </div>
+                    )}
 
-                {view.phase === 'no-session' && (
-                    <div className="flex flex-col items-center gap-6 py-16">
-                        <p className="text-center text-sm text-muted-foreground">
-                            Ready to start your day?
+                    {error && view.phase !== 'error' && (
+                        <p className="rounded-md bg-destructive/10 p-3 text-center text-sm text-destructive">
+                            {error}
                         </p>
-                        <Button
-                            size="lg"
-                            className="h-16 w-full max-w-xs text-lg"
-                            disabled={busy}
-                            onClick={iniciarJornada}
-                        >
-                            Start Work
-                        </Button>
-                    </div>
-                )}
+                    )}
 
-                {view.phase === 'start-queued' && (
-                    <div className="flex flex-col items-center gap-3 py-16">
-                        <p className="text-center text-base font-medium text-foreground">
-                            Starting your day…
-                        </p>
-                        <p className="text-center text-sm text-muted-foreground">
-                            This will sync as soon as you have a connection.
-                        </p>
-                    </div>
-                )}
+                    {view.phase === 'no-session' && (
+                        <div className="flex flex-col items-center gap-6 py-16">
+                            <p className="text-center text-sm text-muted-foreground">
+                                Ready to start your day?
+                            </p>
+                            <Button
+                                size="lg"
+                                className="h-16 w-full max-w-xs text-lg"
+                                disabled={busy}
+                                onClick={iniciarJornada}
+                            >
+                                Start Work
+                            </Button>
+                        </div>
+                    )}
 
-                {view.phase === 'working' && (
-                    <div className="flex flex-col gap-6">
-                        <Cabecera session={view.session} />
+                    {view.phase === 'start-queued' && (
+                        <div className="flex flex-col items-center gap-3 py-16">
+                            <p className="text-center text-base font-medium text-foreground">
+                                Starting your day…
+                            </p>
+                            <p className="text-center text-sm text-muted-foreground">
+                                This will sync as soon as you have a connection.
+                            </p>
+                        </div>
+                    )}
 
-                        {/* El aviso, no un diálogo forzado: `Start Work` no es
+                    {view.phase === 'working' && (
+                        <div className="flex flex-col gap-6">
+                            <Cabecera session={view.session} />
+
+                            {/* El aviso, no un diálogo forzado: `Start Work` no es
                             `Start Driving`, y quien empieza el día con trabajo
                             de oficina no tiene por qué fotografiar nada. */}
-                        {faltaInicio && !capturandoInicio && preparando === null && inicio && (
-                            <OdometerPendingBanner
-                                status={inicio.status}
-                                disabled={busy}
-                                onCapture={() => {
+                            {faltaInicio && !capturandoInicio && preparando === null && inicio && (
+                                <OdometerPendingBanner
+                                    status={inicio.status}
+                                    disabled={busy}
+                                    onCapture={() => {
                                     // Se marca ANTES de que el componente abra
                                     // la cámara: si la página muere con ella
                                     // abierta, esto es lo único que queda.
@@ -793,59 +808,59 @@ export const RouteMyRoutePage = () => {
                                     // no, la marca se guardaba bajo una llave
                                     // que nadie consulta y la tarea se perdía
                                     // sin que nada lo dijera.
-                                    marcarTarea(
-                                        ultimaJornada.current?.id ?? -1,
-                                        'start',
-                                    );
-                                    setCapturandoInicio(true);
-                                }}
-                            />
-                        )}
+                                        marcarTarea(
+                                            ultimaJornada.current?.id ?? -1,
+                                            'start',
+                                        );
+                                        setCapturandoInicio(true);
+                                    }}
+                                />
+                            )}
 
-                        {capturandoOdometro && inicio && (
-                            <OdometerCapture
-                                sessionId={view.session.id}
-                                end="start"
-                                evidence={inicio}
-                                onResolved={odometroResuelto}
-                                onChanged={reconcile}
-                                onCancel={cancelarOdometro}
-                            />
-                        )}
+                            {capturandoOdometro && inicio && (
+                                <OdometerCapture
+                                    sessionId={view.session.id}
+                                    end="start"
+                                    evidence={inicio}
+                                    onResolved={odometroResuelto}
+                                    onChanged={reconcile}
+                                    onCancel={cancelarOdometro}
+                                />
+                            )}
 
-                        {/* Elegido el contexto: sus datos y salir, en una
+                            {/* Elegido el contexto: sus datos y salir, en una
                             pantalla. Sin `End Work` (FR-11): `Back` devuelve al
                             workbench, que es donde se termina el día. */}
-                        {!capturandoOdometro && preparando !== null && (
-                            <TripContextForm
-                                purpose={preparando}
-                                busy={busy}
-                                confirmLabel="Start Trip"
-                                onBack={() => setPreparando(null)}
-                                onConfirm={salirDeViaje}
-                            />
-                        )}
+                            {!capturandoOdometro && preparando !== null && (
+                                <TripContextForm
+                                    purpose={preparando}
+                                    busy={busy}
+                                    confirmLabel="Start Trip"
+                                    onBack={() => setPreparando(null)}
+                                    onConfirm={salirDeViaje}
+                                />
+                            )}
 
-                        {/* El workbench. Las siete opciones **son** la pantalla
+                            {/* El workbench. Las siete opciones **son** la pantalla
                             de reposo: no hay un botón previo que las revele. */}
-                        {!capturandoOdometro && preparando === null && (
-                            <>
-                                {/* Título y subtítulo literales del mockup
+                            {!capturandoOdometro && preparando === null && (
+                                <>
+                                    {/* Título y subtítulo literales del mockup
                                     V0.7 aprobado: el workbench se presenta, no
                                     aparece sin más. */}
-                                <div>
-                                    <p className="text-xl font-bold text-foreground">
-                                        What&apos;s next?
-                                    </p>
-                                    <p className="mt-0.5 text-xs text-muted-foreground">
-                                        Choose one activity to start a trip.
-                                    </p>
-                                </div>
-                                <TripContextChoices
-                                    busy={busy}
-                                    onSelect={setPreparando}
-                                />
-                                {/* Terminar el día tiene que estar siempre: hay
+                                    <div>
+                                        <p className="text-xl font-bold text-foreground">
+                                            What&apos;s next?
+                                        </p>
+                                        <p className="mt-0.5 text-xs text-muted-foreground">
+                                            Choose one activity to start a trip.
+                                        </p>
+                                    </div>
+                                    <TripContextChoices
+                                        busy={busy}
+                                        onSelect={setPreparando}
+                                    />
+                                    {/* Terminar el día tiene que estar siempre: hay
                                     jornadas sin un solo viaje y no se fabrica un
                                     viaje a casa falso para poder cerrarlas
                                     (PD-02, A-1).
@@ -855,156 +870,157 @@ export const RouteMyRoutePage = () => {
                                     consecuencias de esta pantalla — con un viaje
                                     sin llegar queda registrado como interrumpido
                                     y no se le inventa una llegada. */}
-                                <Button
-                                    variant="destructive"
-                                    size="lg"
-                                    className="h-12 w-full"
-                                    disabled={busy}
-                                    onClick={() => cerrarJornada(view.session)}
-                                >
-                                    End Work
-                                </Button>
-                            </>
-                        )}
-                    </div>
-                )}
+                                    <Button
+                                        variant="destructive"
+                                        size="lg"
+                                        className="h-12 w-full"
+                                        disabled={busy}
+                                        onClick={() => cerrarJornada(view.session)}
+                                    >
+                                        End Work
+                                    </Button>
+                                </>
+                            )}
+                        </div>
+                    )}
 
-                {/* Un viaje preparado y sin salir. En el camino normal no
+                    {/* Un viaje preparado y sin salir. En el camino normal no
                     aparece —preparar y salir son una sola pulsación—, así que
                     sólo se llega aquí si la salida se interrumpió: sin red, o
                     con la aplicación cerrada en medio. No es una pantalla de
                     confirmación, es reanudar lo que quedó a medias. */}
-                {view.phase === 'planning' && (
-                    <div className="flex flex-col gap-6">
-                        <Cabecera session={view.session} />
-                        <Destino trip={view.trip} />
+                    {view.phase === 'planning' && (
+                        <div className="flex flex-col gap-6">
+                            <Cabecera session={view.session} />
+                            <Destino trip={view.trip} />
 
-                        {faltaInicio && inicio ? (
-                            <OdometerCapture
-                                sessionId={view.session.id}
-                                end="start"
-                                evidence={inicio}
-                                onResolved={odometroResuelto}
-                                onChanged={reconcile}
-                            />
-                        ) : (
-                            <Button
-                                size="lg"
-                                className="h-16 w-full text-lg"
-                                disabled={busy}
-                                onClick={() => arrancarViaje(view.trip)}
-                            >
-                                Start Trip
-                            </Button>
-                        )}
-                    </div>
-                )}
-
-                {view.phase === 'on-route' && (
-                    <div className="flex flex-col gap-6">
-                        <Cabecera session={view.session} />
-                        <Destino trip={view.trip} />
-
-                        {cambiandoPlan ? (
-                            <TripContextPicker
-                                busy={busy}
-                                initial={planDe(view.trip)}
-                                confirmLabel="Update plan"
-                                onCancel={() => setCambiandoPlan(false)}
-                                onConfirm={(plan) => cambiarPlan(view.trip, plan)}
-                            />
-                        ) : (
-                            <>
+                            {faltaInicio && inicio ? (
+                                <OdometerCapture
+                                    sessionId={view.session.id}
+                                    end="start"
+                                    evidence={inicio}
+                                    onResolved={odometroResuelto}
+                                    onChanged={reconcile}
+                                />
+                            ) : (
                                 <Button
                                     size="lg"
                                     className="h-16 w-full text-lg"
                                     disabled={busy}
-                                    onClick={() => llegar(view.trip)}
+                                    onClick={() => arrancarViaje(view.trip)}
                                 >
-                                    {view.trip.current_purpose === 'home'
-                                        ? 'Arrived Home'
-                                        : 'Arrived'}
+                                    Start Trip
                                 </Button>
-                                <Button
-                                    variant="outline"
-                                    size="lg"
-                                    className="h-14 w-full"
-                                    disabled={busy}
-                                    onClick={() => setCambiandoPlan(true)}
-                                >
-                                    Change Plan
-                                </Button>
-                                {/* Sin `End Work` aquí (PD-03). Conduciendo no
+                            )}
+                        </div>
+                    )}
+
+                    {view.phase === 'on-route' && (
+                        <div className="flex flex-col gap-6">
+                            <Cabecera session={view.session} />
+                            <Destino trip={view.trip} />
+
+                            {cambiandoPlan ? (
+                                <TripContextPicker
+                                    busy={busy}
+                                    initial={planDe(view.trip)}
+                                    confirmLabel="Update plan"
+                                    onCancel={() => setCambiandoPlan(false)}
+                                    onConfirm={(plan) => cambiarPlan(view.trip, plan)}
+                                />
+                            ) : (
+                                <>
+                                    <Button
+                                        size="lg"
+                                        className="h-16 w-full text-lg"
+                                        disabled={busy}
+                                        onClick={() => llegar(view.trip)}
+                                    >
+                                        {view.trip.current_purpose === 'home'
+                                            ? 'Arrived Home'
+                                            : 'Arrived'}
+                                    </Button>
+                                    <Button
+                                        variant="outline"
+                                        size="lg"
+                                        className="h-14 w-full"
+                                        disabled={busy}
+                                        onClick={() => setCambiandoPlan(true)}
+                                    >
+                                        Change Plan
+                                    </Button>
+                                    {/* Sin `End Work` aquí (PD-03). Conduciendo no
                                     se termina el día: se llega —una llegada que
                                     ocurrió— y se cierra desde el workbench. La
                                     revisión de D-07 sigue existiendo para
                                     cuando el cierre llega por un camino
                                     legítimo, como una acción encolada o un
                                     segundo dispositivo. */}
-                            </>
-                        )}
-                    </div>
-                )}
+                                </>
+                            )}
+                        </div>
+                    )}
 
-                {view.phase === 'arrived' && (
-                    <div className="flex flex-col gap-6">
-                        <Cabecera session={view.session} />
-                        <Destino trip={view.trip} />
+                    {view.phase === 'arrived' && (
+                        <div className="flex flex-col gap-6">
+                            <Cabecera session={view.session} />
+                            <Destino trip={view.trip} />
 
-                        <ActivityStop
-                            trip={view.trip}
-                            execution={view.execution}
-                            onChanged={reconcile}
-                        />
+                            <ActivityStop
+                                trip={view.trip}
+                                execution={view.execution}
+                                onChanged={reconcile}
+                            />
 
-                        {/* Tampoco aquí (PD-03, FR-07). Llegado y sin
+                            {/* Tampoco aquí (PD-03, FR-07). Llegado y sin
                             resolver, lo que hace falta es resolver la parada:
                             terminar o marcharse, las dos con resultado. Cerrado
                             el viaje se vuelve al workbench, y allí sí. */}
-                    </div>
-                )}
+                        </div>
+                    )}
 
-                {view.phase === 'ending' && (
-                    <div className="flex flex-col gap-6">
-                        <Cabecera session={view.session} />
-                        <p className="text-center text-sm text-muted-foreground">
-                            One last thing before you finish.
-                        </p>
-                        {odometro?.end && (
-                            <OdometerCapture
-                                sessionId={view.session.id}
-                                end="end"
-                                evidence={odometro.end}
-                                onResolved={() => cerrarJornada(view.session, true)}
-                                onChanged={async () => {
+                    {view.phase === 'ending' && (
+                        <div className="flex flex-col gap-6">
+                            <Cabecera session={view.session} />
+                            <p className="text-center text-sm text-muted-foreground">
+                                One last thing before you finish.
+                            </p>
+                            {odometro?.end && (
+                                <OdometerCapture
+                                    sessionId={view.session.id}
+                                    end="end"
+                                    evidence={odometro.end}
+                                    onResolved={() => cerrarJornada(view.session, true)}
+                                    onChanged={async () => {
                                     // Pedida la excepción, el día ya puede
                                     // cerrarse: la evidencia queda pendiente y
                                     // `ended_at` se escribe a su hora real.
-                                    await cerrarJornada(view.session, true);
-                                }}
-                            />
-                        )}
-                        <Button
-                            variant="ghost"
-                            className="h-12 w-full"
-                            disabled={busy}
-                            onClick={() => reconcile()}
-                        >
-                            Keep working
-                        </Button>
-                    </div>
-                )}
+                                        await cerrarJornada(view.session, true);
+                                    }}
+                                />
+                            )}
+                            <Button
+                                variant="ghost"
+                                className="h-12 w-full"
+                                disabled={busy}
+                                onClick={() => reconcile()}
+                            >
+                                Keep working
+                            </Button>
+                        </div>
+                    )}
 
-                {view.phase === 'end-queued' && (
-                    <div className="flex flex-col gap-3 py-16">
-                        <p className="text-center text-sm text-muted-foreground">
-                            Ending your day… this will sync as soon as you have a
-                            connection.
-                        </p>
-                        <OdometerDistance distance={distancia} />
-                    </div>
-                )}
-            </div>
+                    {view.phase === 'end-queued' && (
+                        <div className="flex flex-col gap-3 py-16">
+                            <p className="text-center text-sm text-muted-foreground">
+                                Ending your day… this will sync as soon as you have a
+                                connection.
+                            </p>
+                            <OdometerDistance distance={distancia} />
+                        </div>
+                    )}
+                </div>
+            </LocationGate>
 
             <ConfirmDestructiveDialog
                 open={revisandoCierre}

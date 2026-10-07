@@ -130,8 +130,29 @@ async def lanzar_edge(playwright):
         raise
 
 
-async def abrir_sesion(page, email: str) -> None:
-    """Deja la sesión iniciada en el contexto del navegador."""
+#: Atenas, Georgia. Sólo hace falta que sea una coordenada válida.
+UBICACION_DE_PRUEBA = {"latitude": 33.9519, "longitude": -83.3576}
+
+
+async def abrir_sesion(page, email: str, *, conceder_ubicacion: bool = True) -> None:
+    """Deja la sesión iniciada en el contexto del navegador.
+
+    `conceder_ubicacion` por omisión en `True` desde RTE10-A02: la puerta de
+    permiso bloquea My Route cuando el navegador no tiene acceso a la
+    ubicación, y lo normal en campo es que un supervisor lo tenga concedido.
+    Sin esto, todos los tests de navegador del producto se quedarían mirando la
+    puerta en vez del flujo que vienen a comprobar.
+
+    Se concede el permiso **y** se da una coordenada: conceder sin posición deja
+    cada captura esperando a un GPS que nunca responde, y convierte suites de
+    segundos en suites de minutos.
+
+    Los tests que vienen a comprobar la puerta pasan `False` y construyen su
+    propio contexto — ahí la ausencia de permiso es el objeto de la prueba.
+    """
+    if conceder_ubicacion:
+        await page.context.grant_permissions(["geolocation"])
+        await page.context.set_geolocation(UBICACION_DE_PRUEBA)
     await page.goto("/login")
     estado = await page.evaluate(
         LOGIN_JS,

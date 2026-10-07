@@ -161,6 +161,28 @@ export async function flushPendingLocationEvidence(): Promise<{
  * `Idempotency-Key` es el identificador de la propia acción, así que reenviarla
  * tras un corte no repite la escritura.
  */
+/**
+ * Las cabeceras de una accion encolada.
+ *
+ * `X-Location-Permission` lleva el permiso **del momento en que se actuo**, que
+ * es el que la accion guardo al encolarse. No se vuelve a leer aqui a
+ * proposito: una accion tomada con permiso concedido en una nave sin cobertura
+ * puede enviarse horas despues, y releer ahora contestaria otra pregunta.
+ *
+ * El servidor no puede verificar el permiso del sistema operativo de nadie --
+ * eso es una afirmacion sobre un dispositivo que no controla--, asi que lo que
+ * hace es exigir la asercion y dejarla auditada. La frontera de confianza esta
+ * documentada en el reporte; lo que no se hace es fingir que el servidor ve
+ * algo que no puede ver.
+ */
+function cabecerasDe(accion: PendingAction): Record<string, string> {
+    const cabeceras: Record<string, string> = { 'Idempotency-Key': accion.id };
+    if (accion.locationPermission) {
+        cabeceras['X-Location-Permission'] = accion.locationPermission;
+    }
+    return cabeceras;
+}
+
 export async function flushPendingActions(): Promise<FlushResult> {
     // La evidencia de ubicación se vacía **después** de las acciones, no antes:
     // un punto sólo se puede atar a su evento cuando el evento existe en el
@@ -171,7 +193,7 @@ export async function flushPendingActions(): Promise<FlushResult> {
             url: accion.endpoint,
             method: accion.method,
             data: accion.payload,
-            headers: { 'Idempotency-Key': accion.id },
+            headers: cabecerasDe(accion),
         });
     });
     await flushPendingLocationEvidence();

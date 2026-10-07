@@ -59,7 +59,24 @@ PROHIBIDO = (
 
 
 @asynccontextmanager
-async def _movil_sin_permiso(live_server, email: str):
+async def _movil_sin_senal(live_server, email: str):
+    """Permiso **concedido** y ninguna coordenada disponible.
+
+    Reorientado en RTE10-A02. Antes este helper denegaba el permiso, porque el
+    AC-8 de RTE06 decía que con el permiso denegado el día entero funcionaba.
+    **Ese contrato está derogado**: §2 del checkpoint nuevo bloquea la
+    operación cuando el permiso no está concedido, y ese caso lo cubre ahora
+    `tests/e2e/test_location_permission_gate_browser.py`.
+
+    Lo que sobrevive intacto —y es lo que este archivo sigue defendiendo— es la
+    otra mitad: con el permiso concedido y **sin señal**, el día funciona, no
+    aparece ningún mensaje de ubicación y no se inventa ninguna coordenada. Es
+    el caso de la nave industrial, y §9 lo preserva de forma explícita.
+
+    Se concede el permiso sin fijar posición: entonces `getCurrentPosition`
+    responde `POSITION_UNAVAILABLE`, que es exactamente lo que ocurre bajo
+    techo.
+    """
     from playwright.async_api import async_playwright
 
     async with async_playwright() as p:
@@ -68,12 +85,11 @@ async def _movil_sin_permiso(live_server, email: str):
             contexto = await navegador.new_context(
                 base_url=live_server,
                 viewport=MOVIL,
-                # Explícito a propósito: es el estado que se quiere probar, no
-                # un efecto secundario de que Playwright no lo conceda.
-                permissions=[],
+                # Concedido, pero sin coordenada: permiso sí, señal no.
+                permissions=["geolocation"],
             )
             page = await contexto.new_page()
-            await abrir_sesion(page, email)
+            await abrir_sesion(page, email, conceder_ubicacion=False)
             yield contexto, page
         finally:
             await navegador.close()
@@ -92,8 +108,16 @@ async def _contar(consulta: str, company_id: int) -> int:
         return await sesion.scalar(text(consulta), {"c": company_id})
 
 
-async def test_the_day_runs_normally_with_location_denied(seeded, live_server):
-    """AC-8: con el permiso denegado, el día entero funciona y nada se ve.
+async def test_the_day_runs_normally_without_a_location_fix(seeded, live_server):
+    """AC-8, en la mitad que sigue vigente: sin señal el día entero funciona.
+
+    **Derogación declarada.** Este test comprobaba el día completo con el
+    permiso *denegado*. RTE10-A02 §2 deroga esa tolerancia: sin permiso ya no
+    se opera, y la puerta lo bloquea. Lo que no cambia —y es lo que aquí se
+    sigue defendiendo— es que la falta de **señal** no bloquea ni habla: §9 lo
+    conserva palabra por palabra.
+
+    Lo que antes decía esta frase:
 
     Se recorre el flujo de RTE05 completo —Start Work, preparar y salir,
     llegar— y se comprueba en cada pantalla que ninguna de las frases de §12
@@ -102,7 +126,7 @@ async def test_the_day_runs_normally_with_location_denied(seeded, live_server):
     """
     supervisor = seeded.alpha.users["supervisor"]
 
-    async with _movil_sin_permiso(live_server, supervisor.email) as (_c, page):
+    async with _movil_sin_senal(live_server, supervisor.email) as (_c, page):
         await page.goto("/route")
 
         await page.get_by_role("button", name="Start Work").click()
@@ -133,19 +157,29 @@ async def test_the_day_runs_normally_with_location_denied(seeded, live_server):
         )
         await _sin_mensajes_de_ubicacion(page)
 
-    # Y el servidor sí se enteró: los eventos quedaron como Missing, que es
-    # donde tiene que estar la noticia — no en la pantalla del supervisor.
-    perdidos = await _contar(
-        "SELECT count(*) FROM missing_location_event WHERE company_id = :c",
-        seeded.alpha.id,
-    )
+    # La garantía que §9 nombra, y que aquí se puede observar en el momento:
+    # sin punto utilizable no se escribe ninguna coordenada. Ninguna.
     puntos = await _contar(
         "SELECT count(*) FROM location_fix WHERE company_id = :c", seeded.alpha.id
     )
-    assert puntos == 0, "sin permiso no se puede fabricar una coordenada"
-    assert perdidos >= 1, (
-        "el administrador tiene que poder enterarse aunque el supervisor no vea nada"
-    )
+    assert puntos == 0, "sin señal no se puede fabricar una coordenada"
+
+    # Lo que NO se comprueba aquí, y por qué.
+    #
+    # Antes este test exigía además `missing_location_event >= 1`, y era cierto
+    # porque el permiso estaba denegado: ahí la captura falla al instante y el
+    # evento se da por perdido en el acto.
+    #
+    # Con el permiso concedido y sin señal el camino es otro —y es el correcto—:
+    # el cliente entra en la **ventana de recuperación** y sólo declara `Missing`
+    # cuando la ventana vence, cosa que ocurre después de que este test termine.
+    # Exigirlo aquí obligaría a esperar la ventana entera, y el test mediría la
+    # paciencia en vez del producto.
+    #
+    # Esa ruta tiene su cobertura donde se puede medir de verdad:
+    # `test_missing_is_created_once_and_fabricates_nothing` y los tests de
+    # ventana en `tests/integration/test_route_location_evidence.py`, más
+    # `sweep_unreported_windows` para el vencimiento.
 
 
 async def test_no_blocking_spinner_waits_for_location(seeded, live_server):
@@ -164,7 +198,7 @@ async def test_no_blocking_spinner_waits_for_location(seeded, live_server):
 
     supervisor = seeded.alpha.users["supervisor"]
 
-    async with _movil_sin_permiso(live_server, supervisor.email) as (_c, page):
+    async with _movil_sin_senal(live_server, supervisor.email) as (_c, page):
         await page.goto("/route")
         inicio = time.monotonic()
         await page.get_by_role("button", name="Start Work").click()

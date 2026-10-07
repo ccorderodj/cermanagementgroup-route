@@ -41,6 +41,7 @@ from app.routers_api.worksessions.schemas import (
 from app.routers_api.trips.schemas import TripRead
 from app.routers_api.trips.service import TripService
 from app.routers_api.worksessions.service import WorkSessionService
+from app.routers_api.location.permission_gate import require_location_permission
 
 
 router = APIRouter(prefix="/worksessions", tags=["Route · Work Sessions"])
@@ -112,6 +113,7 @@ async def start_work(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    _ubicacion: None = Depends(require_location_permission()),
     company: TenantContext = Depends(get_company_required),
 ) -> WorkSessionRead:
     cuerpo_crudo = await request.body()

@@ -34,6 +34,7 @@ from app.routers_api.trips.service import TripService
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
+from app.routers_api.location.permission_gate import require_location_permission
 
 
 router = APIRouter(prefix="/trips", tags=["Route · Trips"])
@@ -50,6 +51,7 @@ async def plan_trip(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    _ubicacion: None = Depends(require_location_permission()),
     company: TenantContext = Depends(get_company_required),
 ) -> TripRead:
     """Crea el viaje en planificación, dentro de la jornada abierta.
@@ -103,6 +105,7 @@ async def start_trip(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    _ubicacion: None = Depends(require_location_permission()),
     company: TenantContext = Depends(get_company_required),
 ) -> TripRead:
     """`PLANNING → IN_TRANSIT`.
@@ -156,6 +159,7 @@ async def change_plan(
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    _ubicacion: None = Depends(require_location_permission()),
     company: TenantContext = Depends(get_company_required),
 ) -> TripRead:
     """Cambia el plan **sin borrar el anterior**. Sólo en tránsito.
