@@ -91,6 +91,18 @@ export function LiveSupervisorTable(props: LiveSupervisorTableProps) {
                                             + pending
                                         </span>
                                     )}
+                                    {/*
+                                      * Y un cero sin explicacion tampoco es
+                                      * cero. Un viaje que termino sin poder
+                                      * medirse se dibujaba igual que no haber
+                                      * conducido; esto los separa sin inventar
+                                      * ninguna distancia.
+                                      */}
+                                    {s.mileage_unresolved > 0 && (
+                                        <span className="ml-1 text-xs font-normal text-muted-foreground">
+                                            {`· ${s.mileage_unresolved} unresolved`}
+                                        </span>
+                                    )}
                                 </td>
                                 <td className="whitespace-nowrap px-5 py-3">
                                     <span className="inline-flex items-center gap-2 text-foreground">

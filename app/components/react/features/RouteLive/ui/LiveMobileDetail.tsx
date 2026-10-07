@@ -1,6 +1,7 @@
 import { Button } from '@/shared/ui/shadcn/new-york';
 import {
-    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatSince, type LiveSupervisor,
+    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatSince, sufijoDeMillas,
+    type LiveSupervisor,
 } from '@/entities/RouteLive';
 
 /**
@@ -38,7 +39,7 @@ export function LiveMobileDetail({ supervisor: s, onBack }: LiveMobileDetailProp
                     </b>
                     <div className="text-xs text-muted-foreground">
                         {`Today · ${Number(s.official_miles).toFixed(1)} mi`}
-                        {s.mileage_pending ? ' · pending' : ''}
+                        {sufijoDeMillas(s)}
                     </div>
                 </div>
             </div>

@@ -97,9 +97,46 @@ def pendientes():
     Sólo `pending_calculation`. Un estado terminal —`not_calculable` o
     `calculation_failed`— ya no está pendiente de nada: su respuesta es
     definitiva aunque no sea un número, y presentarla como «todavía calculando»
-    sería prometer una cifra que no va a llegar.
+    sería prometer una cifra que no va a llegar. Ésos los cuenta
+    `sin_resolver()`, que es una pregunta distinta.
     """
     return case(
         (TripMileage.state == MileageState.PENDING_CALCULATION.value, 1),
         else_=0,
     )
+
+
+#: Terminales **sin** cifra. `calculated` no está porque sí la tiene.
+TERMINALES_SIN_CIFRA = (
+    MileageState.NOT_CALCULABLE.value,
+    MileageState.CALCULATION_FAILED.value,
+)
+
+
+def sin_resolver():
+    """Expresión SQL: 1 por cada viaje que terminó **sin** kilometraje.
+
+    Por qué esto hace falta
+    -----------------------
+    Hasta ahora las pantallas publicaban dos datos: las millas y si quedaba algo
+    pendiente. Con eso, tres realidades distintas se dibujaban idénticas:
+
+        no hubo ningún viaje            -> 0.0 mi
+        faltó evidencia de ubicación    -> 0.0 mi      <- `not_calculable`
+        el routing agotó el reintento   -> 0.0 mi      <- `calculation_failed`
+
+    Un supervisor que condujo 60 km y perdió el GPS se veía exactamente igual
+    que uno que no salió de la oficina. El cero era veraz —esos viajes no tienen
+    kilometraje y no se les va a inventar uno— pero **mudo**, y un cero mudo
+    obliga a abrir una consola para saber qué pasó.
+
+    Esto no cambia ninguna cifra. Añade la pregunta que faltaba: *¿el cero es
+    porque no hubo recorrido, o porque no se pudo medir?*
+
+    Lo que sigue estando prohibido
+    ------------------------------
+    Que estos viajes aporten una distancia estimada de donde sea. Siguen sumando
+    cero a `metros_calculados()`; lo único que cambia es que ahora se pueden
+    contar y decir.
+    """
+    return case((TripMileage.state.in_(TERMINALES_SIN_CIFRA), 1), else_=0)

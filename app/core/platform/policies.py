@@ -88,9 +88,27 @@ class RouteMileagePolicy(BaseModel):
     * `implied_speed_max_kmh` 160 — distancia dividida por el tiempo entre las
       dos capturas. Atrapa la clase de error que un límite de distancia no ve:
       50 km en cuatro minutos.
-    * `max_attempts` 5 con `backoff_base_seconds` 60 — reintento acotado (§24:
-      ningún viaje puede quedar Pending indefinidamente). Cinco intentos con
-      backoff exponencial cubren unos 30 minutos de caída del proveedor.
+    * `max_attempts` 10 con `backoff_base_seconds` 60 — reintento acotado (§24:
+      ningún viaje puede quedar Pending indefinidamente). La espera es
+      `base * 2^(intento-1)`, así que la tolerancia a una caída del proveedor
+      es la suma de las esperas antes de terminalizar:
+
+          5 intentos  ->   60+120+240+480 s           =  15 min
+          8 intentos  ->   ... hasta 2^6              =   2,1 h
+          10 intentos ->   60*(2^9-1) = 30 660 s      =   8,5 h
+
+      Estaba en 5, y **medido** eso son 15 minutos, no los 30 que decía este
+      comentario. En campo resultó demasiado corto: los viajes hechos mientras
+      el motor de carretera no estaba desplegado agotaron su cuota y quedaron
+      `calculation_failed`, que es terminal y el barrido no recoge. Conectar el
+      proveedor después no los recupera: hay que reponerlos a mano con
+      `reprocess_failed_mileage`.
+
+      8,5 horas cubren una jornada entera. El coste es real y es el contrario:
+      un viaje genuinamente no enrutable se queda marcado `pending` durante
+      horas antes de decir que no. Es el intercambio correcto —un «todavía no»
+      largo es preferible a un «nunca» falso— pero es un valor **defendible, no
+      certificado**, y se ajusta desde la pantalla de plataforma sin desplegar.
     * `request_timeout_seconds` 5 — por tramo. Un routing que tarda más que
       esto no es un problema de latencia, es un proveedor caído.
     """
@@ -112,7 +130,7 @@ class RouteMileagePolicy(BaseModel):
     segment_max_meters: int = Field(default=800_000, ge=1_000, le=20_000_000)
     implied_speed_max_kmh: int = Field(default=160, ge=10, le=1_000)
     plausibility_enabled: bool = True
-    max_attempts: int = Field(default=5, ge=1, le=20)
+    max_attempts: int = Field(default=10, ge=1, le=20)
     backoff_base_seconds: int = Field(default=60, ge=5, le=3_600)
     request_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     sweeper_interval_minutes: int = Field(default=5, ge=1, le=60)

@@ -43,6 +43,7 @@ from app.routers_api.mileage.read import (
     metros_calculados,
     millas_oficiales,
     pendientes,
+    sin_resolver,
 )
 from app.routers_api.trips.models import Trip, TripStatus
 from app.routers_api.users.models import Users
@@ -128,7 +129,7 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
 
         sesiones = [f.sesion_id for f in filas if f.sesion_id is not None]
         if not sesiones:
-            return [_fila(f, None, None, 0, Decimal("0"), False) for f in filas]
+            return [_fila(f, None, None, 0, Decimal("0"), False, 0) for f in filas]
 
         # ── 2. El viaje vigente de cada jornada ─────────────────────────────
         #
@@ -217,6 +218,9 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
                         func.coalesce(
                             func.sum(pendientes().cast(Integer)), 0
                         ).label("pendientes"),
+                        func.coalesce(
+                            func.sum(sin_resolver().cast(Integer)), 0
+                        ).label("sin_resolver"),
                     )
                     .join(
                         TripMileage,
@@ -242,12 +246,21 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
                 millaje[f.sesion_id].metros if f.sesion_id in millaje else None
             ),
             bool(f.sesion_id in millaje and millaje[f.sesion_id].pendientes),
+            int(millaje[f.sesion_id].sin_resolver) if f.sesion_id in millaje else 0,
         )
         for f in filas
     ]
 
 
-def _fila(f, viaje, actividad, actividades: int, millas: Decimal, pendiente: bool) -> dict:
+def _fila(
+    f,
+    viaje,
+    actividad,
+    actividades: int,
+    millas: Decimal,
+    pendiente: bool,
+    sin_cifra: int = 0,
+) -> dict:
     """Traduce los hechos de dominio al estado visible que V0.7 aprobó.
 
     El orden de las ramas **es** la regla, y no es arbitrario: estar en una
@@ -290,6 +303,10 @@ def _fila(f, viaje, actividad, actividades: int, millas: Decimal, pendiente: boo
         ),
         "official_miles": millas.quantize(Decimal("0.1")),
         "mileage_pending": pendiente,
+        #: Viajes del dia que terminaron **sin** kilometraje: falto
+        #: evidencia, o el routing agoto su reintento. Cero no es lo mismo
+        #: que no haber conducido, y hasta ahora se dibujaban igual.
+        "mileage_unresolved": sin_cifra,
         "activities_today": actividades,
         "operational_mpg": f.operational_mpg,
         "fuel_grade": f.fuel_grade,
