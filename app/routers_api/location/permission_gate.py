@@ -59,6 +59,10 @@ CABECERA = "X-Location-Permission"
 #: quien todavía no ha decidido, y §2.1 lo pone del lado bloqueado.
 CONCEDIDO = "granted"
 
+#: Cabecera de RESPUESTA que marca el rechazo como "falta el permiso", para
+#: que la cola durable lo distinga de un rechazo definitivo. Ver `raise` abajo.
+RECHAZO = "X-Location-Permission-Required"
+
 MENSAJE = (
     "Location access is required to start new work. Enable location for "
     "CER Route and try again."
@@ -96,9 +100,22 @@ def require_location_permission():
             summary="A new operational action was blocked: location permission is not granted",
             changes={"declared": declarado or None},
         )
+        # La cabecera es lo que evita una perdida de datos real.
+        #
+        # La cola durable del cliente trata cualquier 4xx como definitivo y
+        # BORRA la accion. Eso es correcto para un 409 o un 422, que diran lo
+        # mismo dentro de una hora. No lo es para este rechazo: una accion
+        # tomada sin cobertura ANTES de que existiera esta puerta no lleva la
+        # asercion, y borrarla seria perder trabajo de campo real -- y, por el
+        # orden de la cola, todo lo que dependia de ella--.
+        #
+        # Con la cabecera, la cola la conserva y la reintenta cuando vuelva el
+        # permiso. No se identifica por el texto del mensaje: cambiar una frase
+        # no puede convertir una espera en un borrado.
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=MENSAJE,
+            headers={RECHAZO: "true"},
         )
 
     return dependencia

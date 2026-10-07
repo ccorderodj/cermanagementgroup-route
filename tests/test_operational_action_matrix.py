@@ -176,6 +176,6 @@ def test_la_matriz_no_esta_vacia():
     """Control del conjunto: si los extractores dejaran de encontrar nada,
     todos los tests de arriba pasarían sin comprobar nada."""
     assert len(_encoladas()) >= 8, _encoladas()
-    assert len(_lista("ABRE_TRABAJO_NUEVO")) >= 5
-    assert len(_lista("CIERRA_TRABAJO_ABIERTO")) >= 4
-    assert len(_endpoints_con_guarda()) >= 5, _endpoints_con_guarda()
+    assert len(_lista("ABRE_TRABAJO_NUEVO")) >= 4
+    assert len(_lista("CIERRA_TRABAJO_ABIERTO")) >= 5
+    assert len(_endpoints_con_guarda()) >= 4, _endpoints_con_guarda()

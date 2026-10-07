@@ -39,11 +39,47 @@
 /** Lo que el navegador dice, sin interpretar. */
 export type EstadoDePermiso = 'granted' | 'denied' | 'prompt' | 'unavailable';
 
+/**
+ * Evento de documento con el que cualquier parte del cliente pide que la puerta
+ * vuelva a mirar el permiso.
+ *
+ * Existe porque apagar la ubicacion desde la persiana de Android no siempre
+ * oculta la pagina ni le quita el foco: ninguna de las cuatro vias de
+ * `observarPermiso` se entera. Pero el siguiente intento de abrir trabajo si
+ * lo descubre -- y en ese momento la puerta tiene que aparecer, no un mensaje
+ * de error sobre una pantalla que parece normal.
+ */
+export const REVISAR_PERMISO = 'cer:revisar-permiso-ubicacion';
+
+export function pedirRevisionDelPermiso(): void {
+    if (typeof document !== 'undefined') {
+        document.dispatchEvent(new Event(REVISAR_PERMISO));
+    }
+}
+
 /** Lo que el producto decide, ya sin ambiguedad. */
 export type PermisoOperativo = 'granted' | 'denied' | 'prompt';
 
-/** Cuanto se espera al sondeo. Corto: no se busca un punto, se busca el veredicto. */
-const TIMEOUT_DEL_SONDEO_MS = 8_000;
+/**
+ * Cuanto se espera al sondeo. Corto a proposito: no se busca un punto, se busca
+ * el veredicto, y agotar el tiempo ya es un veredicto -- hay permiso, falta
+ * senal--. Esperar mas solo retrasa la pantalla sin cambiar la respuesta.
+ */
+const TIMEOUT_DEL_SONDEO_MS = 4_000;
+
+/** `PERMISSION_DENIED` segun la especificacion de Geolocation. */
+const CODIGO_DENEGADO = 1;
+
+/**
+ * Cuanto se espera un "no" antes de concluir que hay acceso.
+ *
+ * Una denegacion -del sitio o de la ubicacion del telefono- llega en
+ * milisegundos: es una comprobacion de autorizacion, no una busqueda de
+ * satelites. 500 ms es un margen de mas de cincuenta veces sobre eso, y a la
+ * vez lo bastante corto como para no notarse al pulsar `Start Trip`. Es un
+ * valor a confirmar en campo, y esta declarado asi en el reporte.
+ */
+const VENTANA_DE_DENEGACION_MS = 500;
 
 function hayGeolocalizacion(): boolean {
     return typeof navigator !== 'undefined' && !!navigator.geolocation;
@@ -75,9 +111,33 @@ export async function leerEstadoCrudo(): Promise<EstadoDePermiso> {
 function sondear(): Promise<PermisoOperativo> {
     if (!hayGeolocalizacion()) return Promise.resolve('denied');
     return new Promise((resolver) => {
+        let decidido = false;
+        const decidir = (veredicto: PermisoOperativo) => {
+            if (decidido) return;
+            decidido = true;
+            resolver(veredicto);
+        };
+        // La asimetria que permite no esperar al GPS. Una DENEGACION es
+        // instantanea: el sistema operativo contesta "no" sin tocar el
+        // hardware. La FALTA DE SENAL es una espera: el GPS busca satelites
+        // hasta agotar el tiempo. Asi que si en esta ventana no ha llegado un
+        // "no", la respuesta es "hay acceso" -- y lo que tarde el punto es
+        // asunto del modelo de evidencia, no de esta puerta.
+        //
+        // Sin esta ventana, la primera correccion esperaba el TIMEOUT completo
+        // bajo techo: 4 s al cargar y 4 s en cada Start Trip. Lo detecto el test
+        // de RTE06 que prohibe que una accion espere a la ubicacion (§36), y es
+        // exactamente la nave industrial que §2.2 no permite frenar.
+        const reloj = setTimeout(() => decidir('granted'), VENTANA_DE_DENEGACION_MS);
         navigator.geolocation.getCurrentPosition(
-            () => resolver('granted'),
-            (error) => resolver(error.code === error.PERMISSION_DENIED ? 'denied' : 'granted'),
+            () => {
+                clearTimeout(reloj);
+                decidir('granted');
+            },
+            (error) => {
+                clearTimeout(reloj);
+                decidir(error.code === CODIGO_DENEGADO ? 'denied' : 'granted');
+            },
             { timeout: TIMEOUT_DEL_SONDEO_MS, maximumAge: Infinity },
         );
     });
@@ -92,8 +152,29 @@ function sondear(): Promise<PermisoOperativo> {
  */
 export async function leerPermisoOperativo(): Promise<PermisoOperativo> {
     const crudo = await leerEstadoCrudo();
-    if (crudo === 'unavailable') return sondear();
-    return crudo;
+
+    // `prompt` y `denied` se respetan sin sondear. Sondear en `prompt` abriria
+    // el dialogo nativo sin que la persona lo pidiera -- §7 lo prohibe, y para
+    // eso esta el boton `Enable Location`.
+    if (crudo === 'prompt' || crudo === 'denied') return crudo;
+
+    // `granted` NO basta, y esto es un defecto corregido con datos de campo.
+    //
+    // La Permissions API describe el permiso **del sitio**. No sabe nada de la
+    // ubicacion **del dispositivo**: con el interruptor de ubicacion de Android
+    // o los Servicios de Localizacion de iOS apagados, el sitio sigue
+    // "concedido" y `getCurrentPosition` responde PERMISSION_DENIED igual.
+    //
+    // Medido en produccion: de 119 denegaciones reales, **46 -el 39 %-**
+    // ocurrieron con la Permissions API diciendo `granted`. La primera version
+    // de esta puerta se fiaba de ella y no aparecia justo en ese caso, que es
+    // el que el supervisor describe como "tengo la ubicacion desactivada".
+    //
+    // Asi que `granted` y `unavailable` se verifican pidiendo una posicion. No
+    // abre ningun dialogo -- el sitio ya esta concedido o el navegador no sabe
+    // decirlo-- y su error es inequivoco: 1 es acceso denegado; 2 y 3 son falta
+    // de senal, que §2.2 prohibe bloquear.
+    return sondear();
 }
 
 export function esOperativo(permiso: PermisoOperativo): boolean {
@@ -114,7 +195,7 @@ export async function pedirPermiso(): Promise<PermisoOperativo> {
     return new Promise((resolver) => {
         navigator.geolocation.getCurrentPosition(
             () => resolver('granted'),
-            (error) => resolver(error.code === error.PERMISSION_DENIED ? 'denied' : 'granted'),
+            (error) => resolver(error.code === CODIGO_DENEGADO ? 'denied' : 'granted'),
             { timeout: TIMEOUT_DEL_SONDEO_MS, maximumAge: Infinity },
         );
     });
@@ -156,6 +237,7 @@ export function observarPermiso(alCambiar: (permiso: PermisoOperativo) => void):
 
     if (typeof document !== 'undefined') {
         document.addEventListener('visibilitychange', alVolver);
+        document.addEventListener(REVISAR_PERMISO, releer);
     }
     if (typeof window !== 'undefined') {
         window.addEventListener('focus', releer);
@@ -182,6 +264,7 @@ export function observarPermiso(alCambiar: (permiso: PermisoOperativo) => void):
         vivo = false;
         if (typeof document !== 'undefined') {
             document.removeEventListener('visibilitychange', alVolver);
+            document.removeEventListener(REVISAR_PERMISO, releer);
         }
         if (typeof window !== 'undefined') {
             window.removeEventListener('focus', releer);

@@ -33,7 +33,6 @@ export const ABRE_TRABAJO_NUEVO: readonly string[] = [
     'trip.plan',
     'trip.start',
     'trip.change_plan',
-    'activity.start',
 ];
 
 /**
@@ -41,9 +40,22 @@ export const ABRE_TRABAJO_NUEVO: readonly string[] = [
  *
  * `trip.arrive` incluye la llegada a casa: volver a casa cierra su viaje al
  * llegar, no abre nada.
+ *
+ * `activity.start` esta AQUI por decision de CER (validacion de campo de
+ * RTE10-A02), y no en la lista de apertura como decia la matriz de §14.
+ *
+ * El motivo esta en el modelo de estados, que §14 pedia validar en vez de
+ * fiarse del nombre del boton. Una actividad solo se puede empezar en un viaje
+ * que YA llego -- el servidor lo exige-, asi que nunca abre trabajo nuevo:
+ * siempre es el primer paso para cerrar un viaje abierto. Y es el unico paso:
+ * no existe "marcharse sin empezar", y terminar la jornada con la parada sin
+ * resolver devuelve 409. Clasificada como apertura, un supervisor que llegaba
+ * y perdia la ubicacion quedaba atrapado sin ninguna salida -- justo lo que §8
+ * prohibe.
  */
 export const CIERRA_TRABAJO_ABIERTO: readonly string[] = [
     'trip.arrive',
+    'activity.start',
     'activity.complete',
     'activity.leave',
     'worksession.end',

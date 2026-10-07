@@ -1,4 +1,6 @@
-import { esOperativo, leerPermisoOperativo } from '../location/permission';
+import {
+    esOperativo, leerPermisoOperativo, pedirRevisionDelPermiso,
+} from '../location/permission';
 import { abreTrabajoNuevo, PermisoDeUbicacionRequerido } from '../location/operationalActions';
 /**
  * Cola de acciones durable, independiente de la sesión (RTE03, §14).
@@ -451,7 +453,12 @@ export async function enqueueAction(
     let permiso: string | undefined;
     if (abreTrabajoNuevo(kind)) {
         const actual = await leerPermisoOperativo();
-        if (!esOperativo(actual)) throw new PermisoDeUbicacionRequerido(kind);
+        if (!esOperativo(actual)) {
+            // La puerta se entera en el mismo instante: el siguiente pintado
+            // ya no es una pantalla normal con un error encima.
+            pedirRevisionDelPermiso();
+            throw new PermisoDeUbicacionRequerido(kind);
+        }
         permiso = actual;
     }
 
@@ -510,9 +517,21 @@ export interface FlushResult {
  * que sabe qué hacer con un 409 concreto.
  */
 function esRechazoDefinitivo(error: unknown): boolean {
-    const estado = (error as { response?: { status?: number } })?.response?.status;
+    const respuesta = (error as {
+        response?: { status?: number; headers?: Record<string, string> };
+    })?.response;
+    const estado = respuesta?.status;
     if (typeof estado !== 'number') return false;
     if (estado === 408 || estado === 429) return false;
+    // RTE10-A02: "falta el permiso de ubicacion" no es definitivo. Se resuelve
+    // en cuanto el supervisor lo conceda, y borrar la accion perderia trabajo
+    // de campo real. Se conserva, la cola se detiene en ella -preservando el
+    // orden- y se reenvia cuando el permiso vuelve. Se reconoce por la cabecera
+    // del servidor, no por el texto: cambiar una frase no puede convertir una
+    // espera en un borrado.
+    if (estado === 403 && respuesta?.headers?.['x-location-permission-required'] === 'true') {
+        return false;
+    }
     return estado >= 400 && estado < 500;
 }
 

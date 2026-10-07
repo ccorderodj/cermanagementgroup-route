@@ -38,6 +38,27 @@ MOVIL = {"width": 390, "height": 844}
 POSICION = {"latitude": 33.9519, "longitude": -83.3576}
 
 
+#: "Sin señal", hecho determinista: el permiso está concedido y la ubicación del
+#: teléfono encendida, pero el GPS no consigue un punto. Eso es
+#: POSITION_UNAVAILABLE (code 2), nunca PERMISSION_DENIED (code 1).
+#:
+#: No se deja al GPS real de la máquina de pruebas: medido, en un equipo con la
+#: ubicación del sistema apagada su primera respuesta es code 1 en ~150 ms y las
+#: siguientes code 3 a los 4 s. Eso simula "ubicación del dispositivo apagada",
+#: no "sin señal", y con la verificación de RTE10-A02 mostraba la puerta — con
+#: razón. El test tiene que simular lo que su nombre dice.
+SIN_SENAL_JS = """
+(() => {
+    const sinPunto = (ok, err) => setTimeout(() => err && err({
+        code: 2, message: 'Position unavailable',
+        PERMISSION_DENIED: 1, POSITION_UNAVAILABLE: 2, TIMEOUT: 3,
+    }), 5);
+    navigator.geolocation.getCurrentPosition = sinPunto;
+    navigator.geolocation.watchPosition = (ok, err) => { sinPunto(ok, err); return 0; };
+})();
+"""
+
+
 @asynccontextmanager
 async def _movil(live_server, email: str, *, conceder: bool, con_posicion=True):
     """Un navegador móvil con el permiso de ubicación concedido o no.
@@ -57,6 +78,8 @@ async def _movil(live_server, email: str, *, conceder: bool, con_posicion=True):
                 if con_posicion:
                     opciones["geolocation"] = POSICION
             contexto = await navegador.new_context(**opciones)
+            if conceder and not con_posicion:
+                await contexto.add_init_script(SIN_SENAL_JS)
             page = await contexto.new_page()
             # Aqui la ausencia de permiso ES la prueba, asi que el helper
             # no debe concederlo por su cuenta.
@@ -211,8 +234,14 @@ async def test_revocar_a_mitad_no_atrapa_la_jornada(
         await contexto.clear_permissions()
         await page.reload()
 
-        # La jornada sigue abierta, así que NO se ve la puerta: se ve el
-        # workbench, con su salida.
-        await _esperar_operativo(page)
+        # La puerta SÍ aparece, y la salida sigue ahí.
+        #
+        # Corregido tras validación de campo. Este test afirmaba antes que con
+        # la jornada abierta la puerta NO se mostraba, y ése era el defecto: el
+        # supervisor veía la pantalla normal, pulsaba, y recibía un error sin
+        # ningún `Enable Location`. §5.1 exige la puerta; §8 exige poder
+        # cerrar. Las dos cosas a la vez: la puerta encima, el cierre debajo.
+        await _esperar_puerta(page)
         await expect(page.get_by_text("Working since")).to_be_visible(timeout=20_000)
         await expect(page.get_by_role("button", name="End Work")).to_be_visible()
+        await expect(page.get_by_text("What's next?")).to_have_count(0)
