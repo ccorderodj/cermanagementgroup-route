@@ -126,7 +126,16 @@ export function TripContextForm(props: TripContextFormProps) {
                 {confirmLabel}
             </Button>
 
-            <Button variant="ghost" className="h-12 w-full" disabled={busy} onClick={onBack}>
+            {/* `secondary` y no `ghost`: en texto plano no se leía como botón.
+                Y no `outline` ni nada más fuerte, porque la acción principal de
+                esta pantalla es salir de viaje — volver atrás tiene que verse,
+                sin disputarle el sitio. */}
+            <Button
+                variant="secondary"
+                className="h-12 w-full"
+                disabled={busy}
+                onClick={onBack}
+            >
                 {backLabel}
             </Button>
         </div>

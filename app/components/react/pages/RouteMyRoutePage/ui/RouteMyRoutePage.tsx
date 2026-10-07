@@ -845,13 +845,18 @@ export const RouteMyRoutePage = () => {
                                     busy={busy}
                                     onSelect={setPreparando}
                                 />
-                                {/* Secundario a propósito: terminar el día no
-                                    compite con empezar la siguiente tarea, pero
-                                    tiene que estar — hay jornadas sin un solo
-                                    viaje y no se fabrica un viaje a casa falso
-                                    para poder cerrarlas (PD-02, A-1). */}
+                                {/* Terminar el día tiene que estar siempre: hay
+                                    jornadas sin un solo viaje y no se fabrica un
+                                    viaje a casa falso para poder cerrarlas
+                                    (PD-02, A-1).
+                                    Va en `destructive` por decisión de CER: en
+                                    `ghost` se leía como texto y no como botón, y
+                                    cerrar la jornada es la acción con más
+                                    consecuencias de esta pantalla — con un viaje
+                                    sin llegar queda registrado como interrumpido
+                                    y no se le inventa una llegada. */}
                                 <Button
-                                    variant="ghost"
+                                    variant="destructive"
                                     size="lg"
                                     className="h-12 w-full"
                                     disabled={busy}
