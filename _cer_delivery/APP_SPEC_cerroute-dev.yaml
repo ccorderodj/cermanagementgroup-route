@@ -1,0 +1,187 @@
+# App Spec de `cerroute-dev`, con la convergencia de configuracion.
+#
+# QUE CAMBIA respecto al spec actual -- solo dos cosas:
+#
+#   1. Una variable nueva: ROUTE_TOMTOM_API_KEY, de tipo SECRET.
+#      Hay que pegar la clave real de TomTom en `value:`; DigitalOcean la
+#      cifra al guardar y la deja como EV[1:...], igual que las demas.
+#
+#   2. Tres lineas en el run_command del job `migrate`:
+#         set -e            <- ya estaba
+#         ...alembic...     <- ya estaba
+#         python -m app.db.scripts.converge     <- NUEVO
+#
+# Nada mas. Los secretos existentes se dejan EXACTAMENTE como estan: si se
+# reemplazan por su texto cifrado actual, DigitalOcean los conserva.
+#
+# POR QUE: la integracion de routing vivia unicamente como una fila tecleada
+# en una pantalla. Desaparecio, nadie la repuso, y el kilometraje estuvo seis
+# dias sin calcular -- 54 viajes con evidencia completa terminalizados por un
+# motor que no existia. Con esto, el despliegue deja de ser lo que puede
+# perder la configuracion y pasa a ser lo que la repone.
+#
+# `converge` solo anade, es idempotente, no crea companias ni usuarios y no
+# sobrescribe una integracion que un administrador haya configurado a mano.
+
+alerts:
+- rule: DEPLOYMENT_FAILED
+- rule: DOMAIN_FAILED
+domains:
+- domain: cerroute.cermanagementgroup.com
+  type: PRIMARY
+envs:
+- key: BASE_DOMAIN
+  scope: RUN_AND_BUILD_TIME
+  value: cermanagementgroup.com
+- key: MODE
+  scope: RUN_AND_BUILD_TIME
+  value: DEV
+- key: LOG_LEVEL
+  scope: RUN_AND_BUILD_TIME
+  value: INFO
+- key: BOOTSTRAP_COMPANY_SUBDOMAIN
+  scope: RUN_AND_BUILD_TIME
+  value: cerroute
+- key: DB_HOST
+  scope: RUN_AND_BUILD_TIME
+  value: db-dev-cer-route-do-user-17976110-0.a.db.ondigitalocean.com
+- key: DB_PORT
+  scope: RUN_AND_BUILD_TIME
+  value: "25060"
+- key: DB_USER
+  scope: RUN_AND_BUILD_TIME
+  value: doadmin
+- key: DB_PASS
+  scope: RUN_TIME
+  type: SECRET
+  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+- key: DB_NAME
+  scope: RUN_AND_BUILD_TIME
+  value: db-dev-cer-route
+- key: SECRET_KEY
+  scope: RUN_TIME
+  type: SECRET
+  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+- key: ALGORITHM
+  scope: RUN_AND_BUILD_TIME
+  value: HS256
+- key: PLATFORM_MASTER_KEY
+  scope: RUN_TIME
+  type: SECRET
+  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+- key: DB_SSL
+  scope: RUN_AND_BUILD_TIME
+  value: require
+- key: TESSDATA_PREFIX
+  scope: RUN_AND_BUILD_TIME
+  value: /layers/digitalocean_apt/apt/usr/share/tesseract-ocr/4.00/tessdata
+
+# ── NUEVO ──────────────────────────────────────────────────────────────────
+# La clave con la que el despliegue repone la integracion `road_routing` si
+# ha desaparecido de la base.
+#
+# RUN_TIME basta: un job corre en tiempo de ejecucion, igual que DB_PASS.
+# Se guarda CIFRADA en la base, usando PLATFORM_MASTER_KEY -- nunca en claro.
+#
+# Si se deja vacia, converge no toca la integracion. Eso es lo correcto para
+# un entorno que use un motor auto-alojado por ROUTE_ROUTING_URL.
+- key: ROUTE_TOMTOM_API_KEY
+  scope: RUN_TIME
+  type: SECRET
+  value: <<< PEGAR AQUI LA CLAVE DE TOMTOM >>>
+
+features:
+- buildpack-stack=ubuntu-22
+ingress:
+  rules:
+  - component:
+      name: cerroute
+    match:
+      authority:
+        exact: ""
+      path:
+        prefix: /
+jobs:
+- environment_slug: python
+  gitlab:
+    branch: dev
+    deploy_on_push: true
+    repo: cermanagementgroup/cermanagementgroup-route
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  kind: PRE_DEPLOY
+  name: migrate
+  run_command: |
+    set -e
+
+    echo "========================================="
+    echo " CER ROUTE DATABASE MIGRATION"
+    echo "========================================="
+
+    echo ""
+    echo "=== PYTHON ==="
+    python --version
+
+    echo ""
+    echo "=== ALEMBIC ==="
+    python -m alembic --version
+
+    echo ""
+    echo "=== ENVIRONMENT ==="
+    python -c "import os; print('MODE:', os.environ.get('MODE')); print('DB_HOST:', os.environ.get('DB_HOST')); print('DB_NAME:', os.environ.get('DB_NAME')); print('DB_SSL:', os.environ.get('DB_SSL')); print('DB_PASS defined:', bool(os.environ.get('DB_PASS')))"
+
+    echo ""
+    echo "=== DATABASE MODULE ==="
+    python -c "import app.database as d; print('DATABASE MODULE OK')"
+
+    echo ""
+    echo "=== ALEMBIC CURRENT ==="
+    python -m alembic -c app/alembic.ini current
+
+    echo ""
+    echo "=== ALEMBIC UPGRADE ==="
+    python -m alembic -c app/alembic.ini upgrade head
+
+    echo ""
+    echo "=== ALEMBIC CURRENT AFTER UPGRADE ==="
+    python -m alembic -c app/alembic.ini current
+
+    echo ""
+    echo "========================================="
+    echo " CONFIGURATION CONVERGE"
+    echo "========================================="
+    echo ""
+    echo "Alembic lleva el ESQUEMA al dia. Esto lleva la CONFIGURACION:"
+    echo "  - capacidades del catalogo y concesiones a los roles de cada compania"
+    echo "  - valores estandar de cada compania"
+    echo "  - integracion road_routing, si ROUTE_TOMTOM_API_KEY esta definida"
+    echo ""
+    echo "Solo anade. Idempotente. No crea companias ni usuarios."
+    echo ""
+    python -m app.db.scripts.converge
+
+    echo ""
+    echo "========================================="
+    echo " DEPLOY PREPARATION COMPLETE"
+    echo "========================================="
+  source_dir: /
+name: cerroute-dev
+region: nyc
+services:
+- build_command: |
+    node --version
+    npm --version
+    cd app
+    npm ci
+    npm run build:prod
+  environment_slug: python
+  gitlab:
+    branch: dev
+    deploy_on_push: true
+    repo: cermanagementgroup/cermanagementgroup-route
+  http_port: 8000
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  name: cerroute
+  run_command: python -m uvicorn app.main:app --host 0.0.0.0 --port $PORT
+  source_dir: /

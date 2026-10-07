@@ -51,13 +51,33 @@ jobs:
   kind: PRE_DEPLOY
   name: migrate
   run_command: |
+    set -e
     python -m alembic -c app/alembic.ini current
     python -m alembic -c app/alembic.ini upgrade head
+    python -m app.db.scripts.converge
   source_dir: /
 ```
 
 Notas:
 
+- **El esquema no es lo unico que un despliegue tiene que llevar al dia.**
+  Alembic lleva las tablas; `converge` lleva la **configuracion**: las
+  capacidades y sus concesiones a los roles de cada compania, los valores
+  estandar de cada una, y la integracion de routing. Son datos, no esquema, y
+  por eso ninguna migracion los toca.
+
+  Se puso aqui despues de que la integracion de routing desapareciera del
+  entorno compartido y el kilometraje estuviera **seis dias sin calcular**.
+  Vivia unicamente como una fila tecleada en una pantalla, asi que no habia
+  nada que la repusiera. Ahora el despliegue deja de ser lo que puede perderla
+  y pasa a ser lo que la repone.
+
+  `converge` solo anade, es idempotente y no crea companias ni usuarios.
+  Correrlo en cada despliegue no cuesta nada: cuando no hay nada que hacer,
+  dice `total de cambios: 0`.
+
+- **`set -e` es obligatorio** con mas de un comando. Sin el, un fallo de
+  Alembic no detendria el paso siguiente y el release saldria igual.
 - **Sin bloque `envs:`.** Las variables de nivel de app se heredan. Declararlas
   otra vez es una copia que se desincroniza.
 - `current` antes de `upgrade` no es decorativo: deja en los logs desde qué
@@ -67,6 +87,30 @@ Notas:
 - El job replica el `build_command` del servicio porque necesita las mismas
   dependencias de Python. Si el build del front es caro y el job no lo usa, se
   puede recortar.
+
+---
+
+## 2bis. La variable que repone la integracion de routing
+
+```yaml
+envs:
+- key: ROUTE_TOMTOM_API_KEY
+  scope: RUN_TIME
+  type: SECRET
+  value: EV[1:...]        # cifrada por DigitalOcean
+```
+
+`scope: RUN_TIME` basta: un job corre en tiempo de ejecucion, igual que
+`DB_PASS`. Y hace falta `PLATFORM_MASTER_KEY`, que ya esta, porque la clave se
+guarda **cifrada** en la base y no en claro.
+
+Si la variable esta vacia o no existe, `converge` **no toca la integracion**.
+Es lo correcto para un entorno que usa un motor auto-alojado por
+`ROUTE_ROUTING_URL`, o que todavia no ha elegido proveedor.
+
+Y nunca sobrescribe una integracion existente: si un administrador eligio otro
+proveedor en la pantalla, esa decision manda. Esto repone lo que falta; no
+corrige lo que hay.
 
 ---
 
