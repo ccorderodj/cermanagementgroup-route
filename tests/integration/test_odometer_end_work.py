@@ -1,25 +1,41 @@
 """
 El odómetro de cierre y su relación con `End Work` (RTE04-C4).
 
-La decisión que este archivo defiende: la **Opción B** de CER
---------------------------------------------------------------
-Hay dos guardas de odómetro y son distintas a propósito.
+La regla que este archivo defiende: **sin lectura, el día no cierra**
+---------------------------------------------------------------------
+Las dos guardas de odómetro exigen ahora lo mismo —una lectura confirmada, por
+foto o manual—, y lo que las diferencia es sólo cuánto se espera para poder
+teclearla:
 
-* Para **salir a conducir** hace falta una lectura confirmada. Una excepción
-  aprobada no basta: autoriza teclear, no arrancar.
-* Para **terminar el día** basta con haber pedido la excepción. Quien acaba ya
-  no va a conducir más, y retenerle la jornada abierta hasta que alguien revise
-  su solicitud escribiría un `ended_at` que no ocurrió — y la hora de fin de
-  jornada es un dato laboral, no un detalle de interfaz.
+* en el **inicio**, teclear sin foto necesita la aprobación de un
+  administrador: ahí el control protege que nadie salga a conducir sin saber de
+  dónde partió;
+* en el **cierre**, la excepción se aprueba **al enviarse**. El supervisor ya no
+  va a conducir, y la lectura final es obligatoria para terminar, así que
+  hacerle esperar una decisión ajena le dejaría sin poder teclear ni cerrar.
 
-De ahí se siguen las cuatro propiedades que se comprueban aquí: la jornada se
-cierra a su hora real, la evidencia queda explícitamente pendiente, la jornada
-**no se reabre** para completarla, y la distancia no aparece hasta que exista.
+Qué había antes, y por qué se cambió
+-------------------------------------
+Antes regía la **Opción B**: bastaba con *haber pedido* la excepción para
+cerrar el día, de modo que la jornada nunca quedaba retenida esperando a un
+administrador. La intención era buena —un `ended_at` retenido es un dato
+laboral falseado— y el efecto en campo fue el contrario del buscado: enviar la
+solicitud cerraba la jornada **saltándose la lectura**, `Ending Odometer`
+quedaba `Missing` para siempre y la distancia del día no se podía afirmar.
+Pedir la excepción se convirtió en la forma de no dar la lectura.
 
-Y una consecuencia que no es cosmética: una vez cerrado el día, la lectura de
-cierre sólo se completa por la vía manual aprobada. Sin esa regla, cerrar la
-jornada con la excepción *pedida* y subir después cualquier fotografía
-convertiría la aprobación del administrador en un adorno.
+La corrección mantiene las dos propiedades que la Opción B protegía —la jornada
+se cierra a su hora real y no se reabre— y añade la que faltaba: la evidencia
+no puede quedarse vacía. Lo que desapareció es la espera, no la flexibilidad.
+
+Las consecuencias que se comprueban aquí
+-----------------------------------------
+1. pedir la excepción de cierre **no** cierra el día;
+2. el campo manual está disponible en el acto, y confirmarlo sí cierra;
+3. una lectura de cierre menor que la de inicio se rechaza;
+4. cerrado el día, no se puede añadir una fotografía después;
+5. las excepciones de **cierre** ya no pasan por la cola del administrador
+   —nacen aprobadas—, mientras que las de **inicio** siguen pasando.
 """
 
 from decimal import Decimal
@@ -148,6 +164,11 @@ async def _excepcion_de_cierre(cliente, seeded, session_id: int) -> dict:
     return solicitud
 
 
+async def _evidencia_de_cierre(cliente, session_id: int) -> dict:
+    estado = (await cliente.get(f"/api/odometer/sessions/{session_id}")).json()
+    return estado["end"]
+
+
 # ── La guarda de cierre ─────────────────────────────────────────────────────
 
 
@@ -246,64 +267,55 @@ async def test_the_normal_end_photo_path_closes_the_day_and_the_distance(
     assert Decimal(estado["odometer_distance"]) == Decimal("123.5")
 
 
-# ── Opción B ────────────────────────────────────────────────────────────────
+# ── «I can't take a photo» lleva al campo manual, no al cierre ──────────────
 
 
-async def test_the_day_ends_with_the_end_exception_still_unreviewed(
+async def test_requesting_the_end_exception_does_not_end_the_day(
     seeded, alpha_client,
 ):
-    """El corazón de la Opción B: pedirla basta para terminar el día."""
-    jornada = await _jornada_conduciendo(alpha_client, seeded)
-    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+    """El defecto que se corrige, reproducido como test (AC1, AC4, AC5).
 
-    cierre = await alpha_client.post(
-        f"/api/worksessions/{jornada['id']}/end", json={}
+    Antes: enviar la solicitud cerraba la jornada y la evidencia de cierre
+    quedaba `Missing` para siempre. Ahora la jornada **sigue activa** y lo que
+    cambia es que el supervisor ya puede teclear: la excepción nace aprobada.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    assert solicitud["status"] == "approved", (
+        "el cierre no espera a nadie: la solicitud se aprueba al enviarse"
     )
 
-    assert cierre.status_code == 200
-    assert cierre.json()["status"] == "ended"
-    assert cierre.json()["ended_at"] is not None
+    # Pedirla no cierra nada por sí misma.
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["work_session"]["status"] == "active", (
+        "pedir la excepción cerró la jornada: es el defecto que se corrige"
+    )
+
+    # Y el servidor sigue negando el cierre, porque todavía no hay lectura.
+    rechazo = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert rechazo.status_code == 409
+    assert "odometer" in rechazo.json()["detail"].lower()
 
     estado = (
         await alpha_client.get(f"/api/odometer/sessions/{jornada['id']}")
     ).json()
-    assert estado["end"]["status"] == "exception_requested", (
-        "la evidencia queda pendiente, no resuelta a la fuerza"
-    )
-    assert estado["odometer_distance"] is None, (
-        "sin lectura de cierre no hay distancia; tampoco un cero"
-    )
+    assert estado["end"]["status"] == "exception_approved"
+    assert estado["end"]["confirmed_reading"] is None
 
 
-async def test_completing_the_end_reading_later_never_moves_ended_at(
-    seeded, alpha_client,
-):
-    """La jornada no se reabre y su hora de fin no se toca."""
+async def test_the_manual_end_reading_then_closes_the_day(seeded, alpha_client):
+    """El flujo completo que pide la instrucción (AC2, AC3).
+
+    `I can't take a photo` → `Submit Request` → lectura manual → `Confirm` →
+    `End Work`. Y la evidencia queda marcada como manual para siempre, que es
+    lo que impide que una lectura sin foto pase por evidencia fotográfica.
+    """
     jornada = await _jornada_conduciendo(alpha_client, seeded)
-    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
 
-    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
-
-    # La hora de fin se lee de la base, que es el reloj que manda, y se compara
-    # consigo misma: así el test no depende de cómo se serialice el instante.
-    async def _cierre() -> tuple[str, object]:
-        async with async_session_maker() as session:
-            fila = (
-                await session.execute(
-                    text("SELECT status, ended_at FROM work_session WHERE id = :i"),
-                    {"i": jornada["id"]},
-                )
-            ).one()
-        return fila.status, fila.ended_at
-
-    situacion_antes, hora_antes = await _cierre()
-    assert situacion_antes == "ended"
-    assert hora_antes is not None
-
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.post(f"/api/odometer/exceptions/{solicitud['id']}/approve")
-
-    await alpha_client.login(seeded.alpha.users["supervisor"].email)
     confirmada = (
         await alpha_client.post(
             f"/api/odometer/sessions/{jornada['id']}/end/confirm",
@@ -314,24 +326,207 @@ async def test_completing_the_end_reading_later_never_moves_ended_at(
     assert confirmada["status"] == "manual_exception_confirmed"
     assert confirmada["evidence_method"] == "manual_no_photo"
 
-    situacion_despues, hora_despues = await _cierre()
-    assert situacion_despues == "ended", "completar la evidencia no reabre la jornada"
-    assert hora_despues == hora_antes, "la hora de fin no se movió"
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert cierre.status_code == 200
+    assert cierre.json()["status"] == "ended"
+    assert cierre.json()["ended_at"] is not None
 
-    # Y ahora sí hay distancia, derivada de dos lecturas reales.
+    # Y con las dos lecturas ya hay distancia que afirmar.
     estado = (
         await alpha_client.get(f"/api/odometer/sessions/{jornada['id']}")
     ).json()
     assert Decimal(estado["odometer_distance"]) == Decimal("88.0")
 
 
-async def test_completing_the_end_reading_later_creates_no_trip(
+async def test_a_manual_end_reading_below_the_start_is_rejected(
+    seeded, alpha_client,
+):
+    """AC6, por la vía manual: la que no estaba cubierta.
+
+    El camino de foto ya lo comprobaba otro archivo. Lo que aquí importa es que
+    la excepción no sea también una excepción a la coherencia: la lectura entra
+    sin foto, pero no sin sentido.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    rechazo = await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+        json={"reading": "49999.0"},
+    )
+
+    assert rechazo.status_code == 422
+    assert "lower" in rechazo.json()["detail"].lower()
+
+    # Y el día sigue abierto: una lectura rechazada no resuelve nada.
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert cierre.status_code == 409
+
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["work_session"]["status"] == "active"
+
+
+async def test_the_day_stays_open_until_the_reading_is_confirmed(
+    seeded, alpha_client,
+):
+    """AC4 en su forma más dura: ningún intento de cierre pasa sin lectura.
+
+    Se intenta tres veces, incluido con `end_anyway` —que es el atajo que
+    existe para el viaje en ruta—, porque un bloqueo que se salta con una
+    bandera no es un bloqueo.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    for cuerpo in ({}, {"end_anyway": True}, {}):
+        respuesta = await alpha_client.post(
+            f"/api/worksessions/{jornada['id']}/end", json=cuerpo
+        )
+        assert respuesta.status_code == 409, f"cerró con {cuerpo}"
+
+    async with async_session_maker() as session:
+        situacion = await session.scalar(
+            text("SELECT status FROM work_session WHERE id = :i"),
+            {"i": jornada["id"]},
+        )
+    assert situacion == "active"
+    assert (
+        await _evidencia_de_cierre(alpha_client, jornada["id"])
+    )["status"] == "exception_approved", "la evidencia no se resolvió sola"
+
+
+async def test_an_unreviewed_request_from_before_the_fix_can_still_be_typed(
+    seeded, alpha_client,
+):
+    """Las jornadas que quedaron a medias con la regla anterior.
+
+    En producción hay solicitudes de cierre en `requested` que nunca se
+    revisaron, porque con la Opción B el día ya se había cerrado. Con la regla
+    nueva, un estado así sin salida dejaría al supervisor atrapado: no podría
+    teclear —si se exigiera la aprobación— ni cerrar el día. En el cierre basta
+    con que la solicitud exista.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    # Se retrocede el estado a mano para reproducir el dato heredado: es la
+    # única forma de tenerlo, porque el código ya no lo produce.
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE odometer_exception_request SET status = 'requested', "
+                "decided_at = NULL WHERE id = :i"
+            ),
+            {"i": solicitud["id"]},
+        )
+        await session.execute(
+            text(
+                "UPDATE odometer_evidence SET status = 'exception_requested' "
+                "WHERE work_session_id = :i AND evidence_type = 'end'"
+            ),
+            {"i": jornada["id"]},
+        )
+        await session.commit()
+
+    confirmada = (
+        await alpha_client.post(
+            f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+            json={"reading": "50044.0"},
+        )
+    ).json()
+    assert confirmada["status"] == "manual_exception_confirmed"
+
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert cierre.status_code == 200
+
+
+async def test_the_start_exception_still_waits_for_an_administrator(
+    seeded, alpha_client,
+):
+    """El control que **no** se tocó, y que la corrección podría haber roto.
+
+    En el inicio la aprobación protege algo que el cierre no: que nadie salga a
+    conducir sin saber de dónde partió. Así que la excepción de inicio sigue
+    naciendo `requested`, sigue entrando en la cola del administrador y sigue
+    sin permitir teclear hasta que alguien decida.
+    """
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": seeded.alpha.users["supervisor"].id}
+        )
+    ).json()
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Ford", "model": "Transit", "year": 2023, "unit": "V-STRT",
+                "fuel_grade": "regular", "operational_mpg": "19.00",
+            },
+        )
+    ).json()
+    await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={"vehicle_id": vehiculo["id"]},
+    )
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    solicitud = (
+        await alpha_client.post(
+            f"/api/odometer/sessions/{jornada['id']}/start/exception",
+            json={"reason": "camera_unavailable"},
+        )
+    ).json()
+
+    assert solicitud["status"] == "requested", (
+        "el inicio no se autoaprueba: ahí la espera protege la conducción"
+    )
+
+    sin_aprobar = await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "1000.0"},
+    )
+    assert sin_aprobar.status_code == 409
+
+
+async def test_the_end_exception_no_longer_reaches_the_admin_queue(
+    seeded, alpha_client,
+):
+    """Una consecuencia declarada del cambio, comprobada en vez de supuesta.
+
+    Si la excepción de cierre nace aprobada, deja de haber nada que decidir y
+    por tanto deja de aparecer en la cola. La de inicio sí aparece, y esa
+    asimetría es exactamente la regla — conviene que un cambio futuro que la
+    rompa haga fallar algo.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cola = (await alpha_client.get("/api/odometer/exceptions/pending")).json()
+
+    assert solicitud["id"] not in [p["id"] for p in cola]
+
+    # Y no se puede decidir sobre ella: ya está decidida.
+    tardia = await alpha_client.post(
+        f"/api/odometer/exceptions/{solicitud['id']}/approve"
+    )
+    assert tardia.status_code == 409
+
+
+async def test_confirming_the_manual_end_reading_creates_no_trip(
     seeded, alpha_client,
 ):
     """Cerrar la evidencia es un hecho de la jornada, no un viaje nuevo."""
     jornada = await _jornada_conduciendo(alpha_client, seeded)
-    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
-    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
 
     async with async_session_maker() as session:
         antes = await session.scalar(
@@ -339,13 +534,11 @@ async def test_completing_the_end_reading_later_creates_no_trip(
             {"i": jornada["id"]},
         )
 
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.post(f"/api/odometer/exceptions/{solicitud['id']}/approve")
-    await alpha_client.login(seeded.alpha.users["supervisor"].email)
     await alpha_client.post(
         f"/api/odometer/sessions/{jornada['id']}/end/confirm",
         json={"reading": "50010.0"},
     )
+    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
 
     async with async_session_maker() as session:
         despues = await session.scalar(
@@ -359,14 +552,19 @@ async def test_completing_the_end_reading_later_creates_no_trip(
 async def test_a_photo_cannot_be_added_once_the_day_is_closed(
     seeded, alpha_client,
 ):
-    """El atajo que vaciaría de sentido la aprobación del administrador.
+    """El atajo que convertiría la evidencia manual en fotográfica.
 
-    Sin esta regla: pedir la excepción, cerrar el día, subir después cualquier
-    fotografía y autoconfirmarla como evidencia fotográfica. La aprobación
-    quedaría de adorno.
+    Sin esta regla: teclear la lectura sin foto, cerrar el día, subir después
+    cualquier fotografía y que la evidencia pasara por fotográfica. El estado
+    `manual_no_photo` quedaría desmentido por una foto posterior que nadie
+    comparó con nada.
     """
     jornada = await _jornada_conduciendo(alpha_client, seeded)
     await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+        json={"reading": "50010.0"},
+    )
     await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
 
     respuesta = await alpha_client.post(
@@ -377,53 +575,17 @@ async def test_a_photo_cannot_be_added_once_the_day_is_closed(
     assert respuesta.status_code == 409
     assert "closed" in respuesta.json()["detail"].lower()
 
-    # Y sin foto no se puede confirmar sin la aprobación.
-    sin_permiso = await alpha_client.post(
-        f"/api/odometer/sessions/{jornada['id']}/end/confirm",
-        json={"reading": "50010.0"},
-    )
-    assert sin_permiso.status_code == 409
-
-
-async def test_a_rejected_end_exception_leaves_the_evidence_pending(
-    seeded, alpha_client,
-):
-    """Rechazada tras cerrar el día, la evidencia no se completa sola.
-
-    Y el día sigue cerrado: rechazar una excepción no es motivo para reabrir una
-    jornada, que es justo lo que CER prohíbe.
-    """
-    jornada = await _jornada_conduciendo(alpha_client, seeded)
-    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
-    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
-
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.post(f"/api/odometer/exceptions/{solicitud['id']}/reject")
-
-    await alpha_client.login(seeded.alpha.users["supervisor"].email)
     estado = (
         await alpha_client.get(f"/api/odometer/sessions/{jornada['id']}")
     ).json()
-    assert estado["end"]["status"] == "pending"
-    assert estado["odometer_distance"] is None
-
-    async with async_session_maker() as session:
-        situacion = await session.scalar(
-            text("SELECT status FROM work_session WHERE id = :i"),
-            {"i": jornada["id"]},
-        )
-    assert situacion == "ended"
+    assert estado["end"]["evidence_method"] == "manual_no_photo", (
+        "la foto tardía no puede reescribir cómo se obtuvo la lectura"
+    )
 
 
-async def test_an_end_approval_is_single_use_too(seeded, alpha_client):
+async def test_the_manual_end_exception_is_single_use_too(seeded, alpha_client):
     jornada = await _jornada_conduciendo(alpha_client, seeded)
-    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
-    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
-
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.post(f"/api/odometer/exceptions/{solicitud['id']}/approve")
-
-    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
     await alpha_client.post(
         f"/api/odometer/sessions/{jornada['id']}/end/confirm",
         json={"reading": "50010.0"},
@@ -496,24 +658,27 @@ async def test_the_trip_blocker_is_resolved_before_the_end_reading(
 # ── Auditoría ───────────────────────────────────────────────────────────────
 
 
-async def test_the_late_end_reading_is_fully_audited(seeded, alpha_client):
-    """Quién lo pidió, quién lo aprobó, por qué y cuándo."""
-    jornada = await _jornada_conduciendo(alpha_client, seeded)
-    solicitud = await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
-    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
+async def test_the_manual_end_reading_is_fully_audited(seeded, alpha_client):
+    """Qué se pidió, por qué, cómo se aprobó y quién tecleó.
 
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.post(f"/api/odometer/exceptions/{solicitud['id']}/approve")
-    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    Lo que cambia respecto de antes: ya no hay una aprobación humana que
+    auditar en el cierre, así que el evento es `auto_approve` y **nombra su
+    motivo**. Eso importa más de lo que parece: quien lea la auditoría dentro
+    de un año tiene que poder distinguir una aprobación que tomó una persona de
+    una que concedió una regla, y cuál de las dos reglas fue.
+    """
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
     await alpha_client.post(
         f"/api/odometer/sessions/{jornada['id']}/end/confirm",
         json={"reading": "50010.0"},
     )
+    await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
 
     async with async_session_maker() as session:
         filas = await session.execute(
             text(
-                "SELECT entity_type, action, actor_user_id, occurred_at "
+                "SELECT entity_type, action, actor_user_id, occurred_at, summary "
                 "FROM audit_event WHERE company_id = :c "
                 "AND entity_type LIKE 'odometer%' ORDER BY id"
             ),
@@ -523,16 +688,19 @@ async def test_the_late_end_reading_is_fully_audited(seeded, alpha_client):
 
     acciones = {(e.entity_type, e.action) for e in eventos}
     assert ("odometer_exception_request", "request") in acciones
-    assert ("odometer_exception_request", "approve") in acciones
+    assert ("odometer_exception_request", "auto_approve") in acciones
     assert ("odometer_evidence", "reading_confirmed") in acciones
+    assert ("odometer_exception_request", "approve") not in acciones, (
+        "nadie aprobó esto a mano: decirlo así sería inventar un decisor"
+    )
 
-    # Quien pidió y quien aprobó son personas distintas, y consta cuál es cuál.
-    peticion = next(e for e in eventos if e.action == "request")
-    aprobacion = next(e for e in eventos if e.action == "approve")
-    assert peticion.actor_user_id != aprobacion.actor_user_id
+    # El motivo de la aprobación automática consta, y es el del cierre.
+    automatica = next(e for e in eventos if e.action == "auto_approve")
+    assert "required to end the day" in automatica.summary
+
     assert all(e.occurred_at is not None for e in eventos)
 
-    # La solicitud guarda su propia traza de decisión, no sólo el log.
+    # Y el supervisor sigue sin ver la cola de administración.
     detalle = (
         await alpha_client.get("/api/odometer/exceptions/pending")
     ).status_code

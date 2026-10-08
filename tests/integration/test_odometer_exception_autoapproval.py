@@ -231,24 +231,41 @@ async def test_retirar_la_capacidad_restaura_el_flujo_anterior(
     Es la garantía que hace aceptable la medida. Se concede, se comprueba que
     autoaprueba, se retira, y la siguiente excepción vuelve a quedarse en
     `requested` — sin tocar ninguna línea de código ni ningún despliegue.
+
+    Las dos mitades usan el extremo **de inicio**, y eso es deliberado: el de
+    cierre se aprueba siempre, por la regla del flujo de `End Work` y no por
+    esta capacidad, así que usarlo aquí no diría nada sobre la concesión. Por
+    eso hacen falta dos jornadas — el índice parcial no admite dos solicitudes
+    vivas del mismo extremo— y la primera se cierra, que puede hacerse porque
+    no condujo y entonces la lectura de cierre no se exige.
     """
     await _conceder(seeded)
-    jornada = await _jornada_con_vehiculo(alpha_client, seeded)
+    primera_jornada = await _jornada_con_vehiculo(alpha_client, seeded)
 
     primera = (
         await alpha_client.post(
-            f"/api/odometer/sessions/{jornada['id']}/start/exception",
+            f"/api/odometer/sessions/{primera_jornada['id']}/start/exception",
             json={"reason": "camera_unavailable", "reason_note": None},
         )
     ).json()
     assert primera["status"] == "approved", primera
 
+    cerrada = await alpha_client.post(
+        f"/api/worksessions/{primera_jornada['id']}/end", json={}
+    )
+    assert cerrada.status_code == 200, cerrada.text
+
     await _retirar(seeded)
 
-    # El otro extremo de la misma jornada, ya sin la capacidad.
+    # Una jornada nueva, el mismo extremo, ya sin la capacidad. El vehículo y
+    # la asignación ya existen de la primera, así que aquí sólo se abre el día:
+    # `_jornada_con_vehiculo` los crearía otra vez y chocaría con su unicidad.
+    segunda_jornada = (
+        await alpha_client.post("/api/worksessions", json={})
+    ).json()
     segunda = (
         await alpha_client.post(
-            f"/api/odometer/sessions/{jornada['id']}/end/exception",
+            f"/api/odometer/sessions/{segunda_jornada['id']}/start/exception",
             json={"reason": "camera_unavailable", "reason_note": None},
         )
     ).json()
@@ -256,5 +273,5 @@ async def test_retirar_la_capacidad_restaura_el_flujo_anterior(
     assert segunda["status"] == "requested", (
         f"retirada la capacidad, la excepción vuelve a esperar: {segunda}"
     )
-    fila = await _solicitud(seeded, jornada["id"], "end")
+    fila = await _solicitud(seeded, segunda_jornada["id"], "start")
     assert fila["decided_at"] is None, fila

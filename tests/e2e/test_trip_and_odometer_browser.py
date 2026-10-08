@@ -620,14 +620,23 @@ async def test_end_work_asks_for_the_ending_reading_and_resolves_the_distance(
 # ── Recorrido E: flujos 11, 12 ──────────────────────────────────────────────
 
 
-async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
+async def test_i_cannot_take_a_photo_leads_to_the_manual_ending_reading(
     seeded, alpha_client, live_server,
 ):
-    """Flujos 11 y 12 — la Opción B de CER, en el navegador.
+    """Flujos 11 y 12 — el defecto de campo y su corrección, en el navegador.
 
-    11. Excepción de cierre → la jornada termina con la evidencia pendiente.
-    12. Aprobada después → la lectura manual resuelve la distancia **sin
-        reabrir** la jornada y sin mover su hora de fin.
+    Lo que se reportó: `End Work` → `I can't take a photo` → `Submit Request`
+    cerraba la jornada, se saltaba la lectura y dejaba `Ending Odometer` en
+    `Missing`.
+
+    Lo que se comprueba aquí, en el orden en que lo vive una persona:
+
+    11. enviada la solicitud, la jornada **sigue abierta** y la misma pantalla
+        pasa a pedir la lectura. Se recarga la página a mitad —que es lo que
+        hace quien duda— y no se pierde ni se cierra nada. Tecleada y
+        confirmada, el día se cierra y la distancia aparece.
+    12. la excepción de cierre **no** llega a la cola del administrador: ya
+        está decidida por la regla del flujo, y no hay nada que revisar.
     """
     from playwright.async_api import async_playwright
 
@@ -644,10 +653,6 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
 
             await page.goto("/route")
             await page.get_by_role("button", name="Start Work").click()
-            # Volver a casa: cierra su viaje al llegar y devuelve al workbench,
-            # que es desde donde se termina el día (PD-03 retiró el atajo de la
-            # pantalla de llegada, y llegado sin resolver lo que toca es la
-            # parada, no el fin de jornada).
             await page.get_by_role("button", name="Return Home").click()
             await page.get_by_role("button", name="Start Trip").click()
             await _capturar_odometro(page, "10000")
@@ -656,7 +661,7 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
                 1, timeout=20_000
             )
 
-            # ── Flujo 11: cerrar con la excepción pedida ───────────────────
+            # ── Flujo 11: la solicitud lleva al campo manual ───────────────
             await page.get_by_role("button", name="End Work").click()
             await expect(page.get_by_text("One last thing")).to_have_count(
                 1, timeout=20_000
@@ -666,36 +671,68 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
             await page.get_by_role("option", name="The photo is not readable").click()
             await page.get_by_role("button", name="Send request").click()
 
-            # Se espera el estado **asentado**, no el transitorio.
-            #
-            # Antes esto aguardaba el mensaje "Ending your day…", que es la
-            # fase `end-queued`. Esa fase se pone y la `reconcile()` de la línea
-            # siguiente la reemplaza en cuanto el servidor contesta, así que
-            # vive lo que tarda una llamada de red: contra un `uvicorn` local
-            # son milisegundos y el sondeo no la alcanza. El test fallaba por
-            # la velocidad del entorno, no por el producto —se comprobó
-            # ejecutándolo contra el código sin cambios—, y afirmar un estado
-            # cuya duración depende de la red no demuestra nada.
-            #
-            # Lo que sí es un hecho del producto es dónde acaba el supervisor:
-            # cerrado el día, su pantalla vuelve a ofrecer empezar otro. Y lo
-            # que de verdad importa de este flujo —la jornada cerrada a su hora
-            # real con la evidencia pendiente— lo comprueban las aserciones de
-            # base que vienen justo detrás, que nunca dependieron de esto.
+            # Aquí estaba el defecto: esto cerraba el día. Ahora aparece el
+            # campo, y el texto dice que la jornada sigue abierta.
+            campo = page.locator("#odometer-reading")
+            await expect(campo).to_have_count(1, timeout=20_000)
             await expect(
-                page.get_by_text("Ready to start your day?")
-            ).to_have_count(1, timeout=20_000)
+                page.get_by_text("Approved: enter the reading you can see on the vehicle.")
+            ).to_have_count(1)
 
             jornada = await _jornada(seeded.alpha.id)
-            assert jornada.status == "ended", (
-                "el día termina a su hora real aunque falte la evidencia"
+            assert jornada.status == "active", (
+                "enviar la solicitud cerró la jornada: es el defecto reportado"
             )
-            hora_de_cierre = jornada.ended_at
-            fin = await _evidencia(seeded.alpha.id, "end")
-            assert fin.status == "exception_requested"
-            assert fin.confirmed_reading is None
+            assert jornada.ended_at is None
 
-            # ── Flujo 12: aprobada después ─────────────────────────────────
+            # Recargar a mitad no pierde ni cierra nada: el supervisor vuelve a
+            # la misma pantalla con el mismo campo esperándole.
+            await page.reload()
+            await expect(page.get_by_text("One last thing")).to_have_count(
+                1, timeout=20_000
+            )
+            campo = page.locator("#odometer-reading")
+            await expect(campo).to_have_count(1, timeout=20_000)
+
+            recargada = await _jornada(seeded.alpha.id)
+            assert recargada.status == "active", "la recarga cerró la jornada"
+
+            # Y una lectura imposible se rechaza sin cerrar el día.
+            await campo.fill("9000")
+            await page.get_by_role("button", name="Confirm reading").click()
+            await expect(
+                page.get_by_text("cannot be lower", exact=False)
+            ).to_have_count(1, timeout=20_000)
+            assert (await _jornada(seeded.alpha.id)).status == "active"
+
+            # La lectura buena cierra el día.
+            await page.locator("#odometer-reading").fill("10096")
+            await page.get_by_role("button", name="Confirm reading").click()
+            await expect(
+                page.get_by_text("Ready to start your day?")
+            ).to_have_count(1, timeout=30_000)
+
+            cerrada = await _jornada(seeded.alpha.id)
+            assert cerrada.status == "ended"
+            assert cerrada.ended_at is not None
+
+            fin = await _evidencia(seeded.alpha.id, "end")
+            assert fin.status == "manual_exception_confirmed", (
+                "la evidencia no puede quedarse en Missing por este camino"
+            )
+            assert float(fin.confirmed_reading) == 10096.0
+            assert fin.evidence_method == "manual_no_photo", (
+                "sin foto es manual para siempre, aunque el día haya cerrado"
+            )
+
+            estado = None
+            await alpha_client.login(supervisor.email)
+            estado = (
+                await alpha_client.get(f"/api/odometer/sessions/{cerrada.id}")
+            ).json()
+            assert float(estado["odometer_distance"]) == 96.0
+
+            # ── Flujo 12: nada que revisar en la cola ──────────────────────
             escritorio = await navegador.new_context(
                 base_url=live_server, viewport={"width": 1280, "height": 800}
             )
@@ -703,35 +740,10 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
             await abrir_sesion(pagina_admin, admin.email)
             await pagina_admin.goto("/admin/route/odometer-exceptions")
 
-            fila = pagina_admin.locator("tr", has_text="Supervisor Tester")
-            await expect(fila).to_have_count(1, timeout=20_000)
-            await expect(fila.get_by_text("End of day", exact=True)).to_have_count(1)
-            await fila.get_by_role("button", name="Approve").click()
             await expect(
                 pagina_admin.get_by_text("Nothing waiting for review.")
             ).to_have_count(1, timeout=20_000)
             await escritorio.close()
-
-            # La lectura tardía se completa contra la jornada ya cerrada, por
-            # API: la pantalla del supervisor ya no tiene jornada activa que
-            # mostrar, y fabricarle una sería justo lo que CER prohíbe.
-            await alpha_client.login(supervisor.email)
-            confirmada = await alpha_client.post(
-                f"/api/odometer/sessions/{jornada.id}/end/confirm",
-                json={"reading": "10096.0"},
-            )
-            assert confirmada.status_code == 200
-            assert confirmada.json()["status"] == "manual_exception_confirmed"
-
-            estado = (
-                await alpha_client.get(f"/api/odometer/sessions/{jornada.id}")
-            ).json()
-            assert estado["odometer_distance"] is not None
-            assert float(estado["odometer_distance"]) == 96.0
-
-            despues = await _jornada(seeded.alpha.id)
-            assert despues.status == "ended", "no se reabre"
-            assert despues.ended_at == hora_de_cierre, "la hora de fin no se movió"
 
             async with async_session_maker() as session:
                 viajes = await session.scalar(
@@ -739,7 +751,7 @@ async def test_the_day_ends_with_a_pending_end_exception_and_resolves_later(
                         Trip.company_id == seeded.alpha.id
                     )
                 )
-            assert viajes == 1, "completar la evidencia no crea ningún viaje"
+            assert viajes == 1, "resolver la evidencia no crea ningún viaje"
         finally:
             await navegador.close()
 

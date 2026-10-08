@@ -133,18 +133,23 @@ class OdometerService:
     async def ensure_end_work_not_blocked(
         *, company_id: int, work_session_id: int
     ) -> None:
-        """La guarda de `End Work`, que es **más blanda** que la de `Start Trip`.
+        """La guarda de `End Work`: **sin lectura de cierre, el día no cierra.**
 
-        Y lo es a propósito (Opción B de CER). Para salir a conducir hace falta
-        una lectura confirmada. Para terminar el día basta con haber pedido la
-        excepción: el supervisor ya no va a conducir más, y retenerle la jornada
-        abierta hasta que alguien revise su solicitud acabaría escribiendo un
-        `ended_at` que no ocurrió. La jornada se cierra a su hora real y la
-        evidencia queda explícitamente pendiente.
+        Antes era más blanda que la de `Start Trip` —bastaba con haber pedido la
+        excepción— y en campo eso tuvo una consecuencia que no se previó: enviar
+        la solicitud cerraba la jornada y se saltaba la lectura, así que
+        `Ending Odometer` quedaba `Missing` y la distancia del día no se podía
+        afirmar. La excepción funcionaba como una salida sin evidencia.
 
-        Lo que sí bloquea es `PENDING`: si la lectura de cierre hace falta y el
-        supervisor no ha hecho ni la foto ni la solicitud, todavía hay algo que
-        pedirle.
+        Ahora las dos guardas exigen lo mismo: una lectura confirmada, por foto
+        o manual. Lo que desapareció no es la flexibilidad sino la espera —en
+        el cierre la excepción se aprueba al enviarse (`request_exception`)—,
+        de modo que el supervisor teclea en el acto y nunca queda retenido por
+        la decisión de otra persona.
+
+        Lo que bloquea, entonces: `PENDING` (no hizo ni foto ni solicitud) y
+        también `EXCEPTION_REQUESTED` / `EXCEPTION_APPROVED`, que son
+        «autorizado a teclear» y todavía no «ha tecleado».
         """
         fila = await OdometerService.end_requirement(
             company_id=company_id, work_session_id=work_session_id
@@ -152,9 +157,21 @@ class OdometerService:
         if fila.status in END_WORK_UNBLOCKING_STATUSES:
             return
 
+        # Dos mensajes, porque son dos cosas distintas que hacer. Con la
+        # excepción ya autorizada, decirle «captura la lectura» le manda a
+        # hacer una foto que acaba de declarar que no puede hacer.
+        autorizado_a_teclear = fila.status in (
+            OdometerStatus.EXCEPTION_REQUESTED.value,
+            OdometerStatus.EXCEPTION_APPROVED.value,
+        )
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="Capture the ending odometer reading before you end your day.",
+            detail=(
+                "Enter and confirm the ending odometer reading before you end "
+                "your day."
+                if autorizado_a_teclear
+                else "Capture the ending odometer reading before you end your day."
+            ),
         )
 
     # ── Camino normal: foto + confirmación ──────────────────────────────────
@@ -352,7 +369,26 @@ class OdometerService:
         aprobacion = None
 
         if not tiene_foto:
-            aprobacion = await OdometerExceptionRequestsDAO.find_approved(
+            # En el cierre basta con que la solicitud **exista**; en el inicio
+            # tiene que estar aprobada.
+            #
+            # La razón es la de siempre en este extremo: la lectura de cierre
+            # es obligatoria para terminar la jornada, así que exigir aquí una
+            # aprobación dejaría atrapado a quien la pidió y todavía no la
+            # tiene — no podría teclear ni cerrar el día. Eso incluye a las
+            # jornadas que quedaron con una solicitud sin revisar antes de este
+            # cambio, que son datos reales y no una hipótesis.
+            #
+            # No se afloja la evidencia: sigue haciendo falta una solicitud con
+            # su motivo registrado, y la lectura entra igual como
+            # `manual_no_photo`, marcada para siempre.
+            es_cierre = evidence_type == OdometerEvidenceType.END.value
+            buscar = (
+                OdometerExceptionRequestsDAO.find_open
+                if es_cierre
+                else OdometerExceptionRequestsDAO.find_approved
+            )
+            aprobacion = await buscar(
                 company_id=company_id,
                 work_session_id=work_session_id,
                 evidence_type=evidence_type,
@@ -466,22 +502,29 @@ class OdometerService:
         actor_user_id: int,
         auto_approve: bool = False,
     ) -> OdometerExceptionRequest:
-        """Pide permiso para teclear sin foto, y con `auto_approve` se lo da.
+        """Pide permiso para teclear sin foto. En el cierre, se concede solo.
 
-        `auto_approve` es lo que el servidor averiguo del permiso real de quien
-        llama (`route.odometer.selfapprove`), nunca algo que venga del cuerpo de
-        la peticion. Por defecto es `False`, de modo que el flujo de siempre
-        -pedir y esperar al administrador- es el que se obtiene si nadie
-        concede nada.
+        Dos caminos, y la diferencia esta en que uno abre conduccion y el otro
+        la termina:
 
-        Lo que la autoaprobacion hace es **saltarse la espera**, no la
-        excepcion: la solicitud queda `approved`, la evidencia pasa a
-        `exception_approved`, y el supervisor sigue teniendo que teclear su
-        lectura, que entrara como `manual_no_photo`. No se escribe ninguna
-        lectura ni se fabrica ninguna foto.
+        * **Inicio** (`start`): espera a un administrador, salvo que quien
+          llama tenga `route.odometer.selfapprove` —eso es lo que trae
+          `auto_approve`, averiguado por el servidor del permiso real, nunca
+          del cuerpo de la peticion—. Aqui la aprobacion protege algo concreto:
+          que nadie salga a conducir sin evidencia de por donde empezo.
+        * **Cierre** (`end`): se aprueba **al enviarse**, siempre. El
+          supervisor ya no va a conducir, y la lectura de cierre es obligatoria
+          para terminar la jornada: hacerle esperar a un administrador le
+          dejaria atrapado, sin poder teclear —`confirm_reading` exige la
+          aprobacion— y sin poder cerrar el dia. Es lo que convierte
+          `I can't take a photo` en el camino manual que la instruccion pide,
+          en vez de en una salida sin lectura.
 
-        Es una medida temporal de estabilizacion. Retirar la capacidad del rol
-        devuelve el comportamiento anterior sin tocar codigo.
+        Lo que la aprobacion hace es **saltarse la espera**, no la excepcion:
+        la solicitud queda `approved`, la evidencia pasa a `exception_approved`
+        y el supervisor sigue teniendo que teclear su lectura, que entrara como
+        `manual_no_photo`. No se escribe ninguna lectura ni se fabrica ninguna
+        foto, y la excepcion queda registrada con su motivo.
         """
         fila = await OdometerService.ensure_row(
             company_id=company_id,
@@ -493,6 +536,11 @@ class OdometerService:
                 status_code=status.HTTP_409_CONFLICT,
                 detail="This odometer reading is already resolved.",
             )
+
+        # El cierre no espera a nadie: ver el docstring. `auto_approve` sigue
+        # decidiendo el extremo de inicio, que es donde la espera protege algo.
+        es_cierre = evidence_type == OdometerEvidenceType.END.value
+        aprobar = auto_approve or es_cierre
 
         ahora = datetime.now(timezone.utc)
 
@@ -515,7 +563,7 @@ class OdometerService:
                 evidencia = await session.scalar(
                     select(OdometerEvidence).where(OdometerEvidence.id == fila.id)
                 )
-                if auto_approve:
+                if aprobar:
                     # En la **misma** transaccion: si se partiera en dos, entre
                     # una y otra existiria una solicitud pedida y sin decidir
                     # que un administrador podria ver y decidir, y acabariamos
@@ -558,11 +606,16 @@ class OdometerService:
             changes={"reason": {"old": None, "new": reason}},
         )
 
-        if auto_approve:
+        if aprobar:
             # Un evento aparte, y con accion propia. Dos eventos cuentan los dos
             # hechos: se pidio, y se aprobo sola. Reutilizar `approve` la haria
             # indistinguible de la decision de una persona en cuanto alguien
             # leyera la auditoria, que es lo contrario de lo que se pide.
+            #
+            # El motivo se nombra, porque no es el mismo: el cierre se aprueba
+            # por la regla del flujo y el inicio por una capacidad concedida a
+            # alguien. Quien lea la auditoria dentro de un ano necesita saber
+            # cual de las dos cosas paso.
             await record_event(
                 company_id=company_id,
                 entity_type="odometer_exception_request",
@@ -571,7 +624,11 @@ class OdometerService:
                 actor_user_id=actor_user_id,
                 summary=(
                     f"Manual odometer entry auto-approved for {evidence_type} "
-                    "under route.odometer.selfapprove"
+                    + (
+                        "because the ending reading is required to end the day"
+                        if es_cierre
+                        else "under route.odometer.selfapprove"
+                    )
                 ),
                 changes={
                     "status": {"old": "requested", "new": "approved"},
