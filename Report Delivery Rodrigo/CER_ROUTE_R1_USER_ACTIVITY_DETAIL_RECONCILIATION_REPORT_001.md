@@ -254,8 +254,9 @@ Es el mismo sesgo que señalé al cerrar H-2, y se repite.
 |---|---|
 | Rama | `fix/r1-user-activity-detail-reconciliation` |
 | Base | `dev` en `7b597ec` |
-| Commit | se añade al cerrar |
-| MR | se añade al cerrar |
+| Commit | `2ad7230` |
+| MR | **!76** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/76 |
+| Árbol | limpio |
 | Fusionado | **No.** CER certifica |
 
 ---
