@@ -307,13 +307,21 @@ async def paradas_del_dia(
             await session.execute(
                 select(
                     ActivityExecution.id,
-                    ActivityExecution.trip_id,
+                    # Del **viaje**: `ActivityExecution.trip_id` es nulo cuando
+                    # no hubo parada, y es precisamente la fila que ahora tiene
+                    # que existir. Además es la clave estable del detalle.
+                    Trip.id.label("trip_id"),
                     ActivityExecution.started_at,
                     ActivityExecution.ended_at,
                     ActivityExecution.terminal_action,
                     ActivityExecution.outcome_label,
                     ActivityExecution.notes,
-                    ActivityExecution.user_id,
+                    # De la **jornada**, no de la actividad: un viaje sin parada
+                    # no tiene `ActivityExecution.user_id`, y la jornada siempre
+                    # sabe de quién es. Son el mismo supervisor por
+                    # construcción —la actividad se ejecuta dentro de su propia
+                    # jornada— así que no cambia ningún valor existente.
+                    WorkSession.user_id,
                     Trip.current_purpose,
                     Trip.current_context_reference,
                     Trip.current_standard_value_id,
@@ -325,18 +333,31 @@ async def paradas_del_dia(
                     Users.first_name,
                     Users.last_name,
                 )
-                .select_from(ActivityExecution)
+                # Se parte del **viaje**, no de la actividad (R-1).
+                #
+                # Partir de `ActivityExecution` dejaba fuera todo viaje que no
+                # abre parada —el regreso a casa, que cierra al llegar; uno
+                # interrumpido por `End Work Anyway`; uno que llegó y cuya
+                # parada no se inició— y esos viajes **sí** aportan sus millas
+                # al consolidado. El resultado era un total que la propia lista
+                # no podía explicar, y medido en el caso que lo destapó era la
+                # mitad del kilometraje del día.
+                #
+                # `outerjoin` a la actividad, no `join`: es la relación opcional
+                # que convierte «no hay parada» en un hecho representable en vez
+                # de en una fila ausente.
+                .select_from(Trip)
                 .join(
                     WorkSession,
-                    (WorkSession.id == ActivityExecution.work_session_id)
-                    & (WorkSession.company_id == ActivityExecution.company_id),
+                    (WorkSession.id == Trip.work_session_id)
+                    & (WorkSession.company_id == Trip.company_id),
                 )
-                .join(
-                    Trip,
-                    (Trip.id == ActivityExecution.trip_id)
-                    & (Trip.company_id == ActivityExecution.company_id),
+                .join(Users, Users.id == WorkSession.user_id)
+                .outerjoin(
+                    ActivityExecution,
+                    (ActivityExecution.trip_id == Trip.id)
+                    & (ActivityExecution.company_id == Trip.company_id),
                 )
-                .join(Users, Users.id == ActivityExecution.user_id)
                 .outerjoin(
                     TripMileage,
                     (TripMileage.trip_id == Trip.id)
@@ -353,11 +374,17 @@ async def paradas_del_dia(
                     & (StandardValue.company_id == Trip.company_id),
                 )
                 .where(
-                    ActivityExecution.company_id == company_id,
+                    Trip.company_id == company_id,
                     WorkSession.user_id == user_id,
                     WorkSession.session_date == dia,
                 )
-                .order_by(ActivityExecution.started_at, ActivityExecution.id)
+                # Por la hora de salida del viaje, que **todas** las filas
+                # tienen —incluidas las que no abrieron parada—, y a igualdad
+                # por el identificador del viaje. Ordenar por el inicio de la
+                # actividad dejaría los viajes sin parada agrupados al final o
+                # al principio según cómo trate los nulos el motor, que es
+                # justo el orden no determinista que §12 prohíbe.
+                .order_by(Trip.started_at, Trip.id)
             )
         ).all()
 
@@ -365,6 +392,10 @@ async def paradas_del_dia(
             return []
 
         etiquetas: dict[int, list[str]] = {}
+        # `f.id` es nulo en los viajes sin parada, y pedirle al motor que
+        # busque un `IN (NULL)` no devolvería nada pero sí ensuciaría la
+        # consulta. Se filtran antes.
+        con_actividad = [f.id for f in filas if f.id is not None]
         seleccionadas = (
             await session.execute(
                 select(
@@ -374,7 +405,7 @@ async def paradas_del_dia(
                 .where(
                     ActivityExecutionActivity.company_id == company_id,
                     ActivityExecutionActivity.activity_execution_id.in_(
-                        [f.id for f in filas]
+                        con_actividad
                     ),
                 )
                 .order_by(
@@ -399,6 +430,11 @@ async def paradas_del_dia(
         # parada son las actividades seleccionadas, y enseñar además el valor
         # del plan mezclaría las dos cosas que PR-04 manda separar.
         lleva_lista = f.current_purpose in POSTARRIVAL_ACTIVITY_LIST
+        # Un viaje sin parada **no es una actividad**, y la diferencia no es
+        # cosmética: `outcome_label` vacío lo pintaría como `In progress`, que
+        # afirmaría que hay una parada abierta esperando resultado. Lo que hay
+        # es un trayecto que nunca abrió ninguna.
+        tiene_actividad = f.id is not None
         paradas.append(
             {
                 "activity_execution_id": f.id,
@@ -420,6 +456,10 @@ async def paradas_del_dia(
                 "supervisor_user_id": f.user_id,
                 "supervisor_name": f"{f.first_name or ''} {f.last_name or ''}".strip()
                 or f"User {f.user_id}",
+                #: Si esta fila describe una parada o sólo el trayecto. La
+                #: pantalla lo necesita para no llamar «actividad» a un viaje
+                #: que no la tuvo, y el contador para seguir contando paradas.
+                "has_activity": tiene_actividad,
             }
         )
 
