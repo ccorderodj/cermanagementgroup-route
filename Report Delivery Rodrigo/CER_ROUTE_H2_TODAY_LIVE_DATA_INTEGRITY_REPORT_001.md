@@ -292,8 +292,9 @@ evidencia visual ni la verificación contra el código anterior, que juntos son
 |---|---|
 | Rama | `fix/h2-today-live-data-integrity` |
 | Base | `dev` en `7b597ec` |
-| Commit | se añade al cerrar |
-| MR | se añade al cerrar |
+| Commit | `accf141` |
+| MR | **!72** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/72 |
+| Árbol | limpio |
 | Fusionado | **No.** CER certifica |
 
 ---
