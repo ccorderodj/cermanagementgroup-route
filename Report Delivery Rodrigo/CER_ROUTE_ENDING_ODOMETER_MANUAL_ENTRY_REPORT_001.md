@@ -170,14 +170,30 @@ Tests añadidos más allá del mínimo, por riesgos concretos:
 * `test_the_manual_end_reading_is_fully_audited` — incluye que **no** se emita
   un `approve` humano, porque decirlo así sería inventar un decisor.
 
-### 4.2 · Navegador · 1/1 PASS
+### 4.2 · Navegador · 6/6 PASS · exit 0
 
-`tests/e2e/test_trip_and_odometer_browser.py::test_i_cannot_take_a_photo_leads_to_the_manual_ending_reading`
+`tests/e2e/test_trip_and_odometer_browser.py` completo, no sólo el test nuevo:
+se reescribió uno de sus recorridos, así que se ejecuta el archivo entero.
 
-Recorre el flujo como una persona: `End Work` → `I can't take a photo` →
-`Send request` → aparece el campo → **se recarga la página a mitad** → el campo
-sigue ahí y la jornada sigue activa → se teclea una lectura imposible y se
-rechaza sin cerrar → se teclea la buena → el día cierra con distancia `96.0`.
+| Recorrido | Test | Resultado |
+|---|---|---|
+| A | `test_start_work_odometer_start_trip_change_plan_and_arrived` | PASS |
+| B | `test_home_closes_the_trip_and_state_survives_reload_and_second_device` | PASS |
+| C | `test_start_exception_blocks_the_trip_until_an_admin_approves_it` | PASS |
+| D | `test_end_work_asks_for_the_ending_reading_and_resolves_the_distance` | PASS |
+| E | `test_i_cannot_take_a_photo_leads_to_the_manual_ending_reading` | PASS |
+| F | `test_a_supervisor_cannot_reach_the_admin_exception_queue` | PASS |
+
+El **recorrido C** es la evidencia de AC7/AC8 en navegador y el que esta
+corrección podía haber roto por arrastre: comprueba que la excepción del
+extremo de **inicio** sigue bloqueando el viaje hasta que un administrador la
+aprueba. Sigue verde **sin haber sido modificado**.
+
+El **recorrido E** es el nuevo, y recorre el flujo como una persona:
+`End Work` → `I can't take a photo` → `Send request` → aparece el campo →
+**se recarga la página a mitad** → el campo sigue ahí y la jornada sigue activa
+→ se teclea una lectura imposible y se rechaza sin cerrar → se teclea la buena
+→ el día cierra con distancia `96.0`.
 
 ### 4.3 · La comprobación que da valor a los tests · `CONFIRMED`
 
@@ -215,10 +231,34 @@ npm run lint:ts     0 errores
 npm run build:prod  compilado (2 warnings de tamaño de bundle, preexistentes)
 ```
 
-### 4.6 · Regresión completa
+### 4.6 · Regresión completa · 1072 ejecutados · 1 fallo preexistente
 
-`PENDING` al momento de redactar: la suite sin navegador está en ejecución. El
-resultado se añade antes de abrir el MR.
+Suite sin navegador, sobre una base limpia:
+
+```
+1072 ejecutados
+1056 PASS
+   1 FAILED   test_provisioning_alignment (preexistente, ver §7)
+   0 errores
+  15 skipped
+```
+
+El único fallo es el de §7, que **falla igual con el código de `dev`** sin esta
+corrección. No hay ningún test de odómetro, viajes, jornadas, kilometraje ni
+ubicación roto por este cambio.
+
+Los 15 saltados son el bloque que se omite cuando el contexto no tiene las
+dependencias de navegador; esos casos se cubren en el lote de §4.2, que se
+ejecuta aparte y dio 6/6.
+
+### 4.7 · Resumen de lotes
+
+| Lote | Tests | PASS | Fallos | Exit |
+|---|---|---|---|---|
+| Odómetro (integración, dirigido) | 65 | 65 | 0 | 0 |
+| Regresión sin navegador | 1072 | 1056 | 1 preexistente | 1 |
+| E2E odómetro y viajes | 6 | 6 | 0 | 0 |
+| typecheck · lint · build | — | — | 0 | 0 |
 
 ---
 
