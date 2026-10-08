@@ -357,8 +357,9 @@ navegador.
 |---|---|
 | Rama | `fix/ending-odometer-manual-entry` |
 | Base | `dev` en `82c78c8` |
-| Commit | se añade al cerrar el reporte |
-| MR | se añade al cerrar el reporte |
+| Commits | `b335dc3` la corrección · `36d8912` el reporte |
+| MR | **!69** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/69 |
+| Árbol | limpio |
 | Fusionado | **No.** CER certifica; el desarrollo no fusiona |
 
 ---
@@ -381,5 +382,5 @@ Lo que este cambio **no** hace y tiene que ocurrir en otro sitio:
 
 ## 11 · Siguiente paso
 
-Cerrar la regresión completa, commit, push con MR y actualizar §4.6 y §9 de
-este reporte. No se empieza nada más: lo pedido era esta brecha.
+La certificación de CER sobre el MR !69, y la validación de campo de §10.1.
+No se empieza nada más: lo pedido era esta brecha, y está cerrada.
