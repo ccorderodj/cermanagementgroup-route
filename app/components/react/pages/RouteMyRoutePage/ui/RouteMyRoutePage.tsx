@@ -1038,10 +1038,28 @@ export const RouteMyRoutePage = () => {
                                     evidence={odometro.end}
                                     onResolved={() => cerrarJornada(view.session, true)}
                                     onChanged={async () => {
-                                    // Pedida la excepción, el día ya puede
-                                    // cerrarse: la evidencia queda pendiente y
-                                    // `ended_at` se escribe a su hora real.
-                                        await cerrarJornada(view.session, true);
+                                    /*
+                                     * Se **relee la evidencia**, y no se cierra
+                                     * el día.
+                                     *
+                                     * Aquí estaba el defecto que se corrige:
+                                     * esto llamaba a `cerrarJornada`, y como
+                                     * `Send request` dispara `onChanged`, pedir
+                                     * la excepción cerraba la jornada saltándose
+                                     * la lectura. El supervisor no llegaba nunca
+                                     * al campo manual y `Ending Odometer` se
+                                     * quedaba en `Missing`.
+                                     *
+                                     * Lo que hace falta es justo lo contrario:
+                                     * traer el estado nuevo —la excepción queda
+                                     * aprobada al enviarse— para que la misma
+                                     * pantalla pase a pedirle la lectura. El día
+                                     * lo cierra `onResolved`, que sólo se dispara
+                                     * cuando la lectura está confirmada.
+                                     */
+                                        setOdometro(
+                                            await leerOdometro(view.session.id),
+                                        );
                                     }}
                                 />
                             )}

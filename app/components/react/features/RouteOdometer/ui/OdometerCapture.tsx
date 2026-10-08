@@ -297,16 +297,33 @@ export function OdometerCapture(props: OdometerCaptureProps) {
         }
     };
 
-    const aprobada = evidence.status === 'exception_approved';
-    const esperando = evidence.status === 'exception_requested';
+    /**
+     * El cierre no espera a nadie, y por eso aquí hay dos reglas y no una.
+     *
+     * Pedida la excepción, el servidor la aprueba al instante en el extremo de
+     * cierre, así que lo normal es ver `exception_approved`. Pero una jornada
+     * que pidió la suya antes de esta corrección se quedó en
+     * `exception_requested`, y el servidor también la deja teclear: la lectura
+     * de cierre es obligatoria para terminar el día, y tratar ese estado como
+     * "espera" dejaría al supervisor sin poder teclear ni cerrar.
+     *
+     * En el inicio no se toca: ahí la aprobación protege que nadie salga a
+     * conducir sin evidencia, y esperar es el comportamiento correcto.
+     */
+    const esCierre = end === 'end';
+    const aprobada = evidence.status === 'exception_approved'
+        || (esCierre && evidence.status === 'exception_requested');
+    const esperando = !esCierre && evidence.status === 'exception_requested';
     const puedeConfirmar = (tieneFoto || aprobada)
         && lectura.trim() !== ''
         && Number.isFinite(Number(lectura));
 
     const aviso = (
         <p className="text-center text-xs text-muted-foreground">
-            You can keep doing work that does not involve driving, but you cannot
-            start a trip until this reading is recorded.
+            {esCierre
+                ? 'Your workday stays open until this reading is recorded.'
+                : 'You can keep doing work that does not involve driving, but you '
+                  + 'cannot start a trip until this reading is recorded.'}
         </p>
     );
 
@@ -405,8 +422,12 @@ export function OdometerCapture(props: OdometerCaptureProps) {
                     />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                    Someone with admin access reviews this. Until it is approved
-                    and you enter the reading, you cannot start a trip.
+                    {esCierre
+                        ? 'Next you will enter the reading yourself. Your workday '
+                          + 'stays open until you confirm it.'
+                        : 'Someone with admin access reviews this. Until it is '
+                          + 'approved and you enter the reading, you cannot start '
+                          + 'a trip.'}
                 </p>
                 {error && (
                     <p className="text-center text-sm text-destructive">{error}</p>

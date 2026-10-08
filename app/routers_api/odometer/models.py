@@ -83,19 +83,31 @@ RESOLVED_STATUSES = (
 )
 
 
-#: Estados que **no** impiden cerrar la jornada (Opción B de CER, C4).
+#: Estados que **no** impiden cerrar la jornada. Los mismos que para salir a
+#: conducir: hace falta una lectura, no una intención de darla.
 #:
-#: La diferencia con `RESOLVED_STATUSES` es deliberada y es el corazón de la
-#: Opción B: para *salir a conducir* hace falta una lectura de verdad, así que
-#: una excepción pedida o aprobada no vale. Para *terminar el día* sí basta con
-#: haberla pedido — el supervisor ya acabó, ya no va a conducir más, y
-#: retenerle la jornada abierta hasta que alguien revise su solicitud movería
-#: `ended_at` a una hora que no ocurrió. La jornada se cierra con su hora real
-#: y la evidencia queda explícitamente pendiente.
-END_WORK_UNBLOCKING_STATUSES = RESOLVED_STATUSES + (
-    OdometerStatus.EXCEPTION_REQUESTED.value,
-    OdometerStatus.EXCEPTION_APPROVED.value,
-)
+#: Esto **revoca la Opción B de CER (C4)**, y conviene dejar escrito qué se
+#: cambió y por qué, porque lo anterior no era un descuido.
+#:
+#: La Opción B dejaba cerrar el día con la excepción sólo pedida, para no
+#: retener la jornada abierta mientras un administrador la revisaba — eso
+#: habría escrito un `ended_at` a una hora que no ocurrió. El coste medido en
+#: campo fue otro: enviar la solicitud cerraba la jornada **y se saltaba la
+#: lectura**, de modo que `Ending Odometer` quedaba `Missing` para siempre y la
+#: distancia de la jornada no se podía afirmar. Pedir la excepción acabó
+#: funcionando como una forma de no dar la lectura.
+#:
+#: La instrucción de corrección lo resuelve por el otro lado, y es mejor: en el
+#: cierre la excepción se aprueba al enviarse (ver `request_exception`), así
+#: que el supervisor teclea **en el acto** y nadie espera a nadie. El motivo de
+#: la Opción B desaparece — no hay espera que retenga la jornada — y la
+#: evidencia deja de poder quedarse vacía.
+#:
+#: Se conserva como constante propia, en lugar de usar `RESOLVED_STATUSES` en
+#: los dos sitios, porque las dos guardas responden a preguntas distintas
+#: —«¿puede conducir?» y «¿puede cerrar el día?»— y han divergido una vez. Si
+#: vuelven a divergir, el cambio debe poder verse aquí.
+END_WORK_UNBLOCKING_STATUSES = RESOLVED_STATUSES
 
 
 class OdometerEvidenceMethod(BusinessEnum):
