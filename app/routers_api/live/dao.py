@@ -24,6 +24,25 @@ que es exactamente lo que FR-01 prohíbe.
 Sin ninguna jornada previa no hay desfase conocido y se cae a UTC. Es el mismo
 límite documentado que el dominio ya acepta al abrir la primera jornada de una
 compañía, y se comporta igual: no bloquea nada.
+
+Una fila por supervisor, no por jornada (H-2)
+----------------------------------------------
+El modelo permite varias jornadas por persona y día —el índice único es parcial
+sobre `status = 'active'`, así que las cerradas se repiten cuantas veces haga
+falta— y esta pantalla asumía una. La consulta devolvía una fila por jornada con
+identificadores idénticos, de modo que la persona salía dos veces, sus millas se
+partían y el panel mostraba la primera.
+
+`_consolidar` agrupa por `user_id` antes de devolver: **suma** lo que pertenece
+al día (millas, actividades, viajes sin cifra) y **elige** lo que describe un
+instante (estado, `since`, vehículo, contexto del viaje), tomando la jornada
+activa o, si no la hay, la última iniciada.
+
+Lo que esto **no** cambia: qué día es hoy. Elegirlo por supervisor exigiría una
+zona horaria por persona, y no existe en el modelo —sólo está el desfase que
+reportó el dispositivo en cada jornada—. Usar el de otro supervisor para fechar
+a un tercero está prohibido por el contrato temporal, así que la selección del
+día se queda como estaba y su revisión es otro checkpoint.
 """
 
 from __future__ import annotations
@@ -236,20 +255,100 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
             ).all()
         }
 
-    return [
-        _fila(
-            f,
-            viajes.get(f.sesion_id),
-            actividades.get(f.sesion_id),
-            int(cuentas.get(f.sesion_id, 0)),
-            millas_oficiales(
-                millaje[f.sesion_id].metros if f.sesion_id in millaje else None
-            ),
-            bool(f.sesion_id in millaje and millaje[f.sesion_id].pendientes),
-            int(millaje[f.sesion_id].sin_resolver) if f.sesion_id in millaje else 0,
+    return _consolidar(filas, viajes, actividades, cuentas, millaje)
+
+
+def _representante(grupo: list):
+    """La jornada que describe el estado operativo del supervisor ahora mismo.
+
+    La **activa** si la hay; si no, la **última** por hora de inicio. No es una
+    preferencia estética: con dos jornadas el mismo día, una cerrada por la
+    mañana y otra en curso, lo que describe a esa persona es la que está
+    abierta. Enseñar la cerrada —que es lo que hacía la pantalla, por quedarse
+    con la primera fila— decía «Work Ended» de alguien que estaba conduciendo.
+
+    `started_at` nunca es nulo en una jornada creada (`server_default=now()`),
+    pero el orden se defiende igualmente contra el nulo: sin eso, un `None` en
+    la comparación tumbaría la pantalla entera en vez de degradar una fila.
+    """
+    activas = [f for f in grupo if f.sesion_estado == WorkSessionStatus.ACTIVE.value]
+    candidatas = activas or grupo
+    return max(
+        candidatas,
+        key=lambda f: (f.started_at is not None, f.started_at or datetime.min),
+    )
+
+
+def _consolidar(filas, viajes, actividades, cuentas, millaje) -> list[dict]:
+    """Una fila por **supervisor**, no por jornada (H-2).
+
+    Por qué hacía falta
+    -------------------
+    El `LEFT JOIN` de arriba no limita a una jornada, y el modelo permite varias
+    por día a propósito —`uq_work_session_one_active` es parcial sobre
+    `status = 'active'`, así que las cerradas se repiten—. Una persona con dos
+    jornadas salía dos veces, con identificadores idénticos, y la pantalla no
+    podía distinguirlas: seleccionaba por `user_id` y se quedaba con la primera.
+
+    Lo que se suma y lo que se elige
+    --------------------------------
+    * **Se suma** lo que es del día: millas oficiales, actividades y viajes sin
+      cifra. Un supervisor que condujo en dos jornadas recorrió la suma, y
+      enseñar sólo una parte bajo el rótulo «miles today» es afirmar un dato
+      falso.
+    * **Se elige** lo que describe un instante: estado, `since`, vehículo y el
+      contexto del viaje. Sumarlos no significaría nada.
+
+    `mileage_pending` es un **O lógico**: si cualquier jornada del día tiene un
+    viaje sin calcular, el total todavía no es final.
+
+    El día no se toca
+    -----------------
+    Esto consolida **dentro** del día que `business_day()` ya eligió. Decidir
+    ese día por supervisor exigiría una zona horaria por persona que el modelo
+    no tiene —sólo existe el desfase del dispositivo de cada jornada— y usar el
+    de otro supervisor está prohibido por el contrato temporal de H-2.
+    """
+    por_usuario: dict[int, list] = {}
+    for f in filas:
+        por_usuario.setdefault(f.user_id, []).append(f)
+
+    consolidadas: list[dict] = []
+    for grupo in por_usuario.values():
+        elegida = _representante(grupo)
+        # Sólo las jornadas reales suman. El `LEFT JOIN` deja una fila con
+        # `sesion_id` nulo a quien no ha empezado hoy, y esa no es una jornada
+        # de cero: es la ausencia de jornada.
+        sesiones_del_dia = [f.sesion_id for f in grupo if f.sesion_id is not None]
+
+        metros = sum(
+            (millaje[s].metros for s in sesiones_del_dia if s in millaje),
+            0,
         )
-        for f in filas
-    ]
+        consolidadas.append(
+            _fila(
+                elegida,
+                viajes.get(elegida.sesion_id),
+                actividades.get(elegida.sesion_id),
+                sum(int(cuentas.get(s, 0)) for s in sesiones_del_dia),
+                millas_oficiales(metros if sesiones_del_dia else None),
+                any(
+                    bool(millaje[s].pendientes)
+                    for s in sesiones_del_dia
+                    if s in millaje
+                ),
+                sum(
+                    int(millaje[s].sin_resolver)
+                    for s in sesiones_del_dia
+                    if s in millaje
+                ),
+            )
+        )
+
+    # El orden lo fija la consulta (nombre, apellido). Agrupar por un
+    # diccionario lo conserva —Python 3.7+ mantiene el orden de inserción— y
+    # aquí se deja escrito para que nadie lo reordene por descuido.
+    return consolidadas
 
 
 def _fila(

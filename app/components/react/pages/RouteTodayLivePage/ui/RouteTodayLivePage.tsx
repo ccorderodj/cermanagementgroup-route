@@ -95,9 +95,25 @@ export function RouteTodayLivePage() {
     }, [releer]);
 
     const supervisores = datos?.supervisors ?? [];
-    const elegido = supervisores.find((s) => s.user_id === seleccionado)
-        ?? supervisores[0]
-        ?? null;
+    /**
+     * El supervisor que se está mirando.
+     *
+     * `find` por `user_id` es correcto **desde H-2**, y conviene decir por qué:
+     * el servidor devuelve ahora una fila por persona, así que no hay dos
+     * candidatos entre los que `find` pudiera elegir mal. Antes los había —una
+     * fila por jornada, con el mismo `user_id`— y esto resolvía siempre la
+     * primera, que es el defecto que H-2 cierra.
+     *
+     * El reserva a `supervisores[0]` es sólo para **el primer render**, cuando
+     * todavía no se ha elegido a nadie. Si hay elección y esa persona no está
+     * en la lista, no se cae al primero: eso movería el panel bajo el cursor
+     * durante el refresco de 30 s, que es justo lo que el criterio de
+     * aceptación prohíbe. Se prefiere no mostrar a nadie antes que mostrar a
+     * otro sin avisar.
+     */
+    const elegido = seleccionado === null
+        ? supervisores[0] ?? null
+        : supervisores.find((s) => s.user_id === seleccionado) ?? null;
     const enDetalleMovil = supervisores.find((s) => s.user_id === detalleMovil) ?? null;
 
     const encabezado = (
