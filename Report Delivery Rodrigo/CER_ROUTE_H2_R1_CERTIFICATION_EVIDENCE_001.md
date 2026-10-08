@@ -303,6 +303,9 @@ dato.
 | Rama | `docs/h2-r1-certification-evidence` |
 | Base | `dev` en `27dd30b` |
 | Cambio | sólo este reporte |
+| Commit | `de684f7` |
+| MR | **!77** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/77 |
+| Árbol | limpio |
 | Fusionado | **No.** CER certifica |
 
 ---
