@@ -40,7 +40,10 @@ export const explorerGroupSchema = z.object({
 export type ExplorerGroup = z.infer<typeof explorerGroupSchema>;
 
 export const explorerActivitySchema = z.object({
-    activity_execution_id: z.number(),
+    // `null` en un viaje que no abrio parada (R-1): el regreso a casa, uno
+    // interrumpido, o uno que llego sin iniciarla. Esos viajes aportan
+    // millas al consolidado y por eso estan en el detalle que lo explica.
+    activity_execution_id: z.number().nullable().optional(),
     trip_id: z.number(),
     purpose: z.string(),
     context_reference: z.string().nullable().optional(),
@@ -48,7 +51,8 @@ export const explorerActivitySchema = z.object({
     purpose_detail: z.string().nullable().optional(),
     trip_started_at: z.string().nullable().optional(),
     arrived_at: z.string().nullable().optional(),
-    started_at: z.string(),
+    // El inicio de la PARADA. Nulo cuando no la hubo.
+    started_at: z.string().nullable().optional(),
     ended_at: z.string().nullable().optional(),
     official_miles: decimalSchema,
     mileage_pending: z.boolean(),
@@ -57,6 +61,9 @@ export const explorerActivitySchema = z.object({
     notes: z.string().nullable().optional(),
     supervisor_user_id: z.number(),
     supervisor_name: z.string(),
+    // Si la fila describe una parada o solo el trayecto. Por defecto true
+    // para no romper una respuesta anterior al cambio.
+    has_activity: z.boolean().optional().default(true),
 });
 export type ExplorerActivity = z.infer<typeof explorerActivitySchema>;
 

@@ -119,7 +119,15 @@ async def explorar(
                 mileage_pending=bool(datos and datos["pendientes"]),
                 activity_seconds=datos["segundos"] if datos else 0,
                 has_open_activity=bool(datos and datos["abiertos"]),
-                activities=len(paradas),
+                # Paradas reales, **no filas de la lista** (R-1).
+                #
+                # Era `len(paradas)`, y mientras la lista contenía sólo
+                # actividades las dos cosas coincidían. Desde que el detalle
+                # incluye también los viajes sin parada, contar filas haría que
+                # el número creciera con cada regreso a casa: diría «3
+                # activities» donde hubo dos. El contador sigue respondiendo a
+                # la misma pregunta que antes.
+                activities=sum(1 for p in paradas if p["has_activity"]),
             ),
             activities=[ExplorerActivity(**p) for p in paradas],
         )

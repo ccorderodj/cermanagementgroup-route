@@ -54,17 +54,30 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                     ? a.activity_labels.join(', ')
                     : (a.purpose_detail || '—');
                 return (
-                    <Card key={a.activity_execution_id} className="overflow-hidden p-0">
+                    /* `trip_id` y no `activity_execution_id`: desde R-1 la
+                       lista incluye viajes que no abrieron parada, y en ésos
+                       el identificador de actividad es nulo. El del viaje
+                       siempre existe y no se repite —hay como mucho una parada
+                       por viaje—, así que es la clave estable. */
+                    <Card key={a.trip_id} className="overflow-hidden p-0">
                         <div className="flex items-center justify-between gap-3.5 border-b border-border bg-muted/40 px-3 py-2.5 xl:px-4 xl:py-3.5">
                             <div>
                                 <h4 className="text-sm font-semibold text-foreground">
                                     {TRIP_PURPOSE_LABEL[a.purpose] ?? a.purpose}
                                 </h4>
                                 <div className="text-xs text-muted-foreground">
+                                    {/*
+                                      * `formatClock(null)` dice `In progress`,
+                                      * y para una parada abierta es verdad. Un
+                                      * viaje que nunca abrió ninguna no tiene
+                                      * nada en curso, así que ahí el extremo
+                                      * del rango es un hueco y no una promesa
+                                      * de que algo va a cerrarse (AC3).
+                                      */}
                                     {a.context_reference || '—'} ·{' '}
                                     {formatClock(a.trip_started_at)}
                                     –
-                                    {formatClock(a.ended_at)}
+                                    {a.has_activity ? formatClock(a.ended_at) : '—'}
                                 </div>
                             </div>
                             <div className="text-right">
@@ -104,7 +117,16 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                             <div className="text-xs">
                                 <span className="block text-muted-foreground">Outcome</span>
                                 <b className="font-medium text-foreground">
-                                    {a.outcome_label || 'In progress'}
+                                    {/*
+                                      * Sin parada no hay resultado **ni lo
+                                      * habrá**, así que no es `In progress`:
+                                      * eso afirmaría que hay algo abierto
+                                      * esperando a que alguien lo cierre. Un
+                                      * regreso a casa no abre nada.
+                                      */}
+                                    {a.has_activity
+                                        ? (a.outcome_label || 'In progress')
+                                        : '—'}
                                 </b>
                             </div>
                             {/*

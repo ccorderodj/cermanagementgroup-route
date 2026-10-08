@@ -82,7 +82,13 @@ class ExplorerActivity(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    activity_execution_id: int
+    #: `None` cuando la fila describe un **viaje sin parada** (R-1): un regreso
+    #: a casa, uno interrumpido, o uno que llegó y cuya parada no se inició.
+    #: Esos viajes aportan millas al consolidado, así que tienen que poder
+    #: aparecer en el detalle que lo explica.
+    activity_execution_id: Optional[int] = None
+    #: Siempre presente, y por eso es el identificador estable de la fila: hay
+    #: como mucho una parada por viaje, de modo que `trip_id` no se repite.
     trip_id: int
 
     #: El propósito del viaje: la razón del desplazamiento. No es la actividad
@@ -104,7 +110,8 @@ class ExplorerActivity(BaseModel):
     #: `activity span`.
     trip_started_at: Optional[datetime] = None
     arrived_at: Optional[datetime] = None
-    started_at: datetime
+    #: El inicio de la **parada**. `None` en un viaje que no abrió ninguna.
+    started_at: Optional[datetime] = None
     ended_at: Optional[datetime] = None
 
     #: Millas oficiales del viaje de esta parada.
@@ -121,6 +128,12 @@ class ExplorerActivity(BaseModel):
     #: selector de V0.7 elige supervisor.
     supervisor_user_id: int
     supervisor_name: str
+
+    #: Si la fila describe una parada o sólo el trayecto. La pantalla lo usa
+    #: para no presentar un viaje sin parada como una actividad en curso: sin
+    #: este campo, `outcome_label` vacío se dibuja como `In progress`, que
+    #: afirmaría que hay una parada abierta esperando resultado.
+    has_activity: bool = True
 
 
 class ExplorerSummary(BaseModel):
