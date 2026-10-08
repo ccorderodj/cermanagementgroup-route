@@ -605,3 +605,313 @@ async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_clien
     assert Decimal(resumen["total_miles"]) == sum(
         (Decimal(s["official_miles"]) for s in lista), Decimal("0")
     )
+
+
+# ── H-2 · Una fila por supervisor, no por jornada ───────────────────────────
+#
+# El modelo permite varias jornadas por persona y día: `uq_work_session_one_active`
+# es un índice **parcial** sobre `status = 'active'`, de modo que las cerradas
+# se repiten cuantas veces haga falta. Today asumía una, y una persona con dos
+# salía dos veces con identificadores idénticos: la pantalla seleccionaba por
+# `user_id`, se quedaba con la primera y enseñaba la jornada equivocada.
+#
+# Lo que estos tests fijan es la regla de consolidación: **se suma** lo que
+# pertenece al día y **se elige** lo que describe un instante.
+
+
+async def _jornada_cerrada_con_millas(
+    alpha_client, seeded, *, metros: str, unidad_valor: int
+) -> dict:
+    """Una jornada completa: conduce, se le calcula el millaje y se cierra.
+
+    Devuelve la jornada. Hace falta cerrarla para poder abrir otra: el índice
+    único parcial impide dos activas a la vez, que es exactamente la regla que
+    hace posible —y legítimo— tener dos jornadas el mismo día.
+    """
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    await _resolver_odometro(alpha_client, jornada["id"])
+    viaje = (
+        await alpha_client.post(
+            "/api/trips", json={"purpose": "office", "standard_value_id": unidad_valor}
+        )
+    ).json()
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    async with async_session_maker() as s:
+        await s.execute(
+            text(
+                "UPDATE trip_mileage SET state = 'calculated', "
+                "total_meters = :m, calculated_at = now() WHERE trip_id = :t"
+            ),
+            {"m": metros, "t": viaje["id"]},
+        )
+        await s.commit()
+
+    # Cerrar exige resolver la parada y la lectura de odómetro de cierre.
+    await _resolver_la_parada_de(alpha_client, seeded, viaje["id"])
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+        json={"reading": "100500.0"},
+    )
+    cierre = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert cierre.status_code == 200, cierre.text
+    return jornada
+
+
+async def _resolver_la_parada_de(cliente, seeded, trip_id: int) -> None:
+    """Termina la actividad del viaje para que la jornada pueda cerrarse.
+
+    `activity_ids: []` porque estos viajes son de propósito `office`, que no
+    lleva la lista de actividades de una visita a cliente. Es el mismo camino
+    que usa `test_la_actividad_en_curso_gana_al_viaje`, y el que la guarda de
+    RTE05 exige antes de dejar cerrar la jornada.
+    """
+    inicio = await cliente.post(
+        f"/api/trips/{trip_id}/activity/start", json={"activity_ids": []}
+    )
+    assert inicio.status_code in (200, 201), inicio.text
+    resultados = (await cliente.get("/api/standard-values/outcomes")).json()
+    fin = await cliente.post(
+        f"/api/trips/{trip_id}/activity/complete",
+        json={"action": "complete", "outcome_id": resultados[0]["id"]},
+    )
+    assert fin.status_code == 200, fin.text
+
+
+async def test_dos_jornadas_el_mismo_dia_producen_una_sola_fila(
+    seeded, alpha_client
+):
+    """AC-1: un supervisor con varias jornadas aparece una sola vez.
+
+    Es el defecto reportado desde campo: dos filas «Karina Aguirre», una con
+    `Work Ended` y otra `Working`, y el panel enseñando la primera.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-UNO")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    # La segunda del mismo día, que queda abierta.
+    segunda = (await alpha_client.post("/api/worksessions", json={})).json()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _live(alpha_client)
+
+    usuario = seeded.alpha.users["supervisor"].id
+    suyas = [s for s in cuerpo["supervisors"] if s["user_id"] == usuario]
+    assert len(suyas) == 1, (
+        f"el supervisor sale {len(suyas)} veces; H-2 exige una sola fila por "
+        f"persona: {suyas}"
+    )
+    assert segunda["id"] is not None
+
+
+async def test_las_millas_del_dia_suman_todas_sus_jornadas(seeded, alpha_client):
+    """AC-2: el acumulado del día, no el de una jornada suelta.
+
+    El defecto visible era un `0.0 miles today` para quien había recorrido 62,5:
+    la pantalla enseñaba las millas de **una** jornada bajo un rótulo que dice
+    «hoy». Aquí se recorren dos tramos de 10 millas y el total tiene que ser 20.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-MI")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _live(alpha_client)
+    fila = _de(cuerpo, seeded.alpha.users["supervisor"].id)
+
+    assert fila["official_miles"] == "20.0", fila["official_miles"]
+    assert cuerpo["summary"]["total_miles"] == "20.0", (
+        "el total del encabezado tiene que cuadrar con la lista"
+    )
+
+
+async def test_las_actividades_del_dia_suman_sin_duplicar(seeded, alpha_client):
+    """AC-3: se contabilizan todas, y cada una una sola vez."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-AC")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    # Cada jornada de ayuda ejecuta exactamente una actividad al resolver su
+    # parada, así que dos jornadas son dos actividades.
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
+
+    assert fila["activities_today"] == 2, fila["activities_today"]
+
+
+async def test_el_estado_sale_de_la_jornada_activa_y_no_de_la_cerrada(
+    seeded, alpha_client
+):
+    """AC-4 en el servidor: el panel no puede decir `Work Ended` de quien trabaja.
+
+    Es exactamente la captura que se reportó: la fila consolidada tiene que
+    describir la jornada **abierta**, no la que se cerró por la mañana.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-EST")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    segunda = (await alpha_client.post("/api/worksessions", json={})).json()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
+
+    assert fila["status"] == "working", (
+        f"con una jornada abierta el estado no puede ser '{fila['status']}'"
+    )
+    assert fila["since"] is not None
+
+    # Y el `since` es el de la jornada abierta, no el de la cerrada.
+    async with async_session_maker() as s:
+        inicio = await s.scalar(
+            text("SELECT started_at FROM work_session WHERE id = :i"),
+            {"i": segunda["id"]},
+        )
+    assert fila["since"].startswith(inicio.isoformat()[:16]), (
+        f"`since` describe otra jornada: {fila['since']} vs {inicio}"
+    )
+
+
+async def test_sin_jornada_activa_el_estado_sale_de_la_ultima(
+    seeded, alpha_client
+):
+    """La otra mitad de la regla: cerradas todas, manda la última iniciada."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-ULT")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    ultima = await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
+
+    assert fila["status"] == "ended"
+
+    async with async_session_maker() as s:
+        fin = await s.scalar(
+            text("SELECT ended_at FROM work_session WHERE id = :i"),
+            {"i": ultima["id"]},
+        )
+    assert fila["since"].startswith(fin.isoformat()[:16]), (
+        "`since` tiene que describir la última jornada, no la primera"
+    )
+
+
+async def test_el_resumen_cuenta_personas_y_no_jornadas(seeded, alpha_client):
+    """AC-5: los indicadores generales cuentan supervisores únicos.
+
+    `supervisors_total` era `len(filas)`, así que una persona con dos jornadas
+    contaba por dos y el encabezado decía que había más gente de la que hay.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-SUM")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+    await alpha_client.post("/api/worksessions", json={})
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _live(alpha_client)
+
+    identificadores = [s["user_id"] for s in cuerpo["supervisors"]]
+    assert len(identificadores) == len(set(identificadores)), (
+        f"hay user_id repetidos en la lista: {identificadores}"
+    )
+    assert cuerpo["summary"]["supervisors_total"] == len(set(identificadores))
+    assert cuerpo["summary"]["supervisors_working"] == 1, (
+        "una persona con dos jornadas sigue siendo una persona trabajando"
+    )
+
+
+async def test_la_consolidacion_no_mezcla_a_dos_supervisores(
+    seeded, alpha_client
+):
+    """El control del conjunto: agrupar por persona no puede fundir a dos.
+
+    Sin este test, una agrupación mal escrita —por perfil, o por el primer
+    campo que se tenga a mano— pasaría todos los anteriores y sumaría las
+    millas de una persona a otra, que es peor que el defecto original.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-A")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="16093.4", unidad_valor=valor
+    )
+
+    # Se promueve a `manager`, no a `route_admin`: promover al administrador le
+    # quitaría las capacidades con las que después hay que crear el perfil y el
+    # vehículo del segundo, y el test fallaría por su propia preparación.
+    await _promover_a_supervisor(alpha_client, seeded, "manager")
+    await _perfil_y_vehiculo(
+        alpha_client, seeded, unidad="V-H2-B", usuario="manager"
+    )
+    await alpha_client.login(seeded.alpha.users["manager"].email)
+    await _jornada_cerrada_con_millas(
+        alpha_client, seeded, metros="32186.8", unidad_valor=valor
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _live(alpha_client)
+    uno = _de(cuerpo, seeded.alpha.users["supervisor"].id)
+    otro = _de(cuerpo, seeded.alpha.users["manager"].id)
+
+    assert uno["official_miles"] == "10.0", uno["official_miles"]
+    assert otro["official_miles"] == "20.0", otro["official_miles"]
+    assert cuerpo["summary"]["total_miles"] == "30.0"
+
+
+async def test_quien_no_ha_empezado_no_se_convierte_en_jornada_de_cero(
+    seeded, alpha_client
+):
+    """La fila sin jornada no es una jornada vacía, y la consolidación lo sabe.
+
+    El `LEFT JOIN` deja una fila con `sesion_id` nulo a quien no ha salido hoy.
+    Tratarla como una jornada más le daría `0.0 mi` con aire de dato medido,
+    cuando lo que pasa es que no hay nada que medir.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H2-NADA")
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
+
+    assert fila["status"] == "not_started"
+    assert fila["since"] is None
+    assert fila["activities_today"] == 0
+    assert fila["mileage_pending"] is False
+    assert fila["vehicle_label"] is None
