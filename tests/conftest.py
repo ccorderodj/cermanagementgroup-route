@@ -32,6 +32,15 @@ Cómo se ejecuta
 
 La base indicada debe existir y el rol debe poder crear objetos en ella. Ver
 `docs/technical-remediation/07-TESTING-AND-CI.md`.
+
+En paralelo
+-----------
+`addopts` lleva `-n 3`: tres workers de `pytest-xdist`, cada uno con su propia
+base (`_base_por_worker`), así que el rol necesita además `CREATEDB` la primera
+vez. Tres y no más porque la máquina de desarrollo tiene dos núcleos físicos y
+PostgreSQL corre en ella. Los tests de navegador no se reparten: van todos a un
+worker (`pytest_collection_modifyitems`). `-n 0` vuelve a un solo proceso sobre
+la base compartida, que es lo útil para depurar un test con `pdb`.
 """
 
 from __future__ import annotations
@@ -53,6 +62,85 @@ os.environ.setdefault("MODE", "TEST")
 # El correo no sale a la red durante los tests: se acumula en memoria y se
 # puede inspeccionar (ver la fixture `outbox`).
 os.environ["EMAIL_BACKEND"] = "memory"
+
+
+def _base_por_worker() -> None:
+    """Con `pytest-xdist`, cada worker trabaja en **su** base de tests.
+
+    Por qué no pueden compartir una
+    -------------------------------
+    `seeded` vacía todas las tablas al empezar cada test y vuelve a sembrar las
+    compañías `alpha` y `beta` con nombres fijos, y `database_schema` hace
+    `DROP SCHEMA public` al abrir y cerrar la sesión. Dos workers sobre la misma
+    base se borrarían los datos a mitad de test.
+
+    Cómo
+    ----
+    La base del worker es la de `TEST_DATABASE_URL` con su nombre de worker
+    detrás —`cer_time_test_gw0`, `_gw1`…— y se crea si no existe. Se escribe en
+    `settings`, que es el objeto que leen `app.database` y Alembic, y en
+    `os.environ`, que es lo que heredan los subprocesos: Alembic, el `uvicorn`
+    de los tests de navegador y las pruebas de migración.
+
+    Tiene que ocurrir aquí, antes de que nada importe `app.database`: el motor
+    se construye al importarlo y se quedaría con la base compartida.
+
+    Sin `xdist`, o con `-n 0`, no hace nada: la suite usa la base de siempre.
+    """
+    worker = os.environ.get("PYTEST_XDIST_WORKER")
+    if not worker:
+        return
+
+    from sqlalchemy.engine import make_url
+
+    from app.config import settings
+
+    compartida = make_url(settings.TEST_DATABASE_URL)
+    propia = compartida.set(database=f"{compartida.database}_{worker}")
+    settings.TEST_DATABASE_URL = propia.render_as_string(hide_password=False)
+    os.environ["TEST_DATABASE_URL"] = settings.TEST_DATABASE_URL
+
+    import asyncpg
+
+    from app.database import libpq_dsn
+
+    async def _crear_si_falta() -> None:
+        # Se conecta a la base compartida, que existe, para crear la suya.
+        conexion = await asyncpg.connect(
+            libpq_dsn(compartida.render_as_string(hide_password=False))
+        )
+        try:
+            existe = await conexion.fetchval(
+                "SELECT 1 FROM pg_database WHERE datname = $1", propia.database
+            )
+            if not existe:
+                await conexion.execute(f'CREATE DATABASE "{propia.database}"')
+        finally:
+            await conexion.close()
+
+    asyncio.run(_crear_si_falta())
+
+
+_base_por_worker()
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Los tests de navegador, todos al mismo worker y uno detrás de otro.
+
+    `tryfirst` porque `xdist` lee la marca en su propia implementación de este
+    hook: si la suya corre antes, la marca llega tarde y los tests se reparten
+    igual. Comprobado: sin él, dos tests de navegador cayeron en `gw0` y `gw2`.
+
+    Cada uno levanta su `uvicorn` y su Edge. Medido el 08/10/2026 con tres a la
+    vez: la batería tardó 73 min frente a unos 34 en serie, y dos tests
+    empezaron a fallar por tiempos de espera que en serie pasan. Con
+    `--dist loadgroup` comparten el grupo `browser` y `xdist` los manda a un
+    solo worker, mientras los otros dos siguen con los de integración.
+    """
+    for item in items:
+        if item.get_closest_marker("browser"):
+            item.add_marker(pytest.mark.xdist_group("browser"))
 
 
 def pytest_configure(config: pytest.Config) -> None:
