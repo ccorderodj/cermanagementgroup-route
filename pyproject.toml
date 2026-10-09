@@ -43,6 +43,7 @@ dev = [
     "pyright>=1.1.411",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-xdist>=3.8.0",
     "time-machine>=3.4.0",
 ]
 
@@ -54,7 +55,9 @@ pythonpath = ["."]
 asyncio_mode = "auto"
 testpaths = ["tests"]
 python_files = ["test_*.py"]
-addopts = "-q --strict-markers"
+# Tres workers, cada uno con su base, y los tests de navegador juntos en uno
+# (ver `tests/conftest.py`). `-n 0` para depurar en un solo proceso.
+addopts = "-q --strict-markers -n 3 --dist loadgroup"
 markers = [
     "integration: necesita una base PostgreSQL 14 real (TEST_DATABASE_URL)",
     "browser: conduce un navegador real (Edge del sistema) contra un uvicorn vivo",
