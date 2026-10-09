@@ -174,6 +174,97 @@ class OdometerService:
             ),
         )
 
+    @staticmethod
+    async def withdraw_end(
+        *, company_id: int, work_session_id: int, actor_user_id: int
+    ) -> None:
+        """`Keep working`: el supervisor retira su intención de cerrar el día.
+
+        Por qué hace falta
+        ------------------
+        Pulsar `End Work` con el vehículo en uso crea la lectura de cierre
+        `PENDING` (`end_requirement`) antes de rechazar el cierre, y la pantalla
+        decide la fase leyendo esa fila: con ella viva enseña la captura de
+        cierre, y así sobrevive a que Android recree la pestaña al volver de la
+        cámara (ODO-03). Lo que faltaba era la salida: `Keep working` sólo
+        releía el estado, la fila seguía ahí y la pantalla volvía a la captura.
+        Un supervisor que pulsó `End Work` sin querer quedaba sin poder
+        trabajar, con cerrar el día como única salida.
+
+        Qué se retira y qué no
+        ----------------------
+        Se retira la fila **sólo si no contiene evidencia**: `PENDING`, sin foto
+        y sin excepción viva. Esa fila no afirma nada —es la marca de «falta la
+        lectura»— y borrarla no pierde ningún hecho; el siguiente `End Work` la
+        vuelve a crear. Queda la traza en auditoría.
+
+        Con foto subida o excepción pedida hay evidencia, y descartarla es una
+        decisión de producto que no está tomada: se responde 409 y no se toca.
+        Una lectura ya resuelta no bloquea nada y no hay nada que retirar.
+        """
+        abierta = await OdometerExceptionRequestsDAO.find_open(
+            company_id=company_id,
+            work_session_id=work_session_id,
+            evidence_type=OdometerEvidenceType.END.value,
+        )
+
+        async with transaction() as session:
+            # La jornada, bloqueada, antes que la lectura: un `End Work` que
+            # llegue a la vez no puede cerrarla entre la comprobación y el
+            # borrado.
+            jornada = await session.scalar(
+                select(WorkSession)
+                .where(
+                    WorkSession.id == work_session_id,
+                    WorkSession.company_id == company_id,
+                )
+                .with_for_update()
+            )
+            if jornada is None or jornada.status != WorkSessionStatus.ACTIVE.value:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Your workday has already ended.",
+                )
+
+            fila = await session.scalar(
+                select(OdometerEvidence)
+                .where(
+                    OdometerEvidence.company_id == company_id,
+                    OdometerEvidence.work_session_id == work_session_id,
+                    OdometerEvidence.evidence_type == OdometerEvidenceType.END.value,
+                )
+                .with_for_update()
+            )
+            if fila is None or fila.status in RESOLVED_STATUSES:
+                return
+
+            if (
+                fila.status != OdometerStatus.PENDING.value
+                or fila.storage_key is not None
+                or abierta is not None
+            ):
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=(
+                        "You already started the ending odometer reading. "
+                        "Finish it to end your day."
+                    ),
+                )
+
+            evidencia_id = fila.id
+            await session.delete(fila)
+            await session.flush()
+
+        await record_event(
+            company_id=company_id,
+            entity_type="odometer_evidence",
+            entity_id=evidencia_id,
+            action="end_withdrawn",
+            actor_user_id=actor_user_id,
+            summary="Ending odometer withdrawn: the supervisor kept working",
+            changes={"status": {"old": OdometerStatus.PENDING.value, "new": None}},
+        )
+
     # ── Camino normal: foto + confirmación ──────────────────────────────────
 
     @staticmethod

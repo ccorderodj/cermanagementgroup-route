@@ -14,6 +14,7 @@ import {
     fetchSessionOdometer,
     isOdometerResolved,
     readingAsNumber,
+    withdrawOdometerEnd,
     type OdometerEvidence,
     type OdometerSessionState,
 } from '@/entities/RouteOdometer';
@@ -685,6 +686,31 @@ export const RouteMyRoutePage = () => {
         }
     };
 
+    /**
+     * `Keep working`: retira la lectura de cierre en el servidor y vuelve al
+     * trabajo.
+     *
+     * Antes sólo llamaba a `reconcile()`. Como la fase de cierre sale de esa
+     * lectura pendiente —para que sobreviva a que Android recree la pestaña—,
+     * releer el estado devolvía a la misma pantalla y el botón no hacía nada
+     * visible: quien pulsó `End Work` sin querer no podía seguir trabajando.
+     *
+     * Si el servidor no la retira —ya hay foto o excepción, que son evidencia—
+     * se dice por qué y se queda en la captura, que es donde está el trabajo.
+     */
+    const seguirTrabajando = async (session: WorkSession) => {
+        setBusy(true);
+        setError(null);
+        try {
+            setOdometro(await withdrawOdometerEnd(session.id));
+            await reconcile();
+        } catch (err) {
+            setError(detalleDeError(err, 'Your workday could not be resumed.'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
     const planDe = (trip: Trip): TripPlanInput => ({
         purpose: trip.current_purpose,
         context_reference: trip.current_context_reference ?? null,
@@ -1067,7 +1093,7 @@ export const RouteMyRoutePage = () => {
                                 variant="ghost"
                                 className="h-12 w-full"
                                 disabled={busy}
-                                onClick={() => reconcile()}
+                                onClick={() => seguirTrabajando(view.session)}
                             >
                                 Keep working
                             </Button>

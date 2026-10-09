@@ -36,5 +36,6 @@ export {
     fetchPendingOdometerExceptions,
     approveOdometerException,
     rejectOdometerException,
+    withdrawOdometerEnd,
     odometerPhotoUrl,
 } from './model/services/odometerService';

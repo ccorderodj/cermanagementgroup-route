@@ -705,3 +705,154 @@ async def test_the_manual_end_reading_is_fully_audited(seeded, alpha_client):
         await alpha_client.get("/api/odometer/exceptions/pending")
     ).status_code
     assert detalle == 403, "el supervisor no ve la cola de administración"
+
+
+# ── «Keep working» retira el cierre pedido ──────────────────────────────────
+#
+# El reporte de campo: un supervisor pulsó `End Work` sin querer mientras
+# conducía y `Keep working` no hacía nada. `End Work` deja la lectura de cierre
+# `PENDING` antes de rechazar el cierre, la pantalla decide la fase por esa
+# fila, y no había forma de retirarla: la única salida era cerrar el día.
+
+
+async def _end_work_rechazado(cliente, seeded) -> dict:
+    """Jornada conduciendo y un `End Work` que el servidor rechazó por la lectura."""
+    jornada = await _jornada_conduciendo(cliente, seeded)
+    rechazo = await cliente.post(f"/api/worksessions/{jornada['id']}/end", json={})
+    assert rechazo.status_code == 409
+    assert (await _evidencia_de_cierre(cliente, jornada["id"]))["status"] == "pending"
+    return jornada
+
+
+def _retirar(jornada: dict) -> str:
+    return f"/api/odometer/sessions/{jornada['id']}/end/withdraw"
+
+
+async def test_keep_working_withdraws_the_end_reading_and_work_goes_on(
+    seeded, alpha_client,
+):
+    """El caso reportado, de punta a punta: se retira, se sigue y se puede cerrar."""
+    jornada = await _end_work_rechazado(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(_retirar(jornada))
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["end"] is None, "la captura de cierre tiene que desaparecer"
+    actual = (await alpha_client.get("/api/worksessions/current")).json()
+    assert actual["work_session"]["status"] == "active"
+
+    # Sigue trabajando: puede salir a otro destino.
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "home"})
+    ).json()
+    salida = await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    assert salida.status_code == 200, salida.text
+
+    # Y cuando de verdad termina, la lectura de cierre se vuelve a pedir.
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+    otra_vez = await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={}
+    )
+    assert otra_vez.status_code == 409
+    assert (await _evidencia_de_cierre(alpha_client, jornada["id"]))["status"] == "pending"
+
+
+async def test_keep_working_without_a_pending_end_changes_nothing(
+    seeded, alpha_client,
+):
+    """Sin `End Work` previo no hay nada que retirar, y no es un error."""
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+
+    respuesta = await alpha_client.post(_retirar(jornada))
+
+    assert respuesta.status_code == 200
+    assert respuesta.json()["end"] is None
+    assert respuesta.json()["start"]["status"] == "photo_confirmed"
+
+
+async def test_keep_working_does_not_discard_an_end_photo(seeded, alpha_client):
+    """Con la foto ya subida hay evidencia, y descartarla no está decidido."""
+    jornada = await _end_work_rechazado(alpha_client, seeded)
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+    antes = await _evidencia_de_cierre(alpha_client, jornada["id"])
+
+    respuesta = await alpha_client.post(_retirar(jornada))
+
+    assert respuesta.status_code == 409
+    assert "ending odometer" in respuesta.json()["detail"].lower()
+    despues = await _evidencia_de_cierre(alpha_client, jornada["id"])
+    assert despues == antes, "la foto y su fila tienen que quedar intactas"
+
+
+async def test_keep_working_does_not_discard_an_end_exception(seeded, alpha_client):
+    """Con la excepción pedida, igual: es evidencia y no se toca."""
+    jornada = await _end_work_rechazado(alpha_client, seeded)
+    await _excepcion_de_cierre(alpha_client, seeded, jornada["id"])
+
+    respuesta = await alpha_client.post(_retirar(jornada))
+
+    assert respuesta.status_code == 409
+    estado = await _evidencia_de_cierre(alpha_client, jornada["id"])
+    assert estado["status"] in ("exception_requested", "exception_approved")
+
+
+async def test_keep_working_cannot_reopen_an_ended_day(seeded, alpha_client):
+    """Cerrado el día no hay nada que seguir: no se reabre por esta vía."""
+    jornada = await _jornada_conduciendo(alpha_client, seeded)
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+        json={"reading": "50100.0"},
+    )
+    cierre = await alpha_client.post(f"/api/worksessions/{jornada['id']}/end", json={})
+    assert cierre.status_code == 200
+
+    respuesta = await alpha_client.post(_retirar(jornada))
+
+    assert respuesta.status_code == 409
+    estado = await _evidencia_de_cierre(alpha_client, jornada["id"])
+    assert estado["status"] == "photo_confirmed", "la lectura del cierre se conserva"
+
+
+async def test_keep_working_only_on_your_own_day(seeded, alpha_client, beta_client):
+    """Otra persona de la compañía, u otra compañía: 404, sin distinguir."""
+    jornada = await _end_work_rechazado(alpha_client, seeded)
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    ajena = await alpha_client.post(_retirar(jornada))
+    assert ajena.status_code == 404
+
+    await beta_client.login(seeded.beta.users["supervisor"].email)
+    otro_tenant = await beta_client.post(_retirar(jornada))
+    assert otro_tenant.status_code == 404
+
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    assert (await _evidencia_de_cierre(alpha_client, jornada["id"]))["status"] == "pending"
+
+
+async def test_keep_working_is_audited(seeded, alpha_client):
+    """Retirar el cierre deja traza: quién, cuándo y que siguió trabajando."""
+    jornada = await _end_work_rechazado(alpha_client, seeded)
+    await alpha_client.post(_retirar(jornada))
+
+    async with async_session_maker() as session:
+        evento = (
+            await session.execute(
+                text(
+                    "SELECT actor_user_id, occurred_at, summary FROM audit_event "
+                    "WHERE company_id = :c AND entity_type = 'odometer_evidence' "
+                    "AND action = 'end_withdrawn'"
+                ),
+                {"c": seeded.alpha.id},
+            )
+        ).one()
+
+    assert evento.actor_user_id == seeded.alpha.users["supervisor"].id
+    assert evento.occurred_at is not None
+    assert "kept working" in evento.summary

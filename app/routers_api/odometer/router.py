@@ -219,6 +219,38 @@ async def confirm_reading(
     return OdometerEvidenceRead.model_validate(evidencia)
 
 
+@router.post("/sessions/{work_session_id}/end/withdraw")
+async def withdraw_end(
+    work_session_id: int,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    company: TenantContext = Depends(get_company_required),
+) -> OdometerSessionState:
+    """`Keep working`: retira la lectura de cierre que `End Work` dejó pedida.
+
+    Devuelve el estado resultante para que la pantalla decida la fase con lo
+    que el servidor ya sabe, sin una segunda lectura.
+    """
+    await _jornada_propia(
+        company_id=company.id, user_id=current_user.id, work_session_id=work_session_id
+    )
+
+    await OdometerService.withdraw_end(
+        company_id=company.id,
+        work_session_id=work_session_id,
+        actor_user_id=current_user.id,
+    )
+
+    inicio, fin, distancia = await OdometerService.session_state(
+        company_id=company.id, work_session_id=work_session_id
+    )
+    return OdometerSessionState(
+        start=OdometerEvidenceRead.model_validate(inicio),
+        end=OdometerEvidenceRead.model_validate(fin) if fin else None,
+        odometer_distance=distancia,
+    )
+
+
 @router.post("/sessions/{work_session_id}/{evidence_type}/exception")
 async def request_exception(
     work_session_id: int,

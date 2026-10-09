@@ -438,7 +438,27 @@ async def test_a_rejected_end_work_does_not_come_back_from_the_queue(
             pendientes = await page.evaluate(LEER_COLA)
             assert pendientes == [], f"la cola tiene que quedar limpia: {pendientes}"
 
-            # Recargar y reconectar no lo resucita.
+            # `old expectation` — recargar devolvía al workbench, porque la
+            # pantalla de cierre era estado volátil. `approved decision` — ODO-03
+            # (correcciones de campo de RTE06): la captura de cierre sale de la
+            # lectura pendiente en el servidor y sobrevive a que Android recree
+            # la pestaña. `new expectation` — recargar **no** reenvía el
+            # `End Work` ni cierra nada, y la salida es `Keep working`, que
+            # retira la lectura en el servidor. Es lo que un supervisor que lo
+            # pulsó sin querer no podía hacer: el botón sólo releía el estado y
+            # le devolvía a la misma pantalla.
+            await page.reload()
+            await expect(
+                page.get_by_text("One last thing before you finish.")
+            ).to_have_count(1, timeout=20_000)
+            assert await page.evaluate(LEER_COLA) == []
+
+            await page.get_by_role("button", name="Keep working").click()
+            await expect(page.get_by_text("What's next?")).to_have_count(
+                1, timeout=20_000
+            )
+
+            # Y ahora sí, recargar no lo resucita: la retirada es del servidor.
             await page.reload()
             await expect(page.get_by_text("What's next?")).to_have_count(
                 1, timeout=20_000
