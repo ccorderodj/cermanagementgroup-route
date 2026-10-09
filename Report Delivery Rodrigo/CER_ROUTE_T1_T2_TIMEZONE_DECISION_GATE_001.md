@@ -239,6 +239,8 @@ en H-2 y R-1** (la verificación cuesta más del doble que el cambio).
 | Rama | `feature/t1-t2-timezone-business-day` |
 | Base | `dev` en `9d5d5cc` |
 | Cambio | este documento y la instrucción recibida; **ningún código** |
+| Commit | `cfbd3bd` |
+| MR | **!79** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/79 |
 | Fusionado | **No.** CER certifica |
 
 ---
