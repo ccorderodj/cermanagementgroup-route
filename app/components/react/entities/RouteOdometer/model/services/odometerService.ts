@@ -55,6 +55,24 @@ export async function fetchSessionOdometer(
 }
 
 /**
+ * `Keep working`: retira la lectura de cierre que `End Work` dejó pedida.
+ *
+ * No se encola, por lo mismo que la confirmación: lo que el supervisor necesita
+ * saber es si **ya puede seguir**, y eso sólo lo sabe el servidor. Devuelve el
+ * estado resultante, con `end` vacío cuando la retirada se aplicó.
+ */
+export async function withdrawOdometerEnd(
+    sessionId: number,
+): Promise<OdometerSessionState> {
+    const response = await $api.post(`/odometer/sessions/${sessionId}/end/withdraw`);
+    return parseApi(
+        odometerSessionStateSchema,
+        response.data,
+        'withdrawOdometerEnd',
+    );
+}
+
+/**
  * Sube la foto del cuentakilómetros e intenta una sugerencia.
  *
  * `ocr_suggestion` puede venir vacía y no es un fallo: la pantalla ofrece el
