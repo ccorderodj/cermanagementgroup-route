@@ -372,4 +372,12 @@ igual: espera decisión de CER.
 
 ## 10 · Git
 
-`PENDIENTE`
+| | |
+|---|---|
+| Rama | `feature/t1-t2-timezone-business-day` (recreada desde `dev`, §0) |
+| Base | `dev` en `ec4d27b` |
+| Commit | `ef92f92` |
+| MR | **!81** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/81 |
+| Árbol | limpio |
+| Fusionado | **No.** No se fusiona ni despliega sin certificación del PO |
+| Despliegue requerido | migración **0015** (`alembic upgrade head`), dependencia `tzdata`, bundle nuevo, y la acción operativa de §7.2 |
