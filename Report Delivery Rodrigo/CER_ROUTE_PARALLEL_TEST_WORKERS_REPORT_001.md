@@ -196,6 +196,9 @@ sesgo de H-2 y R-1.
 |---|---|
 | Rama | `chore/parallel-test-workers` |
 | Base | `dev` en `103617c` |
+| Commit | `1e8a17f` |
+| MR | **!78** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/78 |
+| Árbol | limpio |
 | Fusionado | **No** |
 
 ---
