@@ -19,6 +19,7 @@ autoridad y adivinarlo sería inventar una jerarquía que nadie aprobó.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import datetime, timezone
 from decimal import Decimal
 
@@ -43,15 +44,22 @@ async def get_today(
     `company` sale del subdominio, nunca del cliente: un identificador de
     compañía en la petición sería una autoridad que el navegador no tiene.
     """
-    dia = await dao.business_day(company.id)
-    filas = await dao.today_rows(company.id, dia)
+    ahora = datetime.now(timezone.utc)
+    filas = await dao.today_rows(company.id, ahora)
 
     supervisores = [LiveSupervisor(**fila) for fila in filas]
+    # Sólo por compatibilidad del contrato (ver `LiveToday.session_date`).
+    dias = Counter(
+        s.session_date
+        for s in supervisores
+        if s.session_date is not None and s.time_zone_determined
+    )
+    dia = dias.most_common(1)[0][0] if dias else ahora.date()
     trabajando = [s for s in supervisores if s.status not in ("ended", "not_started")]
 
     return LiveToday(
         session_date=dia,
-        generated_at=datetime.now(timezone.utc),
+        generated_at=ahora,
         summary=LiveSummary(
             supervisors_working=len(trabajando),
             supervisors_total=len(supervisores),

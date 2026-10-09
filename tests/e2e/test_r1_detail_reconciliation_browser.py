@@ -75,10 +75,19 @@ async def _regreso_a_casa(alpha_client, seeded, *, metros: str) -> int:
             {"m": metros, "t": viaje["id"]},
         )
         # Las dos jornadas al mismo día de negocio: es el estado que se mira.
+        #
+        # Al día de la **primera**, no a `CURRENT_DATE`. `CURRENT_DATE` es la
+        # fecha en la zona de sesión de PostgreSQL —aquí, Guatemala— y la
+        # pantalla abre en el día del supervisor: de 18:00 a 24:00 hora local
+        # eran fechas distintas y la prueba fallaba sin que nada estuviera mal
+        # (T-1/T-2 autoriza corregir este fixture; las aserciones no cambian).
         await s.execute(
             text(
-                "UPDATE work_session SET session_date = CURRENT_DATE "
-                "WHERE company_id = :c AND user_id = :u"
+                "UPDATE work_session SET session_date = ("
+                "  SELECT session_date FROM work_session"
+                "  WHERE company_id = :c AND user_id = :u"
+                "  ORDER BY started_at LIMIT 1"
+                ") WHERE company_id = :c AND user_id = :u"
             ),
             {"c": seeded.alpha.id, "u": seeded.alpha.users["supervisor"].id},
         )

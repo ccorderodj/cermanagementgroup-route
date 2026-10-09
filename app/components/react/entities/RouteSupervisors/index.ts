@@ -18,5 +18,6 @@ export {
     fetchSupervisorCandidates,
     designateSupervisor,
     setSupervisorDesignation,
+    setSupervisorTimeZone,
     deleteSupervisorProfile,
 } from './model/services/supervisorsService';

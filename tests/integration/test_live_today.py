@@ -32,6 +32,14 @@ from app.routers_api.standardvalues.provisioning import provision_standard_value
 
 pytestmark = pytest.mark.integration
 
+#: El cuerpo de `Start Work` que envía el cliente desde T-1/T-2: la zona IANA
+#: del dispositivo. Sin ella el «hoy» del supervisor es indeterminado (D3) y sus
+#: jornadas cerradas no se atribuyen a ningún día; ese caso tiene sus propias
+#: pruebas en `test_time_zones.py`. Aquí se fija una zona para que estas
+#: pruebas sigan mirando lo que miran —la consolidación de H-2—, sin cambiar
+#: ninguna aserción.
+INICIO = {"time_zone": "America/New_York"}
+
 
 async def _perfil_y_vehiculo(alpha_client, seeded, *, unidad: str, usuario: str = "supervisor"):
     """Supervisor con perfil y vehículo asignado, por API."""
@@ -163,7 +171,7 @@ async def test_el_dia_es_el_de_la_jornada_y_no_el_de_utc(
     """
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-DIA")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    await alpha_client.post("/api/worksessions", json={})
+    await alpha_client.post("/api/worksessions", json=INICIO)
 
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     cuerpo = await _live(alpha_client)
@@ -205,7 +213,7 @@ async def test_quien_no_ha_empezado_sigue_en_la_lista(seeded, alpha_client):
 async def test_jornada_abierta_sin_viajes_es_working(seeded, alpha_client):
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-W")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    await alpha_client.post("/api/worksessions", json={})
+    await alpha_client.post("/api/worksessions", json=INICIO)
 
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
@@ -218,7 +226,7 @@ async def test_jornada_abierta_sin_viajes_es_working(seeded, alpha_client):
 async def test_un_viaje_en_transito_es_on_route(seeded, alpha_client):
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-R")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
     creado = await alpha_client.post(
@@ -251,7 +259,7 @@ async def test_la_actividad_en_curso_gana_al_viaje(seeded, alpha_client):
     """
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-ACT")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
     creado = await alpha_client.post(
@@ -282,7 +290,7 @@ async def test_la_actividad_en_curso_gana_al_viaje(seeded, alpha_client):
 async def test_la_jornada_terminada_es_work_ended(seeded, alpha_client):
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-END")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     cierre = await alpha_client.post(
         f"/api/worksessions/{jornada['id']}/end", json={}
     )
@@ -309,7 +317,7 @@ async def test_un_viaje_sin_millaje_calculado_no_suma_cero_en_silencio(
     """
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-MI")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
     viaje = (
@@ -348,7 +356,7 @@ async def test_las_millas_vienen_del_millaje_oficial_calculado(
     """
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-OK")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
     viaje = (
@@ -394,7 +402,7 @@ async def test_el_resumen_cuenta_lo_que_la_lista_enseña(seeded, alpha_client):
     """
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-LIVE-SUM")
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     valor = await _valor_de_oficina(alpha_client, seeded.alpha.id)
     viaje = (
@@ -516,7 +524,7 @@ async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_clien
 
     # 1. `supervisor` -> In Activity (viaje llegado y actividad en curso).
     await alpha_client.login(seeded.alpha.users["supervisor"].email)
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     viaje = (
         await alpha_client.post(
@@ -533,7 +541,7 @@ async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_clien
 
     # 2. `route_admin` -> On Route (viaje en tránsito).
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    jornada_ruta = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada_ruta = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada_ruta["id"])
     viaje_ruta = (
         await alpha_client.post(
@@ -546,7 +554,7 @@ async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_clien
 
     # 3. `manager` -> Work Ended.
     await alpha_client.login(seeded.alpha.users["manager"].email)
-    jornada_fin = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada_fin = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     cierre = await alpha_client.post(
         f"/api/worksessions/{jornada_fin['id']}/end", json={}
     )
@@ -554,7 +562,7 @@ async def test_varios_supervisores_a_la_vez_no_se_contaminan(seeded, alpha_clien
 
     # 4. `viewer` -> Working (jornada abierta sin viajes).
     await alpha_client.login(seeded.alpha.users["viewer"].email)
-    abierta = await alpha_client.post("/api/worksessions", json={})
+    abierta = await alpha_client.post("/api/worksessions", json=INICIO)
     assert abierta.status_code in (200, 201), abierta.text
 
     # 5. `owner` -> Not started (perfil sin jornada). No hace nada.
@@ -628,7 +636,7 @@ async def _jornada_cerrada_con_millas(
     único parcial impide dos activas a la vez, que es exactamente la regla que
     hace posible —y legítimo— tener dos jornadas el mismo día.
     """
-    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    jornada = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
     await _resolver_odometro(alpha_client, jornada["id"])
     viaje = (
         await alpha_client.post(
@@ -701,7 +709,7 @@ async def test_dos_jornadas_el_mismo_dia_producen_una_sola_fila(
         alpha_client, seeded, metros="16093.4", unidad_valor=valor
     )
     # La segunda del mismo día, que queda abierta.
-    segunda = (await alpha_client.post("/api/worksessions", json={})).json()
+    segunda = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
 
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     cuerpo = await _live(alpha_client)
@@ -779,7 +787,7 @@ async def test_el_estado_sale_de_la_jornada_activa_y_no_de_la_cerrada(
     await _jornada_cerrada_con_millas(
         alpha_client, seeded, metros="16093.4", unidad_valor=valor
     )
-    segunda = (await alpha_client.post("/api/worksessions", json={})).json()
+    segunda = (await alpha_client.post("/api/worksessions", json=INICIO)).json()
 
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     fila = _de(await _live(alpha_client), seeded.alpha.users["supervisor"].id)
@@ -843,7 +851,7 @@ async def test_el_resumen_cuenta_personas_y_no_jornadas(seeded, alpha_client):
     await _jornada_cerrada_con_millas(
         alpha_client, seeded, metros="16093.4", unidad_valor=valor
     )
-    await alpha_client.post("/api/worksessions", json={})
+    await alpha_client.post("/api/worksessions", json=INICIO)
 
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     cuerpo = await _live(alpha_client)

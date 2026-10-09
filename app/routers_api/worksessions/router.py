@@ -133,6 +133,7 @@ async def start_work(
         user_id=current_user.id,
         device_captured_at=payload.device_captured_at if payload else None,
         utc_offset_minutes=payload.utc_offset_minutes if payload else None,
+        device_time_zone=payload.time_zone if payload else None,
         client_action_key=idempotency_key,
     )
     resultado = WorkSessionRead.model_validate(jornada)

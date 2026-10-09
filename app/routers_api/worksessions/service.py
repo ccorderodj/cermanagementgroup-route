@@ -45,6 +45,7 @@ from app.routers_api.worksessions.models import (
     WorkSessionStatus,
     WorkSessionTimeSource,
 )
+from app.routers_api.worksessions.time_zones import dia_local, zona_efectiva
 
 
 #: Margen por el que se tolera que la evidencia del dispositivo vaya *por
@@ -118,8 +119,18 @@ def _resolve_occurrence(
     return ocurrencia, WorkSessionTimeSource.DEVICE
 
 
-def _session_date_from(occurred_at_utc: datetime, utc_offset_minutes: int | None) -> date:
+def _session_date_from(
+    occurred_at_utc: datetime,
+    utc_offset_minutes: int | None,
+    time_zone: str | None = None,
+) -> date:
     """La fecha del calendario local en la que **ocurrió** el `Start Work`.
+
+    Con zona efectiva (T-1/T-2) manda la zona: es la misma que formateará las
+    horas de esta jornada, y una sola zona por jornada es lo que impide que la
+    fecha y las horas se contradigan. El desfase queda como evidencia y como
+    camino para lo que no trae zona —un cliente anterior, un dispositivo sin
+    zona válida—, que se fecha exactamente como antes.
 
     Dos evidencias distintas del dispositivo, con confianzas distintas:
 
@@ -134,6 +145,8 @@ def _session_date_from(occurred_at_utc: datetime, utc_offset_minutes: int | None
     fallo silencioso: un `Start Work` nunca se bloquea por falta de evidencia
     (D-10, "el manejo del tiempo nunca bloquea Start Work o End Work").
     """
+    if time_zone is not None:
+        return dia_local(occurred_at_utc, time_zone)
     if utc_offset_minutes is None:
         return occurred_at_utc.date()
     return (occurred_at_utc + timedelta(minutes=utc_offset_minutes)).date()
@@ -151,6 +164,8 @@ class WorkSessionService:
         #: para que un punto capturado sin red pueda atarse a **esta**
         #: jornada antes de que exista su `id` (cierre final, Item A).
         client_action_key: str | None = None,
+        #: Zona IANA del dispositivo al encolar (T-1/T-2). Sin validar todavía.
+        device_time_zone: str | None = None,
     ) -> tuple[WorkSession, bool]:
         """Empieza la jornada, o devuelve la que ya está vigente.
 
@@ -175,7 +190,25 @@ class WorkSessionService:
         ocurrido_en, origen = _resolve_occurrence(
             received_at=recibido_en, device_captured_at=device_captured_at
         )
-        session_date = _session_date_from(ocurrido_en, utc_offset_minutes)
+        perfil = await SupervisorProfilesDAO.find_by_user(
+            company_id=company_id, user_id=user_id
+        )
+
+        # Una sola zona efectiva por jornada (T-1/T-2): el override del perfil
+        # si un administrador fijó uno, y si no la del dispositivo. La que se
+        # aplica fecha `session_date` **y** queda guardada para formatear sus
+        # horas; guardar la del dispositivo habiendo override produciría una
+        # jornada fechada en una zona y mostrada en otra.
+        #
+        # Una acción encolada sin red se resuelve aquí, al sincronizar, con el
+        # override vigente **ahora** y la zona del dispositivo **del encolado**.
+        # Es determinista y no reinterpreta nada después: la jornada no existía
+        # hasta este momento, y desde este momento su zona es inmutable.
+        zona = zona_efectiva(
+            override=perfil.operational_time_zone if perfil is not None else None,
+            dispositivo=device_time_zone,
+        )
+        session_date = _session_date_from(ocurrido_en, utc_offset_minutes, zona)
 
         # El snapshot de vehículo es opcional: un supervisor sin perfil de
         # Route, o sin asignación **efectiva en ese momento**, tiene una jornada
@@ -186,9 +219,6 @@ class WorkSessionService:
         # que reasignar el vehículo mañana no reescribe el día de ayer.
         vehicle_id: int | None = None
         mpg_snapshot = None
-        perfil = await SupervisorProfilesDAO.find_by_user(
-            company_id=company_id, user_id=user_id
-        )
         if perfil is not None and perfil.is_active:
             asignacion = await VehicleAssignmentsDAO.effective_at(
                 company_id=company_id,
@@ -215,6 +245,7 @@ class WorkSessionService:
                     started_at_source=origen.value,
                     start_device_captured_at=device_captured_at,
                     start_utc_offset_minutes=utc_offset_minutes,
+                    start_time_zone=zona,
                     vehicle_id=vehicle_id,
                     mpg_snapshot=mpg_snapshot,
                 )
@@ -249,6 +280,9 @@ class WorkSessionService:
             changes={
                 "status": {"old": None, "new": WorkSessionStatus.ACTIVE.value},
                 "session_date": {"old": None, "new": session_date.isoformat()},
+                # Qué zona fechó el día. Sin ella, la auditoría no podría
+                # explicar por qué una jornada quedó en una fecha y no en otra.
+                "start_time_zone": {"old": None, "new": zona},
                 "vehicle_id": {"old": None, "new": vehicle_id},
                 # La auditoría registra las dos horas y de cuál se fio, no solo
                 # el resultado: si una jornada quedó fechada por recepción, el

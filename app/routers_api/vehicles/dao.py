@@ -182,6 +182,9 @@ class SupervisorProfilesDAO(BaseDAO):
                     SupervisorProfile.id.label("supervisor_profile_id"),
                     SupervisorProfile.is_active.label("supervisor_active"),
                     SupervisorProfile.version.label("supervisor_version"),
+                    SupervisorProfile.operational_time_zone.label(
+                        "supervisor_time_zone"
+                    ),
                 )
                 .join(UserCompany, UserCompany.user_id == Users.id)
                 .outerjoin(Role, Role.id == UserCompany.role_id)
@@ -216,6 +219,9 @@ class SupervisorProfilesDAO(BaseDAO):
                     SupervisorProfile.user_id.label("user_id"),
                     SupervisorProfile.is_active.label("is_active"),
                     SupervisorProfile.version.label("version"),
+                    SupervisorProfile.operational_time_zone.label(
+                        "operational_time_zone"
+                    ),
                     SupervisorProfile.created_at.label("created_at"),
                     SupervisorProfile.updated_at.label("updated_at"),
                     Users.first_name.label("first_name"),

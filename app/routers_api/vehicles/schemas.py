@@ -116,6 +116,8 @@ class SupervisorProfileRead(BaseModel):
     #: Vehículo vigente, derivado de `vehicle_assignment`. `None` es un estado
     #: normal: un supervisor recién designado todavía no conduce nada.
     current_vehicle: Optional[VehicleRead] = None
+    #: Override de zona horaria (T-1/T-2). `None`: automática, del dispositivo.
+    operational_time_zone: Optional[str] = None
 
 
 class SupervisorProfileUpdate(BaseModel):
@@ -129,6 +131,21 @@ class SupervisorProfileUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     is_active: bool
+    version: Optional[int] = None
+
+
+class SupervisorTimeZoneUpdate(BaseModel):
+    """El override de zona horaria del supervisor (T-1/T-2, D1).
+
+    **Opcional y para excepciones.** `None` lo quita y la zona vuelve a salir
+    del dispositivo en cada jornada, que es el comportamiento por defecto. Un
+    identificador que `zoneinfo` no reconoce se rechaza con 422: una zona mal
+    escrita aplicada en silencio fecharía mal todas sus jornadas.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operational_time_zone: Optional[str] = Field(default=None, max_length=64)
     version: Optional[int] = None
 
 
@@ -154,6 +171,8 @@ class SupervisorCandidateRead(BaseModel):
     supervisor_profile_id: Optional[int] = None
     supervisor_active: Optional[bool] = None
     supervisor_version: Optional[int] = None
+    #: Override de zona horaria (T-1/T-2). `None`: automática, del dispositivo.
+    supervisor_time_zone: Optional[str] = None
     current_vehicle: Optional[VehicleRead] = None
 
 

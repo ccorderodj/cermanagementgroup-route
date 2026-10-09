@@ -53,6 +53,11 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                 const razon = a.activity_labels.length > 0
                     ? a.activity_labels.join(', ')
                     : (a.purpose_detail || '—');
+                // Las horas, en la zona de la jornada de esta parada (T-2).
+                const zona = {
+                    timeZone: a.time_zone,
+                    utcOffsetMinutes: a.utc_offset_minutes,
+                };
                 return (
                     /* `trip_id` y no `activity_execution_id`: desde R-1 la
                        lista incluye viajes que no abrieron parada, y en ésos
@@ -75,9 +80,9 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                                       * de que algo va a cerrarse (AC3).
                                       */}
                                     {a.context_reference || '—'} ·{' '}
-                                    {formatClock(a.trip_started_at)}
+                                    {formatClock(a.trip_started_at, zona)}
                                     –
-                                    {a.has_activity ? formatClock(a.ended_at) : '—'}
+                                    {a.has_activity ? formatClock(a.ended_at, zona) : '—'}
                                 </div>
                             </div>
                             <div className="text-right">

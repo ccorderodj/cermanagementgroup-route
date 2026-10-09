@@ -24,6 +24,7 @@ import {
     fetchAssignmentHistory,
     fetchSupervisorCandidates,
     setSupervisorDesignation,
+    setSupervisorTimeZone,
     type SupervisorCandidate,
     type VehicleAssignment,
 } from '@/entities/RouteSupervisors';
@@ -42,6 +43,36 @@ import {
  * Nada aquí borra: retirar la designación la desactiva, y terminar una
  * asignación la cierra con su fecha. La historia se conserva.
  */
+
+/**
+ * Zona horaria del supervisor (T-1/T-2): **opcional y para excepciones**.
+ *
+ * Por defecto es automática —cada jornada toma la del dispositivo— y nadie
+ * tiene que configurar nada. Fijar una aquí es un override explícito para un
+ * caso concreto: prevalece sobre la del teléfono en las jornadas que empiecen
+ * después, y no cambia ninguna anterior.
+ *
+ * Las de Estados Unidos, que es donde trabaja la flota. El servidor acepta
+ * cualquier zona IANA válida; si un perfil ya tiene otra, se añade a la lista
+ * para no ocultarla.
+ */
+const AUTOMATICA = 'automatic';
+const ZONAS_HABITUALES = [
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Phoenix',
+    'America/Los_Angeles',
+    'America/Anchorage',
+    'Pacific/Honolulu',
+    'America/Puerto_Rico',
+];
+
+function opcionesDeZona(actual: string | null | undefined): string[] {
+    return actual && !ZONAS_HABITUALES.includes(actual)
+        ? [...ZONAS_HABITUALES, actual]
+        : ZONAS_HABITUALES;
+}
 
 function formatearFecha(valor: string | null | undefined): string {
     if (!valor) return '—';
@@ -120,6 +151,24 @@ export function SupervisorSetupPanel() {
             await cargar();
         } catch (err) {
             setError(detalleDeError(err, 'The designation could not be changed.'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const cambiarZona = async (candidato: SupervisorCandidate, valor: string) => {
+        if (!candidato.supervisor_profile_id) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await setSupervisorTimeZone(
+                candidato.supervisor_profile_id,
+                valor === AUTOMATICA ? null : valor,
+                candidato.supervisor_version ?? undefined,
+            );
+            await cargar();
+        } catch (err) {
+            setError(detalleDeError(err, 'The time zone could not be changed.'));
         } finally {
             setBusy(false);
         }
@@ -268,7 +317,35 @@ export function SupervisorSetupPanel() {
                                                 No
                                             </span>
                                         )}
-                                        {esSupervisor && activo && <Badge>Yes</Badge>}
+                                        {esSupervisor && activo && (
+                                            <>
+                                                <Badge>Yes</Badge>
+                                                <Select
+                                                    value={candidato.supervisor_time_zone ?? AUTOMATICA}
+                                                    onValueChange={(v) => cambiarZona(candidato, v)}
+                                                    disabled={busy}
+                                                >
+                                                    <SelectTrigger
+                                                        className="mt-2 h-8 w-44 text-xs"
+                                                        aria-label="Time zone"
+                                                    >
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value={AUTOMATICA}>
+                                                            Time zone: automatic
+                                                        </SelectItem>
+                                                        {opcionesDeZona(
+                                                            candidato.supervisor_time_zone,
+                                                        ).map((zona) => (
+                                                            <SelectItem key={zona} value={zona}>
+                                                                {zona}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                            </>
+                                        )}
                                         {esSupervisor && !activo && (
                                             <Badge variant="secondary">Removed</Badge>
                                         )}

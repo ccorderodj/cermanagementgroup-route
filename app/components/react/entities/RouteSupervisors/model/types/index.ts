@@ -22,6 +22,8 @@ export const supervisorProfileSchema = z.object({
     created_at: z.string(),
     updated_at: z.string(),
     current_vehicle: vehicleSchema.nullable().optional(),
+    /** Override de zona horaria (T-1/T-2). Nulo: automática, del dispositivo. */
+    operational_time_zone: z.string().nullable().optional(),
 });
 
 export type SupervisorProfile = z.infer<typeof supervisorProfileSchema>;
@@ -62,6 +64,8 @@ export const supervisorCandidateSchema = z.object({
     supervisor_profile_id: z.number().nullable().optional(),
     supervisor_active: z.boolean().nullable().optional(),
     supervisor_version: z.number().nullable().optional(),
+    /** Override de zona horaria (T-1/T-2). Nulo: automática, del dispositivo. */
+    supervisor_time_zone: z.string().nullable().optional(),
     current_vehicle: vehicleSchema.nullable().optional(),
 });
 

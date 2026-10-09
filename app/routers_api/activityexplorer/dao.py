@@ -30,7 +30,7 @@ que es lo que explica ese primer grupo de seis días.
 from __future__ import annotations
 
 import calendar
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 from sqlalchemy import Integer, case, func, select
@@ -58,18 +58,42 @@ from app.routers_api.worksessions.models import WorkSession
 AGRUPA_POR: dict[str, str] = {"year": "month", "month": "week", "week": "day"}
 
 
-async def business_day_actual(company_id: int) -> date:
-    """El día de negocio vigente, para cuando la petición no trae fecha.
+async def dia_actual_de(company_id: int, user_id: int | None) -> date:
+    """El «hoy» del supervisor que se está mirando, para cuando no llega fecha.
 
-    Se **reutiliza** el de Today / Live en vez de reimplementarlo. Es la misma
-    regla —hoy según el desfase local de la compañía— y tener dos versiones de
-    ella acabaría con dos respuestas distintas a la misma pregunta, que es
-    exactamente lo que el invariante 9 prohíbe. Esto no toca RTE07: sólo lee su
-    función.
+    El día de **esa persona**, en su zona de referencia (T-1/T-2): no el de la
+    compañía, no el del navegador del administrador y no el de otro supervisor.
+    Una fecha explícita en la petición conserva su significado y no pasa por
+    aquí.
+
+    Sin zona determinable no se inventa un «hoy»: se abre en la fecha de su
+    jornada más reciente, que es un hecho registrado. Sin ninguna jornada no
+    hay nada que mostrar en ningún día, y la fecha UTC sólo ancla una vista
+    vacía.
     """
-    from app.routers_api.live.dao import business_day
+    from app.routers_api.worksessions.time_zones import (
+        dia_local,
+        zonas_de_referencia,
+    )
 
-    return await business_day(company_id)
+    ahora = datetime.now(timezone.utc)
+    if user_id is None:
+        return ahora.date()
+
+    zona, _origen = (
+        await zonas_de_referencia(company_id=company_id, user_ids=[user_id])
+    )[user_id]
+    if zona is not None:
+        return dia_local(ahora, zona)
+
+    async with db_session() as session:
+        ultima = await session.scalar(
+            select(func.max(WorkSession.session_date)).where(
+                WorkSession.company_id == company_id,
+                WorkSession.user_id == user_id,
+            )
+        )
+    return ultima or ahora.date()
 
 
 def periodo(rango: str, ancla: date) -> tuple[date, date]:
@@ -322,6 +346,11 @@ async def paradas_del_dia(
                     # construcción —la actividad se ejecuta dentro de su propia
                     # jornada— así que no cambia ningún valor existente.
                     WorkSession.user_id,
+                    # La zona con que se registraron estos instantes (T-1/T-2):
+                    # sus horas se formatean en la de la jornada, no en la del
+                    # navegador de quien consulta.
+                    WorkSession.start_time_zone,
+                    WorkSession.start_utc_offset_minutes,
                     Trip.current_purpose,
                     Trip.current_context_reference,
                     Trip.current_standard_value_id,
@@ -460,6 +489,8 @@ async def paradas_del_dia(
                 #: pantalla lo necesita para no llamar «actividad» a un viaje
                 #: que no la tuvo, y el contador para seguir contando paradas.
                 "has_activity": tiene_actividad,
+                "time_zone": f.start_time_zone,
+                "utc_offset_minutes": f.start_utc_offset_minutes,
             }
         )
 

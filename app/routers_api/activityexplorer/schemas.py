@@ -135,6 +135,13 @@ class ExplorerActivity(BaseModel):
     #: afirmaría que hay una parada abierta esperando resultado.
     has_activity: bool = True
 
+    #: La zona efectiva de la jornada de esta parada (T-1/T-2): sus horas se
+    #: formatean en ella, no en la del navegador de quien consulta. `None` en
+    #: las jornadas anteriores, que sólo tienen `utc_offset_minutes` y se
+    #: muestran como desfase (`UTC-04:00`), nunca como una zona no registrada.
+    time_zone: Optional[str] = None
+    utc_offset_minutes: Optional[int] = None
+
 
 class ExplorerSummary(BaseModel):
     """Las cuatro mini-estadísticas del día, en el orden de V0.7."""

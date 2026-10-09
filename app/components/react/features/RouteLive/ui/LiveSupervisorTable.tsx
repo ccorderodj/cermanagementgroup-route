@@ -1,7 +1,18 @@
 import {
-    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatMiles, formatSince,
+    LIVE_STATUS_LABEL, LIVE_STATUS_TONE, formatMiles, sinceParts,
     type LiveSupervisor,
 } from '@/entities/RouteLive';
+
+/** La hora en su línea y su zona debajo: en una sola, la zona se cortaba. */
+function CeldaDesde({ s }: { s: LiveSupervisor }) {
+    const { hora, nota } = sinceParts(s);
+    return (
+        <>
+            {hora}
+            {nota && <div className="text-xs">{nota}</div>}
+        </>
+    );
+}
 
 /**
  * La lista de supervisores: la superficie operativa principal de V0.7.
@@ -123,7 +134,7 @@ export function LiveSupervisorTable(props: LiveSupervisorTableProps) {
                                     )}
                                 </td>
                                 <td className="whitespace-nowrap px-5 py-3 text-muted-foreground">
-                                    {formatSince(s.since)}
+                                    <CeldaDesde s={s} />
                                 </td>
                             </tr>
                         ))}

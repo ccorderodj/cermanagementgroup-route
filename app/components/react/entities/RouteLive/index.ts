@@ -11,5 +11,6 @@ export {
     motivoDeMillas,
     sufijoDeMillas,
     formatSince,
+    sinceParts,
 } from './model/types';
 export { fetchTodayLive } from './model/services/liveService';

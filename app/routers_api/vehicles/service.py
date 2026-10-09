@@ -373,6 +373,76 @@ class SupervisorProfileService:
         )
 
     @staticmethod
+    async def set_time_zone(
+        *,
+        company_id: int,
+        supervisor_profile_id: int,
+        actor_user_id: int,
+        time_zone: str | None,
+        expected_version: int | None,
+    ) -> SupervisorProfile:
+        """Fija o quita el override de zona horaria (T-1/T-2, D1).
+
+        Es una **excepción explícita**, no una configuración obligatoria: sin
+        override, cada jornada toma la zona del dispositivo. Cambiarlo afecta
+        sólo a las jornadas que empiecen después; las anteriores conservan su
+        instantánea en `work_session.start_time_zone`.
+
+        Una zona que `zoneinfo` no reconoce se rechaza con 422 en vez de
+        guardarse: aplicada en silencio, fecharía mal cada jornada.
+        """
+        from app.routers_api.worksessions.time_zones import zona_valida
+
+        nueva = None
+        if time_zone is not None and time_zone.strip():
+            nueva = zona_valida(time_zone)
+            if nueva is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"'{time_zone}' is not a recognized IANA time zone.",
+                )
+
+        async with transaction() as session:
+            perfil = await session.scalar(
+                select(SupervisorProfile).where(
+                    SupervisorProfile.id == supervisor_profile_id,
+                    SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
+                )
+            )
+            if perfil is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Supervisor profile not found",
+                )
+
+            ensure_version(current=perfil.version, expected=expected_version)
+
+            antes = perfil.operational_time_zone
+            perfil.operational_time_zone = nueva
+            perfil.version = perfil.version + 1
+            await session.flush()
+
+        if antes != nueva:
+            await record_event(
+                company_id=company_id,
+                entity_type="supervisor_profile",
+                entity_id=supervisor_profile_id,
+                action="time_zone",
+                actor_user_id=actor_user_id,
+                summary=(
+                    f"Route supervisor time zone set to {nueva}"
+                    if nueva
+                    else "Route supervisor time zone set to automatic (device)"
+                ),
+                changes={"operational_time_zone": {"old": antes, "new": nueva}},
+            )
+
+        return await SupervisorProfilesDAO.get_for_company(
+            supervisor_profile_id=supervisor_profile_id, company_id=company_id
+        )
+
+    @staticmethod
     async def delete(
         *,
         company_id: int,

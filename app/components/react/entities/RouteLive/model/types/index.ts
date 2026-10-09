@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { eventClockParts, formatEventClock } from '@/shared/lib/utils/utils';
 
 /**
  * Today / Live: el estado operativo del día.
@@ -84,6 +85,17 @@ export const liveSupervisorSchema = z.object({
     activities_today: z.number(),
     operational_mpg: decimalSchema.nullable().optional(),
     fuel_grade: z.string().nullable().optional(),
+
+    // Contrato temporal de la fila (T-1/T-2). Opcionales para leer igual
+    // contra un servidor anterior.
+    /** El día operativo de esta persona, en su zona. */
+    session_date: z.string().nullable().optional(),
+    /** Zona IANA de la jornada que describe la fila. */
+    time_zone: z.string().nullable().optional(),
+    /** Desfase de esa jornada: sólo se usa si no hay zona (histórica). */
+    utc_offset_minutes: z.number().nullable().optional(),
+    /** `false`: no se pudo determinar su zona, y la pantalla lo dice. */
+    time_zone_determined: z.boolean().optional().default(true),
 });
 export type LiveSupervisor = z.infer<typeof liveSupervisorSchema>;
 
@@ -148,12 +160,37 @@ export const sufijoDeMillas = (s: LiveSupervisor): string => {
 /**
  * La hora desde la que dura el estado actual, en el formato del mockup.
  *
+ * En la zona **de la jornada del supervisor**, no en la del navegador de quien
+ * mira (T-2): un administrador en Texas y otro en Georgia leen la misma hora
+ * para el mismo evento. Si el estado empezó otro día —una jornada nocturna
+ * activa después de medianoche— se antepone la fecha.
+ *
  * `null` cuando no hay estado — y entonces la pantalla no escribe una hora
- * inventada, escribe el guion neutro.
+ * inventada, escribe el guion neutro. Si la zona de la persona no se pudo
+ * determinar se dice, discretamente, en vez de presentar otra como suya (D3).
  */
-export const formatSince = (iso: string | null | undefined): string => {
-    if (!iso) return '—';
-    const fecha = new Date(iso);
-    if (Number.isNaN(fecha.getTime())) return '—';
-    return fecha.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+export const formatSince = (s: LiveSupervisor): string => {
+    const hora = formatEventClock(
+        s.since,
+        { timeZone: s.time_zone, utcOffsetMinutes: s.utc_offset_minutes },
+        s.session_date,
+    );
+    return s.time_zone_determined ? hora : `${hora} · time zone not determined`;
+};
+
+/**
+ * `formatSince` partido en dos líneas, para la columna estrecha de la tabla de
+ * escritorio: la hora arriba y la zona —o la marca de zona no determinada—
+ * debajo. En una sola línea la abreviatura quedaba cortada contra el borde.
+ */
+export const sinceParts = (s: LiveSupervisor): { hora: string; nota: string } => {
+    const { hora, zona } = eventClockParts(
+        s.since,
+        { timeZone: s.time_zone, utcOffsetMinutes: s.utc_offset_minutes },
+        s.session_date,
+    );
+    const nota = [zona, s.time_zone_determined ? '' : 'time zone not determined']
+        .filter(Boolean)
+        .join(' · ');
+    return { hora, nota };
 };

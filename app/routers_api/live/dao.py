@@ -12,18 +12,23 @@ Importa porque la pantalla se refresca sola cada treinta segundos: un patrón
 N+1 aquí no sería una ineficiencia de arranque, sería carga permanente que crece
 con la plantilla.
 
-Qué día es "hoy"
-----------------
-El de negocio, no el de UTC. `session_date` se calcula al abrir la jornada
-aplicando al instante el **desfase horario que reporta el dispositivo**, y aquí
-se usa esa misma evidencia: el desfase más reciente que la compañía haya
-reportado. Resolverlo con `CURRENT_DATE` adelantaría el cambio de día cuatro o
-cinco horas para una flota americana —a las ocho de la tarde ya sería mañana—,
-que es exactamente lo que FR-01 prohíbe.
+Qué día es "hoy" — el de **cada** supervisor (T-1/T-2)
+------------------------------------------------------
+Antes había un solo día para toda la compañía, y lo decidía el desfase de la
+última jornada iniciada por **cualquiera**: un supervisor en otra zona cambiaba
+la fecha de todos, y sin desfases se caía a UTC —a las ocho de la tarde en el
+Este ya era mañana—.
 
-Sin ninguna jornada previa no hay desfase conocido y se cae a UTC. Es el mismo
-límite documentado que el dominio ya acepta al abrir la primera jornada de una
-compañía, y se comporta igual: no bloquea nada.
+Ahora cada fila tiene su propio día, calculado con la zona de referencia de esa
+persona (`worksessions.time_zones.zonas_de_referencia`): su override, o la zona
+efectiva de su última jornada que la registró. Si no hay ninguna, su día es
+**indeterminado** y se dice así; no se le presta la zona de otro ni se le
+presenta UTC como si fuera su hora (D3).
+
+Una jornada **activa** se enseña aunque su `session_date` sea anterior —una
+jornada nocturna no desaparece a medianoche (D4)—, pero sus métricas siguen
+siendo de su día: Today suma sólo las jornadas cuya `session_date` es el día
+local de esa persona, y no traslada millas ni actividades al día siguiente.
 
 Una fila por supervisor, no por jornada (H-2)
 ----------------------------------------------
@@ -38,19 +43,14 @@ al día (millas, actividades, viajes sin cifra) y **elige** lo que describe un
 instante (estado, `since`, vehículo, contexto del viaje), tomando la jornada
 activa o, si no la hay, la última iniciada.
 
-Lo que esto **no** cambia: qué día es hoy. Elegirlo por supervisor exigiría una
-zona horaria por persona, y no existe en el modelo —sólo está el desfase que
-reportó el dispositivo en cada jornada—. Usar el de otro supervisor para fechar
-a un tercero está prohibido por el contrato temporal, así que la selección del
-día se queda como estaba y su revisión es otro checkpoint.
 """
 
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Integer, func, select
+from sqlalchemy import Integer, func, or_, select, tuple_
 
 from app.core.db.session import db_session
 from app.routers_api.activities.models import (
@@ -68,40 +68,78 @@ from app.routers_api.trips.models import Trip, TripStatus
 from app.routers_api.users.models import Users
 from app.routers_api.vehicles.models import SupervisorProfile, Vehicle
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
+from app.routers_api.worksessions.time_zones import (
+    ORIGEN_INDETERMINADA,
+    dia_local,
+    zonas_de_referencia,
+)
 
 def _iniciales(nombre: str, apellido: str) -> str:
     return f"{(nombre or '?')[:1]}{(apellido or '')[:1]}".upper() or "?"
 
 
-async def business_day(company_id: int) -> date:
-    """El día de negocio vigente para esta compañía."""
-    async with db_session() as session:
-        desfase = await session.scalar(
-            select(WorkSession.start_utc_offset_minutes)
-            .where(
-                WorkSession.company_id == company_id,
-                WorkSession.start_utc_offset_minutes.is_not(None),
-            )
-            .order_by(WorkSession.started_at.desc())
-            .limit(1)
-        )
-
-    ahora = datetime.now(timezone.utc)
-    if desfase is None:
-        return ahora.date()
-    return (ahora + timedelta(minutes=int(desfase))).date()
-
-
-async def today_rows(company_id: int, dia: date) -> list[dict]:
+async def today_rows(company_id: int, ahora: datetime) -> list[dict]:
     """Una fila por supervisor autorizado, con todo lo que la pantalla enseña.
 
     El conjunto de supervisores lo decide **el servidor**. Hoy son todos los
     perfiles activos de la compañía; cuando exista jerarquía organizativa será
     este `where` el que se estreche, sin que la pantalla cambie una línea. Por
     eso el frontend nunca filtra por rol: no sabría hacerlo y no debe.
+
+    `ahora` es un instante, no una fecha: cada supervisor lo convierte a **su**
+    día con su propia zona (T-1/T-2).
     """
     async with db_session() as session:
-        # ── 1. Supervisores y su jornada de hoy, si la hay ──────────────────
+        # ── 1. Supervisores ─────────────────────────────────────────────────
+        perfiles = (
+            await session.execute(
+                select(
+                    SupervisorProfile.id.label("perfil_id"),
+                    SupervisorProfile.user_id,
+                    Users.first_name,
+                    Users.last_name,
+                )
+                .join(Users, Users.id == SupervisorProfile.user_id)
+                .where(
+                    SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.is_active.is_(True),
+                    SupervisorProfile.deleted_at.is_(None),
+                )
+                .order_by(Users.first_name, Users.last_name)
+            )
+        ).all()
+        usuarios = [p.user_id for p in perfiles]
+
+        # La jornada activa de cada uno, si la hay: se enseña aunque sea de
+        # ayer (D4), y para quien no tiene zona determinable su fecha es la
+        # única fecha operativa que existe como hecho registrado.
+        activas = dict(
+            (
+                await session.execute(
+                    select(WorkSession.user_id, WorkSession.session_date).where(
+                        WorkSession.company_id == company_id,
+                        WorkSession.user_id.in_(usuarios),
+                        WorkSession.status == WorkSessionStatus.ACTIVE.value,
+                    )
+                )
+            ).all()
+        ) if usuarios else {}
+
+    zonas = await zonas_de_referencia(company_id=company_id, user_ids=usuarios)
+    dias: dict[int, date | None] = {}
+    for user_id in usuarios:
+        zona, _origen = zonas[user_id]
+        if zona is not None:
+            dias[user_id] = dia_local(ahora, zona)
+        else:
+            # Zona indeterminada: no se inventa un «hoy». Si está trabajando,
+            # sus métricas son las de la fecha de su jornada en curso; si no,
+            # no hay ningún día que se pueda afirmar.
+            dias[user_id] = activas.get(user_id)
+    pares = [(u, d) for u, d in dias.items() if d is not None]
+
+    async with db_session() as session:
+        # ── 2. Su jornada de su día, y la activa aunque sea de otro ─────────
         #
         # `LEFT JOIN`: quien no ha empezado sigue en la lista. FR-09 lo exige y
         # es lo que hace la pantalla útil a primera hora, cuando lo relevante es
@@ -115,8 +153,11 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
                     Users.last_name,
                     WorkSession.id.label("sesion_id"),
                     WorkSession.status.label("sesion_estado"),
+                    WorkSession.session_date,
                     WorkSession.started_at,
                     WorkSession.ended_at,
+                    WorkSession.start_time_zone,
+                    WorkSession.start_utc_offset_minutes,
                     WorkSession.vehicle_id,
                     Vehicle.make,
                     Vehicle.model,
@@ -130,7 +171,12 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
                     WorkSession,
                     (WorkSession.user_id == SupervisorProfile.user_id)
                     & (WorkSession.company_id == SupervisorProfile.company_id)
-                    & (WorkSession.session_date == dia),
+                    & or_(
+                        tuple_(WorkSession.user_id, WorkSession.session_date).in_(
+                            pares
+                        ),
+                        WorkSession.status == WorkSessionStatus.ACTIVE.value,
+                    ),
                 )
                 .outerjoin(
                     Vehicle,
@@ -148,7 +194,7 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
 
         sesiones = [f.sesion_id for f in filas if f.sesion_id is not None]
         if not sesiones:
-            return [_fila(f, None, None, 0, Decimal("0"), False, 0) for f in filas]
+            return _consolidar(filas, {}, {}, {}, {}, dias, zonas)
 
         # ── 2. El viaje vigente de cada jornada ─────────────────────────────
         #
@@ -255,7 +301,7 @@ async def today_rows(company_id: int, dia: date) -> list[dict]:
             ).all()
         }
 
-    return _consolidar(filas, viajes, actividades, cuentas, millaje)
+    return _consolidar(filas, viajes, actividades, cuentas, millaje, dias, zonas)
 
 
 def _representante(grupo: list):
@@ -279,7 +325,9 @@ def _representante(grupo: list):
     )
 
 
-def _consolidar(filas, viajes, actividades, cuentas, millaje) -> list[dict]:
+def _consolidar(
+    filas, viajes, actividades, cuentas, millaje, dias, zonas
+) -> list[dict]:
     """Una fila por **supervisor**, no por jornada (H-2).
 
     Por qué hacía falta
@@ -302,24 +350,30 @@ def _consolidar(filas, viajes, actividades, cuentas, millaje) -> list[dict]:
     `mileage_pending` es un **O lógico**: si cualquier jornada del día tiene un
     viaje sin calcular, el total todavía no es final.
 
-    El día no se toca
-    -----------------
-    Esto consolida **dentro** del día que `business_day()` ya eligió. Decidir
-    ese día por supervisor exigiría una zona horaria por persona que el modelo
-    no tiene —sólo existe el desfase del dispositivo de cada jornada— y usar el
-    de otro supervisor está prohibido por el contrato temporal de H-2.
+    Qué jornadas suman (T-1/T-2, D4)
+    --------------------------------
+    Sólo las de **su** día (`dias[user_id]`). La activa de ayer —una jornada
+    nocturna que cruzó medianoche— describe el estado de la persona y por eso
+    puede ser la representante, pero sus millas y actividades son de su
+    `session_date` y no se trasladan a hoy.
     """
     por_usuario: dict[int, list] = {}
     for f in filas:
         por_usuario.setdefault(f.user_id, []).append(f)
 
     consolidadas: list[dict] = []
-    for grupo in por_usuario.values():
+    for user_id, grupo in por_usuario.items():
         elegida = _representante(grupo)
-        # Sólo las jornadas reales suman. El `LEFT JOIN` deja una fila con
-        # `sesion_id` nulo a quien no ha empezado hoy, y esa no es una jornada
-        # de cero: es la ausencia de jornada.
-        sesiones_del_dia = [f.sesion_id for f in grupo if f.sesion_id is not None]
+        dia = dias.get(user_id)
+        # Sólo las jornadas reales **de su día** suman. El `LEFT JOIN` deja una
+        # fila con `sesion_id` nulo a quien no ha empezado hoy, y esa no es una
+        # jornada de cero: es la ausencia de jornada.
+        sesiones_del_dia = [
+            f.sesion_id
+            for f in grupo
+            if f.sesion_id is not None and f.session_date == dia
+        ]
+        zona_referencia, origen = zonas.get(user_id, (None, ORIGEN_INDETERMINADA))
 
         metros = sum(
             (millaje[s].metros for s in sesiones_del_dia if s in millaje),
@@ -343,6 +397,24 @@ def _consolidar(filas, viajes, actividades, cuentas, millaje) -> list[dict]:
                     if s in millaje
                 ),
             )
+            | {
+                # La fecha operativa de esta fila, y la zona con que se
+                # formatean sus horas: la de **la jornada** que describe el
+                # estado, que es la que registró esos instantes; sin jornada,
+                # la de referencia de la persona.
+                "session_date": dia,
+                "time_zone": (
+                    elegida.start_time_zone
+                    if elegida.sesion_id is not None
+                    else zona_referencia
+                ),
+                "utc_offset_minutes": (
+                    elegida.start_utc_offset_minutes
+                    if elegida.sesion_id is not None
+                    else None
+                ),
+                "time_zone_determined": origen != ORIGEN_INDETERMINADA,
+            }
         )
 
     # El orden lo fija la consulta (nombre, apellido). Agrupar por un

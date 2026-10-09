@@ -208,6 +208,13 @@ class WorkSession(TimeStampedModel, VersionedMixin):
     #: es la evidencia de qué se descartó y por qué era descartable.
     start_device_captured_at = Column(DateTime(timezone=True), nullable=True)
     start_utc_offset_minutes = Column(Integer, nullable=True)
+    #: La zona IANA **efectiva** de la jornada (T-1/T-2): el override del
+    #: perfil si lo había al iniciar, la del dispositivo si no. Es la que fechó
+    #: `session_date` y la que formatea las horas de esta jornada, así que las
+    #: dos cosas no pueden contradecirse. `NULL` en las jornadas anteriores y
+    #: cuando ninguna fuente dio una zona válida: entonces sólo queda el
+    #: desfase, y se muestra como desfase.
+    start_time_zone = Column(String(64), nullable=True)
     end_device_captured_at = Column(DateTime(timezone=True), nullable=True)
     end_utc_offset_minutes = Column(Integer, nullable=True)
 
