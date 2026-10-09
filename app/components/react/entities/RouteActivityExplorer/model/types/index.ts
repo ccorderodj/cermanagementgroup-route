@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { formatEventClock, type EventTimeZone } from '@/shared/lib/utils/utils';
 
 /**
  * Los contratos del Activity Explorer, validados al entrar.
@@ -64,6 +65,11 @@ export const explorerActivitySchema = z.object({
     // Si la fila describe una parada o solo el trayecto. Por defecto true
     // para no romper una respuesta anterior al cambio.
     has_activity: z.boolean().optional().default(true),
+    // La zona de la jornada de esta parada (T-1/T-2): sus horas se formatean
+    // en ella. Las históricas sólo traen el desfase. Opcionales para leer
+    // igual contra un servidor anterior.
+    time_zone: z.string().nullable().optional(),
+    utc_offset_minutes: z.number().nullable().optional(),
 });
 export type ExplorerActivity = z.infer<typeof explorerActivitySchema>;
 
@@ -181,12 +187,15 @@ export function formatDuration(seconds: number, hasOpen = false): string {
     return hasOpen ? `${base} +` : base;
 }
 
-/** Una hora del día en `7:51 AM`. `In progress` cuando el hecho no existe aún. */
-export function formatClock(iso?: string | null): string {
+/**
+ * Una hora del día en `7:51 AM`. `In progress` cuando el hecho no existe aún.
+ *
+ * En la zona **de la jornada** (T-2), no en la del navegador de quien
+ * consulta: la regla está en `formatEventClock`, compartida con Today.
+ */
+export function formatClock(iso?: string | null, zona: EventTimeZone = {}): string {
     if (!iso) return 'In progress';
-    const d = new Date(iso);
-    if (Number.isNaN(d.getTime())) return '—';
-    return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    return formatEventClock(iso, zona);
 }
 
 /** El tramo entre dos instantes, en `32m`. Neutro si falta alguno. */

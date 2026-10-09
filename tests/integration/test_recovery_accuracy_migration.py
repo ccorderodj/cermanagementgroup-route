@@ -11,13 +11,23 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import text
 
 from app.database import async_session_maker
 
 pytestmark = pytest.mark.integration
 
-HEAD = "0014_recovery_accuracy"
+#: El head **de la cadena**, leído de Alembic, no la 0014.
+#:
+#: Antes era la constante `"0014_recovery_accuracy"`, escrita cuando la 0014 era
+#: el head. Con la 0015 (T-1/T-2) la prueba subía la base **sólo hasta la 0014**
+#: al terminar su round-trip, la dejaba sin las columnas nuevas y las pruebas
+#: siguientes de ese worker caían en cadena con un error de base de datos. Lo
+#: que esta prueba comprueba es la 0014; a dónde tiene que devolver la base es
+#: al head, sea cual sea.
+HEAD = ScriptDirectory.from_config(Config("app/alembic.ini")).get_current_head()
 ANTES = "0013_client_action_key"
 NUEVO = "recovery_accuracy_rejected"
 

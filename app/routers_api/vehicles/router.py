@@ -26,6 +26,7 @@ from app.routers_api.vehicles.schemas import (
     SupervisorProfileCreate,
     SupervisorProfileRead,
     SupervisorProfileUpdate,
+    SupervisorTimeZoneUpdate,
     VehicleAssignmentCreate,
     VehicleAssignmentEnd,
     VehicleAssignmentRead,
@@ -296,6 +297,32 @@ async def set_supervisor_designation(
         supervisor_profile_id=supervisor_profile_id,
         actor_user_id=current_user.id,
         is_active=payload.is_active,
+        expected_version=payload.version,
+    )
+    filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)
+    fila = next(f for f in filas if f["id"] == perfil.id)
+    return await _leer_perfil(fila, company.id)
+
+
+@supervisors_router.put("/{supervisor_profile_id}/time-zone")
+async def set_supervisor_time_zone(
+    supervisor_profile_id: int,
+    payload: SupervisorTimeZoneUpdate,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> SupervisorProfileRead:
+    """Fija o quita el override de zona horaria de un supervisor (T-1/T-2).
+
+    El mismo permiso que el resto de la configuración del supervisor en este
+    panel: no se crea una capacidad nueva para un campo del mismo formulario.
+    Un supervisor no lo tiene, así que no puede cambiar la zona de nadie.
+    """
+    perfil = await SupervisorProfileService.set_time_zone(
+        company_id=company.id,
+        supervisor_profile_id=supervisor_profile_id,
+        actor_user_id=current_user.id,
+        time_zone=payload.operational_time_zone,
         expected_version=payload.version,
     )
     filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)

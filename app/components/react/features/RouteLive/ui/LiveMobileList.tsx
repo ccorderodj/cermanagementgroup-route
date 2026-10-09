@@ -63,7 +63,7 @@ export function LiveMobileList({ supervisors, onSelect }: LiveMobileListProps) {
                             </span>
                         )}
                         <span className="whitespace-nowrap text-xs text-muted-foreground">
-                            Since {formatSince(s.since)}
+                            Since {formatSince(s)}
                         </span>
                     </span>
                 </button>

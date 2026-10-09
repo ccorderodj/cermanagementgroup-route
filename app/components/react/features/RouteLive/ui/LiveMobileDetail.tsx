@@ -59,7 +59,7 @@ export function LiveMobileDetail({ supervisor: s, onBack }: LiveMobileDetailProp
                     {s.activity_reference || '—'}
                 </div>
                 <div className="mt-2 text-[11px] text-muted-foreground">
-                    Since {formatSince(s.since)}
+                    Since {formatSince(s)}
                 </div>
             </div>
 

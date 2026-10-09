@@ -78,7 +78,7 @@ async def explorar(
         # Como la línea base: el primero de la lista queda seleccionado.
         elegido = autorizados[0]["user_id"] if autorizados else None
 
-    hoy = await dao.business_day_actual(company.id)
+    hoy = await dao.dia_actual_de(company.id, elegido)
     inicio, fin = dao.periodo(rango, ancla or hoy)
 
     opciones = [ExplorerSupervisor(**s) for s in autorizados]

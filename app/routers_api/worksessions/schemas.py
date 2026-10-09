@@ -33,6 +33,11 @@ class WorkSessionStart(BaseModel):
     #: Minutos al este de UTC (p. ej. -240 para EDT). Decide a qué fecha del
     #: calendario local pertenece la ocurrencia — ver D-10 en el informe.
     utc_offset_minutes: Optional[int] = Field(default=None, ge=-720, le=840)
+    #: Zona IANA del dispositivo (`America/New_York`), capturada **al encolar**
+    #: junto al instante (T-1/T-2, D2). Es evidencia de configuración del
+    #: equipo, no de ubicación. Una zona que `zoneinfo` no reconoce no bloquea
+    #: el inicio: se ignora y la jornada se fecha con el desfase, como antes.
+    time_zone: Optional[str] = Field(default=None, max_length=64)
 
 
 class WorkSessionEnd(BaseModel):
@@ -85,6 +90,8 @@ class WorkSessionRead(BaseModel):
     started_at: datetime
     started_received_at: datetime
     started_at_source: str
+    #: La zona efectiva de la jornada (T-1/T-2). `None` en las anteriores.
+    start_time_zone: Optional[str] = None
     ended_at: Optional[datetime] = None
     ended_received_at: Optional[datetime] = None
     ended_at_source: Optional[str] = None

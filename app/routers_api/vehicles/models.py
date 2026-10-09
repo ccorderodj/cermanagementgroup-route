@@ -187,6 +187,11 @@ class SupervisorProfile(TimeStampedModel, IsActiveMixin, SoftDeleteMixin, Versio
         index=True,
     )
     user_id = Column(Integer, nullable=False, index=True)
+    #: Zona IANA operativa fijada por un administrador **para una excepción**
+    #: (T-1/T-2, D1). Vacía por defecto: la zona de cada jornada sale del
+    #: dispositivo y nadie tiene que configurar nada. Cuando existe, prevalece
+    #: sobre la del dispositivo al iniciar la jornada.
+    operational_time_zone = Column(String(64), nullable=True)
 
     def __repr__(self) -> str:
         return (

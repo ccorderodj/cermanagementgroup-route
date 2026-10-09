@@ -92,6 +92,22 @@ class LiveSupervisor(BaseModel):
     operational_mpg: Optional[Decimal] = None
     fuel_grade: Optional[str] = None
 
+    # ── Contrato temporal de la fila (T-1/T-2) ──────────────────────────────
+    #: El día operativo de **esta persona**, en su zona: el que fecha sus
+    #: métricas. `None` cuando su zona es indeterminada y no está trabajando:
+    #: no hay ningún día que se pueda afirmar de ella.
+    session_date: Optional[date] = None
+    #: Zona IANA con que se formatean las horas de la fila: la de la jornada
+    #: que describe el estado, o la de referencia de la persona sin jornada.
+    time_zone: Optional[str] = None
+    #: Desfase de esa jornada al iniciarse. Sólo sirve cuando `time_zone` es
+    #: nula —una jornada anterior a T-1/T-2— y entonces se muestra **como
+    #: desfase** (`UTC-04:00`), nunca como una zona que no se registró (D5).
+    utc_offset_minutes: Optional[int] = None
+    #: Si se pudo determinar la zona de referencia de la persona. `False` es
+    #: lo que la pantalla presenta como «zona no determinada» (D3).
+    time_zone_determined: bool = True
+
 
 class LiveSummary(BaseModel):
     """Las cuatro tarjetas del encabezado, en el orden de V0.7."""
@@ -116,8 +132,11 @@ class LiveToday(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    #: El día de negocio que se está mostrando, con la semántica de
-    #: `session_date` — no la fecha UTC de los eventos.
+    #: **Obsoleto desde T-1/T-2**: ya no hay un día único para la compañía,
+    #: cada fila lleva el de su supervisor en `LiveSupervisor.session_date`. Se
+    #: conserva, con el mismo tipo, para no romper a un cliente anterior; vale
+    #: el día local más frecuente entre los supervisores con zona determinada,
+    #: y ninguna pantalla lo muestra.
     session_date: date
     #: Cuándo se leyó. La pantalla lo usa para decir desde cuándo es lo que ve.
     generated_at: datetime

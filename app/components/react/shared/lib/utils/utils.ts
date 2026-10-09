@@ -412,3 +412,120 @@ export function captureTimeEvidence(): DeviceTimeEvidence {
         utc_offset_minutes: -new Date().getTimezoneOffset(),
     };
 }
+
+/**
+ * La zona IANA del dispositivo (`America/New_York`), o `null` si el navegador
+ * no la da.
+ *
+ * Sólo viaja en `Start Work` (T-1/T-2): fija la zona de la jornada, y el resto
+ * de acciones no la necesitan —sus instantes son absolutos y se muestran en la
+ * zona de su jornada—. Se captura al **encolar**, junto al instante, para que
+ * una acción que esperó sin cobertura no tome la zona del momento de
+ * sincronizar. Es configuración del equipo, no ubicación.
+ */
+export function deviceTimeZone(): string | null {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch {
+        return null;
+    }
+}
+
+/** La zona con que se registraron los instantes de una jornada. */
+export interface EventTimeZone {
+    /** Zona IANA efectiva de la jornada. Nula en las anteriores a T-1/T-2. */
+    timeZone?: string | null;
+    /** Desfase al iniciar la jornada: lo único que tienen las históricas. */
+    utcOffsetMinutes?: number | null;
+}
+
+const ETIQUETA_DESFASE = (minutos: number): string => {
+    const signo = minutos < 0 ? '-' : '+';
+    const absoluto = Math.abs(minutos);
+    const horas = String(Math.floor(absoluto / 60)).padStart(2, '0');
+    return `UTC${signo}${horas}:${String(absoluto % 60).padStart(2, '0')}`;
+};
+
+const RELOJ: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+
+/** Hora, día (`YYYY-MM-DD`) y fecha corta de un instante en una zona. */
+function partesEnZona(instante: Date, timeZone: string) {
+    return {
+        hora: new Intl.DateTimeFormat('en-US', { ...RELOJ, timeZone }).format(instante),
+        dia: new Intl.DateTimeFormat('en-CA', {
+            timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+        }).format(instante),
+        fecha: new Intl.DateTimeFormat('en-US', {
+            timeZone, month: 'short', day: 'numeric',
+        }).format(instante),
+    };
+}
+
+/**
+ * La hora de un instante **en la zona de su jornada**, no en la del navegador
+ * que consulta (T-2, TR-06).
+ *
+ * Tres casos, y en ninguno se inventa precisión:
+ *
+ * * **Zona IANA**: la hora en esa zona. La abreviatura (`EDT`, `CST`) se añade
+ *   sólo cuando difiere de la del navegador en ese instante: es cuando la hora
+ *   sola se leería mal. Sale de la zona, nunca de un desfase.
+ * * **Sólo desfase** (jornada anterior a T-1/T-2): la hora con el desfase
+ *   **siempre** rotulado (`UTC-04:00`). No se le atribuye una zona que no se
+ *   registró ni se promete el cambio de horario que un desfase no sabe (D5).
+ * * **Nada**: la hora en UTC, rotulada `UTC`. No se presenta como local.
+ *
+ * Con `refDate` (`YYYY-MM-DD`), si el día local del instante es otro se
+ * antepone la fecha: una jornada nocturna empezada ayer no puede leerse como
+ * si hubiera empezado hoy.
+ */
+export function eventClockParts(
+    iso: string | null | undefined,
+    zonaDeLaJornada?: EventTimeZone,
+    refDate?: string | null,
+): { hora: string; zona: string } {
+    const zona = zonaDeLaJornada ?? {};
+    if (!iso) return { hora: '—', zona: '' };
+    const instante = new Date(iso);
+    if (Number.isNaN(instante.getTime())) return { hora: '—', zona: '' };
+
+    let partes: ReturnType<typeof partesEnZona>;
+    let etiqueta = '';
+    try {
+        if (!zona.timeZone) throw new RangeError('sin zona');
+        partes = partesEnZona(instante, zona.timeZone);
+        const enZona = new Date(instante.toLocaleString('en-US', { timeZone: zona.timeZone }));
+        const enNavegador = new Date(instante.toLocaleString('en-US'));
+        if (enZona.getTime() !== enNavegador.getTime()) {
+            etiqueta = new Intl.DateTimeFormat('en-US', {
+                timeZone: zona.timeZone, timeZoneName: 'short',
+            }).formatToParts(instante)
+                .find((p) => p.type === 'timeZoneName')?.value ?? '';
+        }
+    } catch {
+        // Sin zona —o una que este navegador no conoce—: el desfase de la
+        // jornada, y si tampoco lo hay, UTC. Los dos rotulados.
+        const desfase = zona.utcOffsetMinutes ?? null;
+        partes = partesEnZona(
+            new Date(instante.getTime() + (desfase ?? 0) * 60_000),
+            'UTC',
+        );
+        etiqueta = desfase === null ? 'UTC' : ETIQUETA_DESFASE(desfase);
+    }
+
+    const prefijo = refDate && partes.dia !== refDate ? `${partes.fecha}, ` : '';
+    return { hora: `${prefijo}${partes.hora}`, zona: etiqueta };
+}
+
+/**
+ * `eventClockParts` en una sola cadena (`2:41 PM EDT`), para los sitios donde
+ * la hora y su zona caben juntas. Una tabla estrecha usa las partes.
+ */
+export function formatEventClock(
+    iso: string | null | undefined,
+    zonaDeLaJornada?: EventTimeZone,
+    refDate?: string | null,
+): string {
+    const { hora, zona } = eventClockParts(iso, zonaDeLaJornada, refDate);
+    return zona ? `${hora} ${zona}` : hora;
+}

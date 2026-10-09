@@ -5,7 +5,7 @@ import {
     type FlushResult,
     type PendingAction,
 } from '@/shared/lib/offlineQueue';
-import { captureTimeEvidence } from '@/shared/lib/utils/utils';
+import { captureTimeEvidence, deviceTimeZone } from '@/shared/lib/utils/utils';
 import { currentWorkSessionSchema, type CurrentWorkSessionResponse } from '../types';
 
 /**
@@ -26,7 +26,15 @@ export async function fetchCurrentWorkSession(): Promise<CurrentWorkSessionRespo
 }
 
 export async function queueStartWork(): Promise<PendingAction> {
-    return enqueueAction('worksession.start', '/worksessions', { ...captureTimeEvidence() });
+    // La zona viaja **sólo** aquí (T-1/T-2): fija la de la jornada. Se captura
+    // al encolar, junto al instante, para que una acción que esperó sin red no
+    // tome la zona del momento de sincronizar. Sin zona, el servidor fecha con
+    // el desfase como antes: no se bloquea nada.
+    const zona = deviceTimeZone();
+    return enqueueAction('worksession.start', '/worksessions', {
+        ...captureTimeEvidence(),
+        ...(zona ? { time_zone: zona } : {}),
+    });
 }
 
 /**

@@ -90,6 +90,23 @@ export async function setSupervisorDesignation(
 }
 
 /**
+ * Fija o quita el override de zona horaria (T-1/T-2). `null` lo quita y la
+ * zona vuelve a salir del dispositivo en cada jornada. Es una excepción, no
+ * una configuración obligatoria: sin él, todo funciona solo.
+ */
+export async function setSupervisorTimeZone(
+    supervisorProfileId: number,
+    timeZone: string | null,
+    version?: number,
+): Promise<SupervisorProfile> {
+    const response = await $api.put(`/supervisors/${supervisorProfileId}/time-zone`, {
+        operational_time_zone: timeZone,
+        version,
+    });
+    return parseApi(supervisorProfileSchema, response.data, 'setSupervisorTimeZone');
+}
+
+/**
  * Saca la designación de Route de la administración. **No borra al usuario**:
  * la identidad es del núcleo y la persona sigue en el tenant.
  *
