@@ -214,7 +214,15 @@ Estimado en el diagnóstico: 5–7 h. Dentro del rango.
 
 ## 8 · Git
 
-`PENDIENTE`
+| | |
+|---|---|
+| Rama | `fix/keep-working-withdraws-end-of-day` |
+| Base | `dev` en `af194f6` |
+| Commit | `4b8fb06` |
+| MR | **!80** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/80 |
+| Árbol | limpio |
+| Fusionado | **No.** CER certifica |
+| Despliegue | código de servidor y bundle; **sin migraciones** |
 
 ---
 
