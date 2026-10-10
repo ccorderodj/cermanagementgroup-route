@@ -236,4 +236,12 @@ ejecución.
 
 ## 8 · Git
 
-`PENDIENTE`
+| | |
+|---|---|
+| Rama | `feature/t1-t2-time-format-ampm` |
+| Base | `dev` en `aebedbd` (T-1/T-2 ya integrado) |
+| Commit | `68a3c5e` |
+| MR | **!82** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/82 |
+| Árbol | limpio |
+| Fusionado | **No.** Sujeto a certificación |
+| Despliegue | servidor y bundle; **sin migraciones**. Tras desplegar, recargar la aplicación |
