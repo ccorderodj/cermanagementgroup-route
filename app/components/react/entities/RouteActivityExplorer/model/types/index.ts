@@ -191,7 +191,8 @@ export function formatDuration(seconds: number, hasOpen = false): string {
  * Una hora del día en `7:51 AM`. `In progress` cuando el hecho no existe aún.
  *
  * En la zona **de la jornada** (T-2), no en la del navegador de quien
- * consulta: la regla está en `formatEventClock`, compartida con Today.
+ * consulta, en 12 h con AM/PM y sin sufijo de zona: la regla está en
+ * `formatEventClock`, compartida con Today y con My Route.
  */
 export function formatClock(iso?: string | null, zona: EventTimeZone = {}): string {
     if (!iso) return 'In progress';

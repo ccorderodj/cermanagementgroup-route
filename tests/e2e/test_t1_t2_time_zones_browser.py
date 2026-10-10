@@ -10,8 +10,8 @@ Lo que se comprueba
 -------------------
 * Today, escritorio y móvil, con el navegador en el Este y en el Centro.
 * User Activity, la tarjeta de la parada, en las dos zonas.
-* Que la abreviatura de zona aparece **sólo** donde hace falta: en el navegador
-  cuya zona no coincide con la de la jornada.
+* Que **ninguna** vista imprime la zona junto a la hora (ajuste AM/PM del PO):
+  la zona sigue gobernando la conversión, pero ya no se muestra.
 * El campo opcional del panel de supervisores: automático por defecto, y un
   override que se guarda.
 
@@ -140,14 +140,14 @@ async def test_today_muestra_la_misma_hora_desde_el_este_y_el_centro(
 
             # La misma hora en las tres vistas: la del supervisor.
             assert all(esperada in texto for texto in vistas.values()), vistas
-            # La abreviatura sólo donde hace falta: el navegador del Centro.
-            assert abreviatura not in vistas["escritorio-este"], vistas
-            assert abreviatura in vistas["escritorio-centro"], vistas
-            assert abreviatura in vistas["movil-centro"], vistas
-            # Mostrar la zona no puede ensanchar la tabla: con ella (Centro)
-            # ocupa lo mismo que sin ella (Este). Que la tabla ya desborde unos
-            # píxeles a 1280 con este contenido es anterior a T-1/T-2 y está en
-            # el reporte; lo que se defiende aquí es no empeorarlo.
+            # Y ninguna lleva sufijo de zona (ajuste AM/PM del PO): ni la
+            # abreviatura ni el desfase, tampoco en el navegador del Centro.
+            for texto in vistas.values():
+                assert abreviatura not in texto, vistas
+                assert "UTC" not in texto, vistas
+            # La tabla ocupa lo mismo con el navegador en las dos zonas. Que ya
+            # desborde unos píxeles a 1280 con este contenido es anterior a
+            # T-1/T-2 y está en su reporte; lo que se defiende es no empeorarlo.
             assert anchos["escritorio-centro"] <= anchos["escritorio-este"] + 1, anchos
         finally:
             await navegador.close()

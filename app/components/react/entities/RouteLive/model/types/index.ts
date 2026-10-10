@@ -162,8 +162,9 @@ export const sufijoDeMillas = (s: LiveSupervisor): string => {
  *
  * En la zona **de la jornada del supervisor**, no en la del navegador de quien
  * mira (T-2): un administrador en Texas y otro en Georgia leen la misma hora
- * para el mismo evento. Si el estado empezó otro día —una jornada nocturna
- * activa después de medianoche— se antepone la fecha.
+ * para el mismo evento. En 12 h con AM/PM y sin sufijo de zona (ajuste AM/PM
+ * del PO). Si el estado empezó otro día —una jornada nocturna activa después
+ * de medianoche— se antepone la fecha.
  *
  * `null` cuando no hay estado — y entonces la pantalla no escribe una hora
  * inventada, escribe el guion neutro. Si la zona de la persona no se pudo
@@ -180,8 +181,9 @@ export const formatSince = (s: LiveSupervisor): string => {
 
 /**
  * `formatSince` partido en dos líneas, para la columna estrecha de la tabla de
- * escritorio: la hora arriba y la zona —o la marca de zona no determinada—
- * debajo. En una sola línea la abreviatura quedaba cortada contra el borde.
+ * escritorio: la hora arriba y, sólo cuando hace falta, la advertencia debajo
+ * —zona no determinada, o `UTC` si la jornada no registró ninguna fuente
+ * horaria—. La zona ya no se imprime, así que en el caso normal no hay nota.
  */
 export const sinceParts = (s: LiveSupervisor): { hora: string; nota: string } => {
     const { hora, zona } = eventClockParts(

@@ -1,4 +1,5 @@
 import { Card } from '@/shared/ui/shadcn/new-york';
+import { formatClockRange } from '@/shared/lib/utils/utils';
 import {
     formatClock,
     formatMiles,
@@ -72,6 +73,12 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                                 </h4>
                                 <div className="text-xs text-muted-foreground">
                                     {/*
+                                      * Con los dos extremos, el tramo compacto
+                                      * del ajuste AM/PM: `5:41–6:02 PM`, o con
+                                      * los dos periodos si cambian, o con
+                                      * `(+1 day)` si cruza medianoche.
+                                      *
+                                      * Sin final, cada extremo por su cuenta:
                                       * `formatClock(null)` dice `In progress`,
                                       * y para una parada abierta es verdad. Un
                                       * viaje que nunca abrió ninguna no tiene
@@ -80,9 +87,15 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                                       * de que algo va a cerrarse (AC3).
                                       */}
                                     {a.context_reference || '—'} ·{' '}
-                                    {formatClock(a.trip_started_at, zona)}
-                                    –
-                                    {a.has_activity ? formatClock(a.ended_at, zona) : '—'}
+                                    {/* El tramo no se parte: en móvil quedaba
+                                        `5:41–6:02` arriba y `PM` sola abajo. */}
+                                    <span className="whitespace-nowrap">
+                                        {(a.has_activity
+                                            && formatClockRange(a.trip_started_at, a.ended_at, zona))
+                                            || `${formatClock(a.trip_started_at, zona)}–${
+                                                a.has_activity ? formatClock(a.ended_at, zona) : '—'
+                                            }`}
+                                    </span>
                                 </div>
                             </div>
                             <div className="text-right">

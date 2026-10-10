@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { captureFor } from '@/shared/lib/location';
+import { deviceTimeZone, formatEventClock } from '@/shared/lib/utils/utils';
 import {
     Button, Checkbox, Label, Select, SelectContent, SelectItem,
     SelectTrigger, SelectValue, Textarea,
@@ -47,13 +48,15 @@ interface ActivityStopProps {
     execution: ActivityExecution | null;
     /** Se llama tras cada cambio para releer el estado autoritativo. */
     onChanged: () => void | Promise<void>;
+    /**
+     * Zona efectiva de la jornada (T-1/T-2), para leer las horas en ella.
+     * Sin ella, la del dispositivo: en la pantalla del supervisor, es la suya.
+     */
+    timeZone?: string | null;
 }
 
-function formatearHora(iso: string): string {
-    return new Date(iso).toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit',
-    });
+function formatearHora(iso: string, timeZone?: string | null): string {
+    return formatEventClock(iso, { timeZone: timeZone ?? deviceTimeZone() });
 }
 
 /**
@@ -70,7 +73,9 @@ function transcurrido(desde: string, ahora: number): string {
     return `${Math.floor(minutos / 60)}h ${minutos % 60}m`;
 }
 
-export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) {
+export function ActivityStop({
+    trip, execution, onChanged, timeZone,
+}: ActivityStopProps) {
     const purpose = trip.current_purpose;
     const listaActividades = POSTARRIVAL_ACTIVITY_LIST[purpose];
 
@@ -188,7 +193,7 @@ export function ActivityStop({ trip, execution, onChanged }: ActivityStopProps) 
                 {transcurrido(inicio, ahora)}
             </p>
             <p className="text-sm text-muted-foreground">
-                {`Working here since ${formatearHora(inicio)}`}
+                {`Working here since ${formatearHora(inicio, timeZone)}`}
             </p>
         </div>
     );

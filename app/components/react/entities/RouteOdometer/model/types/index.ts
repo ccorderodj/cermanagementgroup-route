@@ -154,6 +154,10 @@ export type OdometerException = z.infer<typeof odometerExceptionSchema>;
 export const odometerExceptionQueueRowSchema = odometerExceptionSchema.extend({
     requested_by_name: z.string(),
     vehicle_unit: z.string().nullable().optional(),
+    // La zona de la jornada de la solicitud (T-1/T-2). Opcionales para leer
+    // igual contra un servidor anterior.
+    time_zone: z.string().nullable().optional(),
+    utc_offset_minutes: z.number().nullable().optional(),
 });
 
 export type OdometerExceptionQueueRow = z.infer<

@@ -10,6 +10,7 @@ import {
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
 import { normalizeApiError } from '@/shared/api';
+import { formatEventDateTime } from '@/shared/lib/utils/utils';
 import {
     approveOdometerException,
     fetchPendingOdometerExceptions,
@@ -40,12 +41,14 @@ import {
  * con palabras para que el orden de atención sea evidente.
  */
 
-function formatearFecha(iso: string): string {
-    return new Date(iso).toLocaleString(undefined, {
-        month: 'short',
-        day: 'numeric',
-        hour: 'numeric',
-        minute: '2-digit',
+/**
+ * `Oct 8, 5:41 PM`, en la zona de la jornada de la solicitud (T-1/T-2) y no en
+ * la del administrador que revisa; en 12 h con AM/PM y sin sufijo de zona.
+ */
+function formatearFecha(fila: OdometerExceptionQueueRow): string {
+    return formatEventDateTime(fila.requested_at, {
+        timeZone: fila.time_zone,
+        utcOffsetMinutes: fila.utc_offset_minutes,
     });
 }
 
@@ -171,7 +174,7 @@ export function OdometerExceptionsPanel() {
                                         )}
                                     </TableCell>
                                     <TableCell className="text-muted-foreground">
-                                        {formatearFecha(fila.requested_at)}
+                                        {formatearFecha(fila)}
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <div className="flex justify-end gap-2">

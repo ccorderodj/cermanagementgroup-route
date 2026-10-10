@@ -18,6 +18,8 @@ export const workSessionSchema = z.object({
     started_at: z.string(),
     started_received_at: z.string(),
     started_at_source: z.enum(['device', 'server_receipt']),
+    /** Zona efectiva de la jornada (T-1/T-2). Nula en las anteriores. */
+    start_time_zone: z.string().nullable().optional(),
     ended_at: z.string().nullable().optional(),
     ended_received_at: z.string().nullable().optional(),
     ended_at_source: z.enum(['device', 'server_receipt']).nullable().optional(),

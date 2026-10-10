@@ -101,6 +101,11 @@ class OdometerExceptionQueueRead(OdometerExceptionRead):
 
     requested_by_name: str
     vehicle_unit: Optional[str] = None
+    #: La zona de la jornada de la solicitud (T-1/T-2), para mostrar su hora
+    #: en ella y no en la del administrador. Sólo lectura; las históricas
+    #: traen únicamente el desfase.
+    time_zone: Optional[str] = None
+    utc_offset_minutes: Optional[int] = None
 
 
 class OdometerPhotoResult(BaseModel):
