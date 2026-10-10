@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button } from '@/shared/ui/shadcn/new-york';
+import { deviceTimeZone, formatEventClock } from '@/shared/lib/utils/utils';
 import { ConfirmDestructiveDialog } from '@/features/Common';
 import { RouteMobileShell } from '@/widgets/RouteShell';
 import { TripContextChoices, TripContextForm, TripContextPicker } from '@/features/RouteTrip';
@@ -85,10 +86,15 @@ import { LocationGate } from '@/features/RouteLocationGate';
  * no es una parada de trabajo.
  */
 
-function formatearHora(iso: string): string {
-    return new Date(iso).toLocaleTimeString(undefined, {
-        hour: 'numeric',
-        minute: '2-digit',
+/**
+ * La hora en la zona **de la jornada**, en 12 h con AM/PM (ajuste AM/PM del
+ * PO). Antes salía del idioma del navegador: un teléfono en español escribía
+ * `14:11`. Sin zona de jornada —una anterior a T-1/T-2— se usa la del propio
+ * dispositivo: en la pantalla del supervisor, es la suya.
+ */
+function formatearHora(iso: string, session: WorkSession): string {
+    return formatEventClock(iso, {
+        timeZone: session.start_time_zone ?? deviceTimeZone(),
     });
 }
 
@@ -122,7 +128,7 @@ function Cabecera({ session }: { session: WorkSession }) {
                 Working since
             </p>
             <p className="mt-1 text-2xl font-semibold text-foreground">
-                {formatearHora(session.started_at)}
+                {formatearHora(session.started_at, session)}
             </p>
         </section>
     );
@@ -1041,6 +1047,7 @@ export const RouteMyRoutePage = () => {
                             <ActivityStop
                                 trip={view.trip}
                                 execution={view.execution}
+                                timeZone={view.session.start_time_zone}
                                 onChanged={reconcile}
                             />
 

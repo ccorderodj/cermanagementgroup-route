@@ -304,6 +304,8 @@ async def list_pending_exceptions(
             **OdometerExceptionRead.model_validate(fila["request"]).model_dump(),
             requested_by_name=fila["requested_by_name"],
             vehicle_unit=fila["vehicle_unit"],
+            time_zone=fila["time_zone"],
+            utc_offset_minutes=fila["utc_offset_minutes"],
         )
         for fila in filas
     ]

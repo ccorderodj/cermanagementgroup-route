@@ -153,6 +153,7 @@ class OdometerExceptionRequestsDAO(BaseDAO):
         """
         from app.routers_api.users.models import Users
         from app.routers_api.vehicles.models import Vehicle
+        from app.routers_api.worksessions.models import WorkSession
 
         async with db_session() as session:
             filas = await session.execute(
@@ -162,12 +163,21 @@ class OdometerExceptionRequestsDAO(BaseDAO):
                     Users.last_name,
                     Users.username,
                     Vehicle.unit,
+                    # La zona de la jornada de la solicitud (T-1/T-2): su hora
+                    # se muestra en ella, no en la del administrador.
+                    WorkSession.start_time_zone,
+                    WorkSession.start_utc_offset_minutes,
                 )
                 .join(Users, Users.id == OdometerExceptionRequest.requested_by)
                 .outerjoin(
                     Vehicle,
                     (Vehicle.id == OdometerExceptionRequest.vehicle_id)
                     & (Vehicle.company_id == OdometerExceptionRequest.company_id),
+                )
+                .outerjoin(
+                    WorkSession,
+                    (WorkSession.id == OdometerExceptionRequest.work_session_id)
+                    & (WorkSession.company_id == OdometerExceptionRequest.company_id),
                 )
                 .where(
                     OdometerExceptionRequest.company_id == company_id,
@@ -181,6 +191,9 @@ class OdometerExceptionRequestsDAO(BaseDAO):
                     "request": solicitud,
                     "requested_by_name": f"{nombre} {apellido}".strip() or usuario,
                     "vehicle_unit": unidad,
+                    "time_zone": zona,
+                    "utc_offset_minutes": desfase,
                 }
-                for solicitud, nombre, apellido, usuario, unidad in filas.all()
+                for solicitud, nombre, apellido, usuario, unidad, zona, desfase
+                in filas.all()
             ]

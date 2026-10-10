@@ -439,19 +439,39 @@ export interface EventTimeZone {
     utcOffsetMinutes?: number | null;
 }
 
-const ETIQUETA_DESFASE = (minutos: number): string => {
-    const signo = minutos < 0 ? '-' : '+';
-    const absoluto = Math.abs(minutos);
-    const horas = String(Math.floor(absoluto / 60)).padStart(2, '0');
-    return `UTC${signo}${horas}:${String(absoluto % 60).padStart(2, '0')}`;
+/**
+ * Un instante leído en el reloj de la zona de su jornada (T-1/T-2).
+ *
+ * `incierta` marca el único caso sin fuente horaria fiable: ni zona IANA ni
+ * desfase. Ahí la hora se lee en UTC y quien la muestra tiene que decirlo;
+ * presentarla a secas sería fingir una hora local que no se conoce (FR-03).
+ */
+interface RelojLocal {
+    /** `5:41`, sin periodo. */
+    reloj: string;
+    periodo: string;
+    /** `YYYY-MM-DD` en la zona de la jornada. */
+    dia: string;
+    /** `Oct 8`. */
+    fecha: string;
+    incierta: boolean;
+}
+
+const RELOJ_12H: Intl.DateTimeFormatOptions = {
+    hour: 'numeric', minute: '2-digit', hour12: true,
 };
 
-const RELOJ: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
-
-/** Hora, día (`YYYY-MM-DD`) y fecha corta de un instante en una zona. */
-function partesEnZona(instante: Date, timeZone: string) {
+function leerEnZona(instante: Date, timeZone: string): Omit<RelojLocal, 'incierta'> {
+    // `en-US` y `hour12` explícitos: sin ellos, un navegador en español o en
+    // inglés británico escribe `17:41` y la convención deja de ser una sola.
+    const partes = new Intl.DateTimeFormat('en-US', { ...RELOJ_12H, timeZone })
+        .formatToParts(instante);
+    const valor = (tipo: Intl.DateTimeFormatPartTypes) => (
+        partes.find((p) => p.type === tipo)?.value ?? ''
+    );
     return {
-        hora: new Intl.DateTimeFormat('en-US', { ...RELOJ, timeZone }).format(instante),
+        reloj: `${valor('hour')}:${valor('minute')}`,
+        periodo: valor('dayPeriod').toUpperCase(),
         dia: new Intl.DateTimeFormat('en-CA', {
             timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
         }).format(instante),
@@ -461,19 +481,36 @@ function partesEnZona(instante: Date, timeZone: string) {
     };
 }
 
+function relojLocal(
+    iso: string | null | undefined,
+    zona: EventTimeZone = {},
+): RelojLocal | null {
+    if (!iso) return null;
+    const instante = new Date(iso);
+    if (Number.isNaN(instante.getTime())) return null;
+
+    if (zona.timeZone) {
+        try {
+            return { ...leerEnZona(instante, zona.timeZone), incierta: false };
+        } catch {
+            // Una zona que este navegador no conoce: se sigue con el desfase.
+        }
+    }
+    // Sin zona IANA —una jornada anterior a T-1/T-2—: el desfase con que se
+    // registró, aplicado como reloj fijo. No se le atribuye ninguna zona ni se
+    // promete el cambio de horario que un desfase no sabe (D5).
+    const desfase = zona.utcOffsetMinutes ?? null;
+    const desplazado = new Date(instante.getTime() + (desfase ?? 0) * 60_000);
+    return { ...leerEnZona(desplazado, 'UTC'), incierta: desfase === null };
+}
+
 /**
  * La hora de un instante **en la zona de su jornada**, no en la del navegador
- * que consulta (T-2, TR-06).
+ * que consulta (T-2), en 12 h con AM/PM y **sin sufijo de zona** (ajuste AM/PM
+ * del PO). La zona sigue gobernando la conversión; sólo deja de imprimirse.
  *
- * Tres casos, y en ninguno se inventa precisión:
- *
- * * **Zona IANA**: la hora en esa zona. La abreviatura (`EDT`, `CST`) se añade
- *   sólo cuando difiere de la del navegador en ese instante: es cuando la hora
- *   sola se leería mal. Sale de la zona, nunca de un desfase.
- * * **Sólo desfase** (jornada anterior a T-1/T-2): la hora con el desfase
- *   **siempre** rotulado (`UTC-04:00`). No se le atribuye una zona que no se
- *   registró ni se promete el cambio de horario que un desfase no sabe (D5).
- * * **Nada**: la hora en UTC, rotulada `UTC`. No se presenta como local.
+ * `zona` es `'UTC'` únicamente cuando no hay ninguna fuente horaria —ni zona ni
+ * desfase—: es la advertencia de que la hora no es local, no un sufijo.
  *
  * Con `refDate` (`YYYY-MM-DD`), si el día local del instante es otro se
  * antepone la fecha: una jornada nocturna empezada ayer no puede leerse como
@@ -484,43 +521,16 @@ export function eventClockParts(
     zonaDeLaJornada?: EventTimeZone,
     refDate?: string | null,
 ): { hora: string; zona: string } {
-    const zona = zonaDeLaJornada ?? {};
-    if (!iso) return { hora: '—', zona: '' };
-    const instante = new Date(iso);
-    if (Number.isNaN(instante.getTime())) return { hora: '—', zona: '' };
-
-    let partes: ReturnType<typeof partesEnZona>;
-    let etiqueta = '';
-    try {
-        if (!zona.timeZone) throw new RangeError('sin zona');
-        partes = partesEnZona(instante, zona.timeZone);
-        const enZona = new Date(instante.toLocaleString('en-US', { timeZone: zona.timeZone }));
-        const enNavegador = new Date(instante.toLocaleString('en-US'));
-        if (enZona.getTime() !== enNavegador.getTime()) {
-            etiqueta = new Intl.DateTimeFormat('en-US', {
-                timeZone: zona.timeZone, timeZoneName: 'short',
-            }).formatToParts(instante)
-                .find((p) => p.type === 'timeZoneName')?.value ?? '';
-        }
-    } catch {
-        // Sin zona —o una que este navegador no conoce—: el desfase de la
-        // jornada, y si tampoco lo hay, UTC. Los dos rotulados.
-        const desfase = zona.utcOffsetMinutes ?? null;
-        partes = partesEnZona(
-            new Date(instante.getTime() + (desfase ?? 0) * 60_000),
-            'UTC',
-        );
-        etiqueta = desfase === null ? 'UTC' : ETIQUETA_DESFASE(desfase);
-    }
-
-    const prefijo = refDate && partes.dia !== refDate ? `${partes.fecha}, ` : '';
-    return { hora: `${prefijo}${partes.hora}`, zona: etiqueta };
+    const r = relojLocal(iso, zonaDeLaJornada);
+    if (!r) return { hora: '—', zona: '' };
+    const prefijo = refDate && r.dia !== refDate ? `${r.fecha}, ` : '';
+    return {
+        hora: `${prefijo}${r.reloj} ${r.periodo}`,
+        zona: r.incierta ? 'UTC' : '',
+    };
 }
 
-/**
- * `eventClockParts` en una sola cadena (`2:41 PM EDT`), para los sitios donde
- * la hora y su zona caben juntas. Una tabla estrecha usa las partes.
- */
+/** `eventClockParts` en una sola cadena: `5:41 PM`. */
 export function formatEventClock(
     iso: string | null | undefined,
     zonaDeLaJornada?: EventTimeZone,
@@ -528,4 +538,47 @@ export function formatEventClock(
 ): string {
     const { hora, zona } = eventClockParts(iso, zonaDeLaJornada, refDate);
     return zona ? `${hora} ${zona}` : hora;
+}
+
+/** Fecha y hora, para listas que mezclan días: `Oct 8, 5:41 PM`. */
+export function formatEventDateTime(
+    iso: string | null | undefined,
+    zonaDeLaJornada?: EventTimeZone,
+): string {
+    const r = relojLocal(iso, zonaDeLaJornada);
+    if (!r) return '—';
+    return `${r.fecha}, ${r.reloj} ${r.periodo}${r.incierta ? ' UTC' : ''}`;
+}
+
+/**
+ * Un tramo entre dos instantes de la misma jornada, sin repetir lo que no
+ * hace falta y sin volverse ambiguo (FR-02):
+ *
+ * * mismo periodo: `5:41–6:02 PM`;
+ * * distinto periodo: `11:50 AM–12:10 PM`;
+ * * distinto día local: `11:50 PM–12:10 AM (+1 day)`.
+ *
+ * Los días se comparan en la zona de la jornada, no restando horas de reloj.
+ * Si falta un extremo devuelve `null` y quien llama decide qué decir —`In
+ * progress` no es lo mismo que «no hubo»—.
+ */
+export function formatClockRange(
+    desdeIso: string | null | undefined,
+    hastaIso: string | null | undefined,
+    zonaDeLaJornada?: EventTimeZone,
+): string | null {
+    const a = relojLocal(desdeIso, zonaDeLaJornada);
+    const b = relojLocal(hastaIso, zonaDeLaJornada);
+    if (!a || !b) return null;
+
+    const dias = Math.round(
+        (Date.parse(`${b.dia}T00:00:00Z`) - Date.parse(`${a.dia}T00:00:00Z`))
+            / 86_400_000,
+    );
+    const incierta = a.incierta ? ' UTC' : '';
+    if (dias === 0 && a.periodo === b.periodo) {
+        return `${a.reloj}–${b.reloj} ${b.periodo}${incierta}`;
+    }
+    const salto = dias === 0 ? '' : ` (${dias > 0 ? '+' : ''}${dias} day${Math.abs(dias) === 1 ? '' : 's'})`;
+    return `${a.reloj} ${a.periodo}–${b.reloj} ${b.periodo}${incierta}${salto}`;
 }
