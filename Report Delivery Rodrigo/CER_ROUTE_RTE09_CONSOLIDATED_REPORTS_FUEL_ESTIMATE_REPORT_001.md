@@ -521,7 +521,14 @@ alcance y el resto se ajustó a la estimación.
 
 ## Git
 
-⟨GIT⟩
+| | |
+|---|---|
+| Rama | `feature/rte09-consolidated-reports-fuel` (desde `dev` `22b1bfc`) |
+| Commits | `307b61c` implementación, pruebas y este reporte · el siguiente añade este bloque de Git |
+| Push | sí |
+| MR | **!85** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/85 → `dev` |
+| Fusionado | **No**: pendiente de la validación de CER |
+| Árbol | limpio tras el push |
 
 ---
 
