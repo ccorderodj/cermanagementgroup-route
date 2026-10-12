@@ -228,6 +228,89 @@ async def test_no_se_ve_el_supervisor_de_otro_tenant(
     assert respuesta.status_code == 404, respuesta.text
 
 
+async def test_sin_sesion_no_se_explora(seeded, alpha_anonymous):
+    """H-1: mostrar el selector en móvil no abre la puerta a nadie sin sesión."""
+    respuesta = await alpha_anonymous.get(
+        RUTA,
+        params={
+            "range": "day",
+            "supervisor_user_id": seeded.alpha.users["supervisor"].id,
+        },
+    )
+    assert respuesta.status_code == 401, respuesta.text
+
+
+async def test_un_supervisor_no_elegible_del_mismo_tenant_no_se_lee(
+    seeded, alpha_client
+):
+    """H-1: el selector sólo ofrece supervisores elegibles, y el servidor lo exige.
+
+    Una designación retirada sigue existiendo en el tenant, pero ya no es un
+    supervisor que se pueda explorar. Manipular el identificador desde el
+    navegador —el selector ya no lo ofrece— recibe el mismo 404 que un id que
+    no existe: confirmar que esa persona está en la compañía sería decir algo.
+    """
+    perfil, _ = await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H1-RET")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    # Retirar la designación exige cerrar antes su vehículo: es la regla del
+    # producto, y se sigue por la API en vez de saltarla por SQL.
+    historial = (
+        await alpha_client.get(f"/api/supervisors/{perfil['id']}/assignments")
+    ).json()
+    for asignacion in historial:
+        if asignacion.get("effective_to") is None:
+            cerrada = await alpha_client.post(
+                f"/api/supervisors/assignments/{asignacion['id']}/end", json={}
+            )
+            assert cerrada.status_code == 200, cerrada.text
+    retirada = await alpha_client.put(
+        f"/api/supervisors/{perfil['id']}", json={"is_active": False}
+    )
+    assert retirada.status_code == 200, retirada.text
+
+    opciones = await _explorar(alpha_client, range="day")
+    assert seeded.alpha.users["supervisor"].id not in {
+        s["user_id"] for s in opciones["supervisors"]
+    }, "el selector no la ofrece"
+
+    respuesta = await alpha_client.get(
+        RUTA,
+        params={
+            "range": "day",
+            "supervisor_user_id": seeded.alpha.users["supervisor"].id,
+        },
+    )
+    assert respuesta.status_code == 404, respuesta.text
+
+
+async def test_otro_tenant_y_un_id_inexistente_son_indistinguibles(
+    seeded, alpha_client, beta_client
+):
+    """H-1: la respuesta a un supervisor ajeno no dice nada que no diga un id falso.
+
+    Mismo estado y **mismo cuerpo**, sin nombres ni pistas: si se distinguieran,
+    probar identificadores desde el selector manipulado serviría para enumerar
+    supervisores de otras compañías.
+    """
+    await _perfil_y_vehiculo(
+        beta_client, seeded, unidad="V-BETA-H1", compania="beta"
+    )
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    ajeno = await alpha_client.get(
+        RUTA,
+        params={"range": "day", "supervisor_user_id": seeded.beta.users["supervisor"].id},
+    )
+    inexistente = await alpha_client.get(
+        RUTA, params={"range": "day", "supervisor_user_id": 987654321}
+    )
+
+    assert ajeno.status_code == inexistente.status_code == 404
+    assert ajeno.json() == inexistente.json()
+    nombre = seeded.beta.users["supervisor"].email.split("@")[0]
+    assert nombre not in ajeno.text
+
+
 async def test_las_opciones_del_selector_son_del_tenant(seeded, alpha_client):
     """El selector de supervisor de la línea base, autorizado en el servidor."""
     await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-SEL")

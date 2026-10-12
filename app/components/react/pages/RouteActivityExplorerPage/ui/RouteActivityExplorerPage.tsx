@@ -30,11 +30,13 @@ import {
  * Qué cambia en móvil, y por qué sólo eso
  * ----------------------------------------
  * El mockup tiene un ámbito móvil explícito para esta pantalla: la barra de
- * filtros se apila y **los campos de supervisor y fecha no se muestran**
- * (`.app.device-mobile .fields-inline { display: none }`). Lo demás es la misma
- * jerarquía con la misma información, reflujada. No hay una arquitectura de
- * información distinta para móvil aquí —a diferencia de Today / Live, que sí la
- * tiene— así que no se inventa una.
+ * filtros se apila y los campos de supervisor y fecha no se muestran
+ * (`.app.device-mobile .fields-inline { display: none }`). H-1 autoriza **una**
+ * excepción: el selector de supervisor sí se muestra, porque sin él un
+ * administrador en el teléfono sólo podía ver al primero de la lista. La fecha
+ * sigue oculta. Lo demás es la misma jerarquía con la misma información,
+ * reflujada; no hay una arquitectura de información distinta para móvil aquí
+ * —a diferencia de Today / Live, que sí la tiene— así que no se inventa una.
  *
  * Sólo lectura
  * ------------
@@ -125,6 +127,25 @@ export function RouteActivityExplorerPage() {
 
     useEffect(() => { releer(); }, [releer]);
 
+    /**
+     * Los datos que se pueden pintar **como actuales**: los del supervisor que
+     * está seleccionado (H-1, FR2.6).
+     *
+     * Al cambiar de supervisor, `datos` todavía es la lectura del anterior
+     * hasta que llega la nueva. Pintarlos mientras tanto enseñaba las paradas y
+     * las millas de A bajo un selector que ya dice B; y si la lectura de B
+     * fallaba, el aviso *Showing the last known state* presentaba como de B lo
+     * que era de A. Ahora, mientras no coinciden, la pantalla dice lo que de
+     * verdad sabe: que está cargando, o que no pudo leer.
+     *
+     * Cambiar la fecha o el rango **no** cuenta: siguen siendo los datos de la
+     * misma persona, y conservarlos durante un fallo es lo que FR-09 pide.
+     */
+    const vigentes = datos
+        && (supervisor == null || datos.supervisor_user_id === supervisor)
+        ? datos
+        : null;
+
     const bajarNivel = (grupo: ExplorerGroup) => {
         const destino = datos?.grouped_by ? BAJA_A[datos.grouped_by] : null;
         if (!destino) return;
@@ -154,7 +175,7 @@ export function RouteActivityExplorerPage() {
         </div>
     );
 
-    const aviso = error && datos && (
+    const aviso = error && vigentes && (
         <p className="mb-3 text-xs text-muted-foreground">
             Could not refresh just now. Showing the last known state.
         </p>
@@ -169,11 +190,11 @@ export function RouteActivityExplorerPage() {
             onDateChange={setFecha}
             range={rango}
             onRangeChange={setRango}
-            showFields={!esMovil}
+            showDate={!esMovil}
         />
     );
 
-    if (cargando && !datos) {
+    if (cargando && !vigentes) {
         return (
             <div className="flex flex-col p-4 md:p-6">
                 {encabezado}
@@ -185,7 +206,7 @@ export function RouteActivityExplorerPage() {
         );
     }
 
-    if (error && !datos) {
+    if (error && !vigentes) {
         return (
             <div className="flex flex-col p-4 md:p-6">
                 {encabezado}
@@ -210,20 +231,20 @@ export function RouteActivityExplorerPage() {
               * captura del mockup lo delató — §17 prohíbe añadidos visuales, y
               * la fecha ya está en su selector.
               */}
-            {datos && datos.range === 'day' && (
+            {vigentes && vigentes.range === 'day' && (
                 <>
-                    {datos.summary && <ExplorerDaySummary summary={datos.summary} />}
-                    <ExplorerActivityCards activities={datos.activities} />
+                    {vigentes.summary && <ExplorerDaySummary summary={vigentes.summary} />}
+                    <ExplorerActivityCards activities={vigentes.activities} />
                 </>
             )}
 
-            {datos && datos.range !== 'day' && datos.grouped_by && (
+            {vigentes && vigentes.range !== 'day' && vigentes.grouped_by && (
                 <ExplorerGroupList
-                    range={datos.range}
-                    start={datos.start}
-                    end={datos.end}
-                    groupedBy={datos.grouped_by}
-                    groups={datos.groups}
+                    range={vigentes.range}
+                    start={vigentes.start}
+                    end={vigentes.end}
+                    groupedBy={vigentes.grouped_by}
+                    groups={vigentes.groups}
                     onDrill={bajarNivel}
                 />
             )}
