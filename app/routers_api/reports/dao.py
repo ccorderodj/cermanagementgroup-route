@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from datetime import date
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.core.db.session import db_session
 from app.routers_api.activities.models import (
@@ -47,6 +47,23 @@ from app.routers_api.trips.models import Trip
 from app.routers_api.users.models import Users
 from app.routers_api.vehicles.models import Vehicle
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
+
+
+async def primer_dia(*, company_id: int, user_ids: list[int]) -> date | None:
+    """El primer día de negocio con jornada de esos supervisores, o `None`.
+
+    Acota las opciones del selector de periodo al alcance autorizado: no
+    enseña años vacíos antes de que existiera ningún dato.
+    """
+    if not user_ids:
+        return None
+    async with db_session() as session:
+        return await session.scalar(
+            select(func.min(WorkSession.session_date)).where(
+                WorkSession.company_id == company_id,
+                WorkSession.user_id.in_(user_ids),
+            )
+        )
 
 
 async def hechos(

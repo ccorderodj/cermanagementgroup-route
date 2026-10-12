@@ -21,10 +21,15 @@ sobre los metros de cada corte, como en el resto del producto.
 from __future__ import annotations
 
 from collections import Counter
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import ROUND_HALF_UP, Decimal
 
-from app.routers_api.activityexplorer.dao import componer_grupos, periodo, supervisores
+from app.routers_api.activityexplorer.dao import (
+    _subperiodos,
+    componer_grupos,
+    periodo,
+    supervisores,
+)
 from app.routers_api.fuelreference.service import (
     CALCULATED,
     MISSING_INPUT,
@@ -56,6 +61,17 @@ AGRUPA_POR: dict[str, str] = {"week": "day", "month": "week", "year": "month"}
 
 CENTIMOS = Decimal("0.01")
 
+#: Cuántas opciones ofrece, como mucho, el selector de periodo: un año de
+#: semanas, tres de meses, diez de años. Acotado a propósito: una lista sin
+#: límite crecería con la historia del tenant. Un periodo más antiguo sigue
+#: siendo consultable por el API (`date`), y se añade a las opciones si es el
+#: que se está mostrando (una recarga con un periodo guardado).
+OPCIONES_MAXIMAS: dict[str, int] = {"week": 52, "month": 36, "year": 10}
+
+
+class GrupoFueraDelPeriodo(ValueError):
+    """El subgrupo pedido no es uno de los del periodo principal."""
+
 
 async def hoy_del_informe(company_id: int, user_ids: list[int]) -> date:
     """El día que ancla el periodo en curso, decidido en el servidor.
@@ -83,11 +99,17 @@ async def construir(
     rango: str,
     ancla: date | None,
     supervisor_user_id: int | None,
+    grupo: date | None = None,
 ) -> tuple[dict, list[dict]]:
     """La vista y las filas enriquecidas que la producen (las del Excel).
 
     `supervisor_user_id` ya viene validado por el router contra el conjunto
     autorizado; `None` es *All Supervisors*.
+
+    `grupo` es el inicio de un subgrupo del periodo —un día de la semana, una
+    semana del mes, un mes del año— y **sólo acota el desglose**: KPIs, grupos
+    y filas del Excel siguen siendo del periodo principal. Un `grupo` que no es
+    uno de esos subgrupos lanza `GrupoFueraDelPeriodo`.
     """
     autorizados = await supervisores(company_id)
     user_ids = (
@@ -96,8 +118,16 @@ async def construir(
         else [s["user_id"] for s in autorizados]
     )
 
-    ancla = ancla or await hoy_del_informe(company_id, user_ids)
-    inicio, fin = periodo(rango, ancla)
+    hoy = await hoy_del_informe(company_id, user_ids)
+    inicio, fin = periodo(rango, ancla or hoy)
+
+    elegido = None
+    if grupo is not None:
+        elegido = next(
+            ((a, b) for a, b in _subperiodos(rango, inicio, fin) if a == grupo), None
+        )
+        if elegido is None:
+            raise GrupoFueraDelPeriodo(grupo)
     filas = await dao.hechos(
         company_id=company_id, user_ids=user_ids, inicio=inicio, fin=fin
     )
@@ -111,23 +141,32 @@ async def construir(
         dentro = [f for f in filas if g["start"] <= f["session_date"] <= g["end"]]
         grupos.append({"start": g["start"], "end": g["end"], **_metricas(dentro, combustible)})
 
+    # El desglose, del periodo entero o del subgrupo: las mismas filas,
+    # acotadas por `session_date` con los mismos límites que el grupo.
+    base = (
+        [f for f in filas if elegido[0] <= f["session_date"] <= elegido[1]]
+        if elegido
+        else filas
+    )
     desglose = [
         {"purpose": p, **_metricas(dentro, combustible)}
         for p in PROPOSITOS_V07
-        if (dentro := [f for f in filas if f["purpose"] == p])
+        if (dentro := [f for f in base if f["purpose"] == p])
     ]
     excluidos = [
         {"purpose": p, **_metricas(dentro, combustible)}
-        for p in sorted({f["purpose"] for f in filas} - set(PROPOSITOS_V07))
-        if (dentro := [f for f in filas if f["purpose"] == p])
+        for p in sorted({f["purpose"] for f in base} - set(PROPOSITOS_V07))
+        if (dentro := [f for f in base if f["purpose"] == p])
     ]
 
     tipos = Counter(
         etiqueta
-        for f in filas
+        for f in base
         if f["execution_id"] is not None
         for etiqueta in f["activity_labels"]
     )
+
+    opciones = await _opciones(company_id, user_ids, rango, hoy, (inicio, fin))
 
     vista = {
         "range": rango,
@@ -136,8 +175,12 @@ async def construir(
         "grouped_by": AGRUPA_POR[rango],
         "supervisors": autorizados,
         "supervisor_user_id": supervisor_user_id,
+        "periods": [{"start": a, "end": b} for a, b in opciones],
         "summary": _metricas(filas, combustible),
         "groups": grupos,
+        "selected_group": (
+            {"start": elegido[0], "end": elegido[1]} if elegido else None
+        ),
         "breakdown": desglose,
         "breakdown_excluded": excluidos,
         "activity_types": [
@@ -147,6 +190,33 @@ async def construir(
         "fuel": _resumen_combustible(filas, combustible),
     }
     return vista, filas
+
+
+async def _opciones(
+    company_id: int,
+    user_ids: list[int],
+    rango: str,
+    hoy: date,
+    mostrado: tuple[date, date],
+) -> list[tuple[date, date]]:
+    """Las opciones del selector, de la más reciente a la más antigua.
+
+    Empiezan en el periodo **en curso del servidor** —nunca en la fecha del
+    navegador— y retroceden hasta el primer dato del alcance autorizado, con
+    el tope de `OPCIONES_MAXIMAS`. Sin datos, sólo el en curso.
+    """
+    primero = await dao.primer_dia(company_id=company_id, user_ids=user_ids)
+    opciones: list[tuple[date, date]] = []
+    cursor = periodo(rango, hoy)
+    while len(opciones) < OPCIONES_MAXIMAS[rango]:
+        opciones.append(cursor)
+        if primero is None or cursor[0] <= primero:
+            break
+        cursor = periodo(rango, cursor[0] - timedelta(days=1))
+    if mostrado not in opciones:
+        opciones.append(mostrado)
+        opciones.sort(reverse=True)
+    return opciones
 
 
 async def _combustible_por_jornada(

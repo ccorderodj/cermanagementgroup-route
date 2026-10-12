@@ -72,6 +72,16 @@ class ReportGroup(ReportMetrics):
     end: date
 
 
+class ReportPeriod(BaseModel):
+    """Un periodo o subgrupo, por sus fechas. Es el identificador estable: la
+    pantalla nunca devuelve una etiqueta como `Mon Oct 12`."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    start: date
+    end: date
+
+
 class ReportBreakdownRow(ReportMetrics):
     """Una fila del *Activity Breakdown*: un **propósito de viaje** (V0.7)."""
 
@@ -115,8 +125,19 @@ class ReportView(BaseModel):
     #: `None` es *All Supervisors*, el valor por defecto del V0.7.
     supervisor_user_id: Optional[int] = None
 
+    #: Las opciones del selector de periodo concreto, de la más reciente a la
+    #: más antigua: desde el periodo en curso del servidor hacia atrás, hasta
+    #: el primer dato del alcance autorizado y con un tope por rango
+    #: (`service.OPCIONES_MAXIMAS`). Siempre incluye el periodo mostrado.
+    periods: list[ReportPeriod]
+
+    #: KPIs y grupos son siempre del periodo principal. Sólo el desglose
+    #: (`breakdown`, `breakdown_excluded`, `activity_types`) se acota al
+    #: subgrupo elegido, si lo hay.
     summary: ReportMetrics
     groups: list[ReportGroup]
+    #: El subgrupo al que se acota el desglose; `None` es el periodo entero.
+    selected_group: Optional[ReportPeriod] = None
     breakdown: list[ReportBreakdownRow]
     #: Lo que no tiene fila en el desglose del V0.7: los regresos a casa, que
     #: suman millas pero no son una visita. Viaja para que el total se pueda
