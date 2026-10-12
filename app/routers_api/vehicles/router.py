@@ -27,6 +27,7 @@ from app.routers_api.vehicles.schemas import (
     SupervisorProfileRead,
     SupervisorProfileUpdate,
     SupervisorTimeZoneUpdate,
+    SupervisorOperationalStateUpdate,
     VehicleAssignmentCreate,
     VehicleAssignmentEnd,
     VehicleAssignmentRead,
@@ -323,6 +324,31 @@ async def set_supervisor_time_zone(
         supervisor_profile_id=supervisor_profile_id,
         actor_user_id=current_user.id,
         time_zone=payload.operational_time_zone,
+        expected_version=payload.version,
+    )
+    filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)
+    fila = next(f for f in filas if f["id"] == perfil.id)
+    return await _leer_perfil(fila, company.id)
+
+
+@supervisors_router.put("/{supervisor_profile_id}/operational-state")
+async def set_supervisor_operational_state(
+    supervisor_profile_id: int,
+    payload: SupervisorOperationalStateUpdate,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(require_permissions(["route.vehicles.manage"])),
+    company: TenantContext = Depends(get_company_required),
+) -> SupervisorProfileRead:
+    """Fija o quita el estado operativo de un supervisor (RTE09 D-1).
+
+    El mismo permiso que el resto de su configuración en este panel. Un
+    supervisor no lo tiene: no puede cambiar el estado de nadie.
+    """
+    perfil = await SupervisorProfileService.set_operational_state(
+        company_id=company.id,
+        supervisor_profile_id=supervisor_profile_id,
+        actor_user_id=current_user.id,
+        state_code=payload.operational_state,
         expected_version=payload.version,
     )
     filas = await SupervisorProfilesDAO.list_with_identity(company_id=company.id)

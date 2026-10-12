@@ -94,6 +94,33 @@ export async function setSupervisorDesignation(
  * zona vuelve a salir del dispositivo en cada jornada. Es una excepción, no
  * una configuración obligatoria: sin él, todo funciona solo.
  */
+/**
+ * Fija o quita el estado operativo (RTE09 D-1). Decide qué precio de
+ * combustible aplica a las jornadas que empiecen después; las anteriores
+ * conservan el suyo. `null` lo quita.
+ */
+export async function setSupervisorOperationalState(
+    supervisorProfileId: number,
+    stateCode: string | null,
+    version?: number,
+): Promise<SupervisorProfile> {
+    const response = await $api.put(`/supervisors/${supervisorProfileId}/operational-state`, {
+        operational_state: stateCode,
+        version,
+    });
+    return parseApi(supervisorProfileSchema, response.data, 'setSupervisorOperationalState');
+}
+
+/** Los estados de EE. UU. del catálogo, para elegir el operativo. */
+export async function fetchStateCatalog(): Promise<{ code: string; name: string }[]> {
+    const response = await $api.get('/regions/catalog');
+    return parseApi(
+        z.array(z.object({ code: z.string(), name: z.string() }).passthrough()),
+        response.data,
+        'fetchStateCatalog',
+    );
+}
+
 export async function setSupervisorTimeZone(
     supervisorProfileId: number,
     timeZone: string | null,

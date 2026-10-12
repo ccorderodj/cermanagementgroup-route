@@ -25,6 +25,8 @@ import {
     fetchSupervisorCandidates,
     setSupervisorDesignation,
     setSupervisorTimeZone,
+    setSupervisorOperationalState,
+    fetchStateCatalog,
     type SupervisorCandidate,
     type VehicleAssignment,
 } from '@/entities/RouteSupervisors';
@@ -57,6 +59,14 @@ import {
  * para no ocultarla.
  */
 const AUTOMATICA = 'automatic';
+
+/**
+ * Estado operativo (RTE09 D-1): sin fijar por defecto. Mientras no se fija, las
+ * jornadas del supervisor no pueden estimar el coste de combustible —se ve 0 y
+ * el informe dice por qué—. No se deduce de la dirección, del vehículo ni del
+ * GPS: lo decide el administrador.
+ */
+const SIN_ESTADO = 'none';
 const ZONAS_HABITUALES = [
     'America/New_York',
     'America/Chicago',
@@ -90,6 +100,7 @@ function detalleDeError(err: unknown, porDefecto: string): string {
 export function SupervisorSetupPanel() {
     const [candidates, setCandidates] = useState<SupervisorCandidate[]>([]);
     const [vehicles, setVehicles] = useState<Vehicle[]>([]);
+    const [estados, setEstados] = useState<{ code: string; name: string }[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [expanded, setExpanded] = useState<number | null>(null);
@@ -104,12 +115,16 @@ export function SupervisorSetupPanel() {
 
     const cargar = useCallback(async () => {
         try {
-            const [gente, vehs] = await Promise.all([
+            const [gente, vehs, catalogo] = await Promise.all([
                 fetchSupervisorCandidates(),
                 fetchVehicles(),
+                // Sin catálogo el panel sigue funcionando; sólo no se ofrece
+                // elegir estado. No es motivo para no cargar nada.
+                fetchStateCatalog().catch(() => []),
             ]);
             setCandidates(gente);
             setVehicles(vehs);
+            setEstados(catalogo);
             setError(null);
         } catch {
             setError('The supervisor setup could not be loaded.');
@@ -151,6 +166,28 @@ export function SupervisorSetupPanel() {
             await cargar();
         } catch (err) {
             setError(detalleDeError(err, 'The designation could not be changed.'));
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    /**
+     * El estado operativo (RTE09 D-1): el precio de combustible que aplica a las
+     * jornadas que empiecen desde ahora. Las anteriores conservan el suyo.
+     */
+    const cambiarEstado = async (candidato: SupervisorCandidate, valor: string) => {
+        if (!candidato.supervisor_profile_id) return;
+        setBusy(true);
+        setError(null);
+        try {
+            await setSupervisorOperationalState(
+                candidato.supervisor_profile_id,
+                valor === SIN_ESTADO ? null : valor,
+                candidato.supervisor_version ?? undefined,
+            );
+            await cargar();
+        } catch (err) {
+            setError(detalleDeError(err, 'The operational state could not be changed.'));
         } finally {
             setBusy(false);
         }
@@ -340,6 +377,28 @@ export function SupervisorSetupPanel() {
                                                         ).map((zona) => (
                                                             <SelectItem key={zona} value={zona}>
                                                                 {zona}
+                                                            </SelectItem>
+                                                        ))}
+                                                    </SelectContent>
+                                                </Select>
+                                                <Select
+                                                    value={candidato.supervisor_operational_state ?? SIN_ESTADO}
+                                                    onValueChange={(v) => cambiarEstado(candidato, v)}
+                                                    disabled={busy}
+                                                >
+                                                    <SelectTrigger
+                                                        className="mt-2 h-8 w-44 text-xs"
+                                                        aria-label="Operational state"
+                                                    >
+                                                        <SelectValue />
+                                                    </SelectTrigger>
+                                                    <SelectContent>
+                                                        <SelectItem value={SIN_ESTADO}>
+                                                            State: not set
+                                                        </SelectItem>
+                                                        {estados.map((e) => (
+                                                            <SelectItem key={e.code} value={e.code}>
+                                                                {`State: ${e.code} · ${e.name}`}
                                                             </SelectItem>
                                                         ))}
                                                     </SelectContent>

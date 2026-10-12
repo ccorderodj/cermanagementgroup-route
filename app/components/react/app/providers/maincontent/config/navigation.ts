@@ -79,13 +79,20 @@ export const businessNavigation: INavMainItem[] = [
                 url: '/admin/route/activity',
                 requiredPermission: 'route.activity.read',
             },
+            {
+                // RTE09: el tercer destino de trabajo del V0.7, detrás de
+                // Activity. Pide `route.reports.read`, la misma que exige
+                // `GET /api/reports`: quien no puede leerlos no ve el enlace.
+                title: 'Reports',
+                url: '/admin/route/reports',
+                requiredPermission: 'route.reports.read',
+            },
         ],
     },
     {
-        // Configuración operativa de CER Route. Reports **no** está aquí: su
-        // módulo llega en un checkpoint posterior, y un encabezado con destinos
-        // que no existen es un enlace muerto disfrazado de sección. Today / Live
-        // y Activity sí están, en el grupo de trabajo, porque son operación y no
+        // Configuración operativa de CER Route. Reports **no** está aquí: es
+        // trabajo, no configuración, y vive en el grupo de arriba con Today /
+        // Live y Activity, que también son operación y no
         // configuración.
         title: 'CER Route Configuration',
         url: '#',

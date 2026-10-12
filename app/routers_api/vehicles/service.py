@@ -443,6 +443,80 @@ class SupervisorProfileService:
         )
 
     @staticmethod
+    async def set_operational_state(
+        *,
+        company_id: int,
+        supervisor_profile_id: int,
+        actor_user_id: int,
+        state_code: str | None,
+        expected_version: int | None,
+    ) -> SupervisorProfile:
+        """Fija o quita el estado operativo del supervisor (RTE09 D-1).
+
+        El valor tiene que existir en el catálogo de estados (`region`): un
+        código inventado aplicado en silencio dejaría sus jornadas esperando un
+        precio que nunca podría llegar. Afecta sólo a las jornadas que empiecen
+        después; las anteriores conservan su instantánea.
+        """
+        from app.routers_api.regions.models import Region
+
+        nuevo = None
+        if state_code is not None and state_code.strip():
+            candidato = state_code.strip().upper()
+            async with transaction() as session:
+                existe = await session.scalar(
+                    select(Region.code).where(
+                        Region.code == candidato, Region.is_active.is_(True)
+                    )
+                )
+            if existe is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail=f"'{state_code}' is not a recognized U.S. state.",
+                )
+            nuevo = candidato
+
+        async with transaction() as session:
+            perfil = await session.scalar(
+                select(SupervisorProfile).where(
+                    SupervisorProfile.id == supervisor_profile_id,
+                    SupervisorProfile.company_id == company_id,
+                    SupervisorProfile.deleted_at.is_(None),
+                )
+            )
+            if perfil is None:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Supervisor profile not found",
+                )
+
+            ensure_version(current=perfil.version, expected=expected_version)
+
+            antes = perfil.operational_state
+            perfil.operational_state = nuevo
+            perfil.version = perfil.version + 1
+            await session.flush()
+
+        if antes != nuevo:
+            await record_event(
+                company_id=company_id,
+                entity_type="supervisor_profile",
+                entity_id=supervisor_profile_id,
+                action="operational_state",
+                actor_user_id=actor_user_id,
+                summary=(
+                    f"Route supervisor operational state set to {nuevo}"
+                    if nuevo
+                    else "Route supervisor operational state cleared"
+                ),
+                changes={"operational_state": {"old": antes, "new": nuevo}},
+            )
+
+        return await SupervisorProfilesDAO.get_for_company(
+            supervisor_profile_id=supervisor_profile_id, company_id=company_id
+        )
+
+    @staticmethod
     async def delete(
         *,
         company_id: int,

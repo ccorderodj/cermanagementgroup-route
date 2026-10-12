@@ -118,6 +118,8 @@ class SupervisorProfileRead(BaseModel):
     current_vehicle: Optional[VehicleRead] = None
     #: Override de zona horaria (T-1/T-2). `None`: automática, del dispositivo.
     operational_time_zone: Optional[str] = None
+    #: Estado operativo (RTE09 D-1): el precio de combustible que aplica.
+    operational_state: Optional[str] = None
 
 
 class SupervisorProfileUpdate(BaseModel):
@@ -149,6 +151,21 @@ class SupervisorTimeZoneUpdate(BaseModel):
     version: Optional[int] = None
 
 
+class SupervisorOperationalStateUpdate(BaseModel):
+    """El estado operativo del supervisor (RTE09 D-1).
+
+    Decide qué precio de combustible aplica a sus jornadas. Se congela en cada
+    jornada al empezar, así que cambiarlo sólo afecta a las siguientes. `None`
+    lo quita: sus jornadas nuevas esperarán un estado para estimar el coste.
+    Un código que no está en el catálogo de estados se rechaza con 422.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    operational_state: Optional[str] = Field(default=None, max_length=2)
+    version: Optional[int] = None
+
+
 class SupervisorCandidateRead(BaseModel):
     """Un usuario del tenant y su relación con CER Route.
 
@@ -173,6 +190,8 @@ class SupervisorCandidateRead(BaseModel):
     supervisor_version: Optional[int] = None
     #: Override de zona horaria (T-1/T-2). `None`: automática, del dispositivo.
     supervisor_time_zone: Optional[str] = None
+    #: Estado operativo (RTE09 D-1). `None`: sin fijar.
+    supervisor_operational_state: Optional[str] = None
     current_vehicle: Optional[VehicleRead] = None
 
 

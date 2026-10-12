@@ -230,6 +230,9 @@ APPEND_ONLY_TABLES: tuple[str, ...] = (
     "location_fix",
     "missing_location_event",
     "trip_mileage_segment",
+    # RTE09: precios y estimaciones finales.
+    "fuel_reference",
+    "work_session_fuel_estimate",
 )
 
 #: Todas las tablas con datos, hijos antes que padres. `region` se siembra en
@@ -258,6 +261,9 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "odometer_evidence",
     "trip_purpose_change",
     "trip",
+    # RTE09: la estimación cuelga de la jornada y de la referencia.
+    "work_session_fuel_estimate",
+    "fuel_reference",
     "work_session",
     "vehicle_assignment",
     "supervisor_profile",

@@ -24,6 +24,8 @@ export const supervisorProfileSchema = z.object({
     current_vehicle: vehicleSchema.nullable().optional(),
     /** Override de zona horaria (T-1/T-2). Nulo: automática, del dispositivo. */
     operational_time_zone: z.string().nullable().optional(),
+    /** Estado operativo (RTE09 D-1): el precio de combustible que aplica. */
+    operational_state: z.string().nullable().optional(),
 });
 
 export type SupervisorProfile = z.infer<typeof supervisorProfileSchema>;
@@ -66,6 +68,8 @@ export const supervisorCandidateSchema = z.object({
     supervisor_version: z.number().nullable().optional(),
     /** Override de zona horaria (T-1/T-2). Nulo: automática, del dispositivo. */
     supervisor_time_zone: z.string().nullable().optional(),
+    /** Estado operativo (RTE09 D-1). Nulo: sin fijar. */
+    supervisor_operational_state: z.string().nullable().optional(),
     current_vehicle: vehicleSchema.nullable().optional(),
 });
 

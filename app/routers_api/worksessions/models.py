@@ -32,6 +32,7 @@ from sqlalchemy import (
 from app.core.enums import BusinessEnum
 from app.core.models.TimeStamped import TimeStampedModel
 from app.core.models.Versioned import VersionedMixin
+from app.routers_api.vehicles.models import FuelGrade
 
 
 class WorkSessionStatus(BusinessEnum):
@@ -105,6 +106,16 @@ class WorkSession(TimeStampedModel, VersionedMixin):
         CheckConstraint(
             "ended_at IS NULL OR ended_at >= started_at",
             name="ck_work_session_end_after_start",
+        ),
+        # RTE09: lo que se congela para el coste estimado de combustible.
+        CheckConstraint(
+            "operational_state_snapshot IS NULL "
+            "OR operational_state_snapshot ~ '^[A-Z]{2}$'",
+            name="ck_work_session_operational_state_snapshot",
+        ),
+        CheckConstraint(
+            f"fuel_grade_snapshot IS NULL OR fuel_grade_snapshot IN ({FuelGrade.sql_values()})",
+            name="ck_work_session_fuel_grade_snapshot",
         ),
         # Un reenvío no puede crear una segunda fila con la misma clave. Parcial
         # porque las filas anteriores a 0013 no tienen clave y un único completo
@@ -215,6 +226,12 @@ class WorkSession(TimeStampedModel, VersionedMixin):
     #: cuando ninguna fuente dio una zona válida: entonces sólo queda el
     #: desfase, y se muestra como desfase.
     start_time_zone = Column(String(64), nullable=True)
+    #: RTE09: el estado operativo del supervisor **al empezar** (D-1) y el grado
+    #: de combustible del vehículo congelado (§4). Junto al MPG congelado son
+    #: las entradas del coste estimado, y por eso se guardan aquí: editar luego
+    #: el supervisor o el vehículo no puede cambiar un informe pasado.
+    operational_state_snapshot = Column(String(2), nullable=True)
+    fuel_grade_snapshot = Column(String(20), nullable=True)
     end_device_captured_at = Column(DateTime(timezone=True), nullable=True)
     end_utc_offset_minutes = Column(Integer, nullable=True)
 

@@ -84,12 +84,17 @@ CAPABILITIES: tuple[Capability, ...] = (
     # ── CER Route ───────────────────────────────────────────────────────────
     #
     # Solo las capacidades que algún endpoint **exige de verdad**. El catálogo
-    # certificado de RTE01 contempla además `route.reports.read`,
-    # `route.reports.export` y `route.fuelreference.manage`: entran con el
-    # checkpoint que construya su superficie protegida, porque
+    # certificado de RTE01 contempla además `route.fuelreference.manage`: entra
+    # con el checkpoint que construya su superficie protegida, porque
     # `test_permission_catalog.py` rechaza —a propósito— una capacidad que
-    # ningún endpoint pide. Declararlas antes concedería autoridad sobre algo
-    # que todavía no existe.
+    # ningún endpoint pide. RTE09 no construye la gestión manual de precios
+    # (autorización §6), así que sigue sin declararse.
+    #
+    # `route.reports.read` y `route.reports.export` entran con RTE09, que crea su
+    # superficie: Reports y su Excel. Son de administración, como Today y el
+    # explorador; el supervisor no las recibe. Exportar exige además leer.
+    _cap("route", "reports.read", "View the consolidated Route reports"),
+    _cap("route", "reports.export", "Export the consolidated Route reports to Excel"),
     #
     # `route.activity.read` entra con RTE08, que es el checkpoint que crea su
     # superficie: el Activity Explorer. Lee **historia** de toda la compañía,
@@ -300,6 +305,10 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             # RTE08: explorar la historia registrada. Misma razón que la
             # anterior, en pasado.
             "route.activity.read",
+            # RTE09: los informes consolidados y su Excel. Llegan a los tenants
+            # existentes por `align_role_capabilities`, no sólo a los nuevos.
+            "route.reports.read",
+            "route.reports.export",
         ),
     ),
 )
