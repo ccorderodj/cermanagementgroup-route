@@ -404,11 +404,15 @@ async def test_sin_la_capacidad_la_pagina_no_se_sirve(seeded, alpha_client, live
 async def test_el_movil_mantiene_la_jerarquia_y_oculta_los_campos(
     seeded, alpha_client, live_server,
 ):
-    """La misma jerarquía y la misma información; sin los dos campos.
+    """La misma jerarquía y la misma información; la fecha, oculta.
 
-    Es lo que dice el ámbito móvil del mockup para esta pantalla:
-    `.fields-inline { display: none }`. Las pestañas de rango **sí** quedan,
-    así que la jerarquía se recorre completa con el dedo.
+    `old expectation` — el ámbito móvil del mockup ocultaba los dos campos
+    (`.fields-inline { display: none }`), supervisor y fecha. `approved
+    decision` — H-1: el PO autoriza una excepción acotada, el selector de
+    supervisor existente se muestra en móvil. `new expectation` — el selector
+    está; la fecha sigue oculta, porque la excepción no la incluye. Las
+    pestañas de rango quedan, así que la jerarquía se recorre completa con el
+    dedo.
     """
     from playwright.async_api import async_playwright
 
@@ -420,8 +424,8 @@ async def test_el_movil_mantiene_la_jerarquia_y_oculta_los_campos(
             contexto = await navegador.new_context(base_url=live_server, viewport=MOVIL)
             page = await _abrir(contexto, seeded, rango="day")
 
-            # Los campos no se dibujan, como en la línea base.
-            await expect(page.get_by_label("Supervisor")).to_have_count(0)
+            # El selector de supervisor, sí (H-1); la fecha, no.
+            await expect(page.get_by_label("Supervisor")).to_be_visible()
             await expect(page.get_by_label("Date")).to_have_count(0)
             # Y las pestañas sí.
             for etiqueta in ("Day", "Week", "Month", "Year"):

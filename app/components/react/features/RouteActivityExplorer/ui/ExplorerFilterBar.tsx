@@ -12,19 +12,23 @@ import {
  * vaya a filtrar por otras cosas más adelante no es permiso para adelantarlo
  * aquí.
  *
- * Por qué en móvil desaparecen dos
- * ---------------------------------
- * No es una simplificación mía. El mockup tiene un ámbito móvil explícito y
- * dice:
+ * Qué se ve en móvil (H-1)
+ * ------------------------
+ * El mockup V0.7 ocultaba en móvil los dos campos:
  *
  *     .app.device-mobile .filterbar     { display: block }
  *     .app.device-mobile .fields-inline { display: none }
  *
- * es decir, en móvil la barra se apila y el **selector de supervisor y la
- * fecha no se muestran**; sólo quedan las pestañas de rango. Y es específico de
- * esta pantalla: en Reports el mismo mockup los vuelve a mostrar
- * (`.report-toolbar .fields-inline { display: block }`). Reproducirlo es
- * fidelidad; añadirlos "porque son útiles" sería rediseñar.
+ * y así se construyó. En campo eso dejaba a un administrador en el teléfono
+ * mirando siempre al primer supervisor de la lista, sin forma de cambiarlo.
+ * El PO autorizó en H-1 una excepción **acotada** a esa regla: el selector de
+ * supervisor existente se muestra también en móvil. **Sólo él**: la fecha
+ * sigue oculta, como en la línea base, porque la excepción no la incluye. Por
+ * eso ya no hay un único interruptor para los dos campos.
+ *
+ * En escritorio nada cambia: los dos campos, en la misma fila y con el mismo
+ * ancho. En móvil el selector ocupa el ancho de la barra, que es donde cabe sin
+ * desbordar y donde se pulsa con el dedo.
  */
 interface ExplorerFilterBarProps {
     supervisors: ExplorerSupervisor[];
@@ -34,8 +38,11 @@ interface ExplorerFilterBarProps {
     onDateChange: (date: string) => void;
     range: ExplorerRange;
     onRangeChange: (range: ExplorerRange) => void;
-    /** En móvil los dos campos no se dibujan, como en la línea base. */
-    showFields?: boolean;
+    /**
+     * La fecha no se dibuja en móvil, como en la línea base. El selector de
+     * supervisor se dibuja siempre (H-1).
+     */
+    showDate?: boolean;
 }
 
 export function ExplorerFilterBar({
@@ -46,32 +53,32 @@ export function ExplorerFilterBar({
     onDateChange,
     range,
     onRangeChange,
-    showFields = true,
+    showDate = true,
 }: ExplorerFilterBarProps) {
     return (
         <div className="mb-4 flex flex-col items-stretch gap-3 md:flex-row md:items-end md:justify-between">
-            {showFields && (
-                <div className="flex gap-3">
-                    <div className="flex flex-col gap-1">
-                        <label
-                            htmlFor="explorer-supervisor"
-                            className="text-xs font-medium text-muted-foreground"
-                        >
-                            Supervisor
-                        </label>
-                        <select
-                            id="explorer-supervisor"
-                            className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
-                            value={supervisorUserId ?? ''}
-                            onChange={(e) => onSupervisorChange(Number(e.target.value))}
-                        >
-                            {supervisors.map((s) => (
-                                <option key={s.user_id} value={s.user_id}>
-                                    {s.name}
-                                </option>
-                            ))}
-                        </select>
-                    </div>
+            <div className="flex gap-3">
+                <div className="flex min-w-0 flex-1 flex-col gap-1 md:flex-initial">
+                    <label
+                        htmlFor="explorer-supervisor"
+                        className="text-xs font-medium text-muted-foreground"
+                    >
+                        Supervisor
+                    </label>
+                    <select
+                        id="explorer-supervisor"
+                        className="h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground md:w-auto"
+                        value={supervisorUserId ?? ''}
+                        onChange={(e) => onSupervisorChange(Number(e.target.value))}
+                    >
+                        {supervisors.map((s) => (
+                            <option key={s.user_id} value={s.user_id}>
+                                {s.name}
+                            </option>
+                        ))}
+                    </select>
+                </div>
+                {showDate && (
                     <div className="flex flex-col gap-1">
                         <label
                             htmlFor="explorer-date"
@@ -87,8 +94,8 @@ export function ExplorerFilterBar({
                             onChange={(e) => onDateChange(e.target.value)}
                         />
                     </div>
-                </div>
-            )}
+                )}
+            </div>
 
             <div className="flex gap-0.5 rounded-xl bg-muted p-1">
                 {EXPLORER_RANGES.map((r) => (
