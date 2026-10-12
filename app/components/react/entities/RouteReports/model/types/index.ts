@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { formatPeriod } from '@/entities/RouteActivityExplorer';
 
 /**
  * Los contratos de Reports (RTE09), validados al entrar.
@@ -45,6 +46,10 @@ export type ReportGroup = z.infer<typeof reportGroupSchema>;
 export const reportBreakdownRowSchema = z.object({ ...metricas, purpose: z.string() });
 export type ReportBreakdownRow = z.infer<typeof reportBreakdownRowSchema>;
 
+/** Un periodo o subgrupo por sus fechas: el identificador que viaja al API. */
+export const reportPeriodSchema = z.object({ start: z.string(), end: z.string() });
+export type ReportPeriod = z.infer<typeof reportPeriodSchema>;
+
 export const reportSupervisorSchema = z.object({ user_id: z.number(), name: z.string() });
 export type ReportSupervisor = z.infer<typeof reportSupervisorSchema>;
 
@@ -56,8 +61,12 @@ export const reportViewSchema = z.object({
     supervisors: z.array(reportSupervisorSchema),
     /** `null`: *All Supervisors*. */
     supervisor_user_id: z.number().nullable().optional(),
+    /** Opciones del selector de periodo, de la más reciente a la más antigua. */
+    periods: z.array(reportPeriodSchema),
     summary: reportMetricsSchema,
     groups: z.array(reportGroupSchema),
+    /** El subgrupo al que se acota el desglose; `null`: el periodo entero. */
+    selected_group: reportPeriodSchema.nullable().optional(),
     breakdown: z.array(reportBreakdownRowSchema),
     breakdown_excluded: z.array(reportBreakdownRowSchema),
     activity_types: z.array(z.object({ label: z.string(), count: z.number() })),
@@ -83,4 +92,13 @@ export function formatMoney(value: string | number): string {
         style: 'currency',
         currency: 'USD',
     });
+}
+
+/**
+ * La etiqueta de una opción del selector de periodo, sin ambigüedad sobre su
+ * tipo: `Oct 12–18, 2026`, `October 2026`, `2026`.
+ */
+export function formatReportPeriod(range: ReportRange, start: string, end: string): string {
+    const base = formatPeriod(range, start, end);
+    return range === 'week' ? `${base}, ${start.slice(0, 4)}` : base;
 }

@@ -48,14 +48,29 @@ async def ver_informe(
     rango: ReportRange = Query("week", alias="range"),
     ancla: Optional[Date] = Query(None, alias="date"),
     supervisor_user_id: Optional[int] = Query(None),
+    grupo: Optional[Date] = Query(None, alias="group"),
     _authz: None = Depends(require_permissions(["route.reports.read"])),
     company: TenantContext = Depends(get_company_required),
 ) -> ReportView:
-    """El informe consolidado del periodo en curso, para uno o todos."""
+    """El informe consolidado de un periodo, para uno o todos.
+
+    Sin `date`, el periodo en curso que decide el servidor. `group` —el inicio
+    de un día, semana o mes del periodo— acota **sólo** el desglose.
+    """
     elegido, _ = await _supervisor_autorizado(company.id, supervisor_user_id)
-    vista, _filas = await service.construir(
-        company_id=company.id, rango=rango, ancla=ancla, supervisor_user_id=elegido
-    )
+    try:
+        vista, _filas = await service.construir(
+            company_id=company.id,
+            rango=rango,
+            ancla=ancla,
+            supervisor_user_id=elegido,
+            grupo=grupo,
+        )
+    except service.GrupoFueraDelPeriodo:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The group is not a day, week or month of the selected period.",
+        )
     return ReportView(**vista)
 
 
@@ -69,7 +84,11 @@ async def exportar_informe(
     ),
     company: TenantContext = Depends(get_company_required),
 ) -> Response:
-    """El mismo informe, en `.xlsx`: mismas filas, mismo filtro, mismo periodo."""
+    """El mismo informe, en `.xlsx`: mismas filas, mismo filtro, mismo periodo.
+
+    No acepta `group`: el subgrupo de la pantalla es una exploración del
+    desglose, no un alcance de exportación (RTE09 E01 §19).
+    """
     elegido, nombre = await _supervisor_autorizado(company.id, supervisor_user_id)
     vista, filas = await service.construir(
         company_id=company.id, rango=rango, ancla=ancla, supervisor_user_id=elegido

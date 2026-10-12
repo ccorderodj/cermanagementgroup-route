@@ -14,8 +14,19 @@ import { formatMoney, type ReportBreakdownRow } from '@/entities/RouteReports';
  * Es por propósito y no por actividad seleccionada (decisión D-4): un viaje
  * tiene un propósito, así que cada fila suma sus millas y su tiempo **una**
  * vez. Las actividades seleccionadas van al Excel.
+ *
+ * `scope` dice qué cubre: el periodo entero o el día / semana / mes elegido en
+ * la tarjeta izquierda (RTE09 E01). Las cifras llegan ya acotadas del servidor.
  */
-export function ReportsBreakdown({ rows }: { rows: ReportBreakdownRow[] }) {
+interface ReportsBreakdownProps {
+    rows: ReportBreakdownRow[];
+    /** `Whole week`, `Mon Oct 12`… */
+    scope: string;
+    /** El subgrupo pedido aún no ha llegado. */
+    loading?: boolean;
+}
+
+export function ReportsBreakdown({ rows, scope, loading = false }: ReportsBreakdownProps) {
     const millas = rows.map((r) => Number.parseFloat(String(r.official_miles)) || 0);
     const maximo = Math.max(1, ...millas);
 
@@ -26,12 +37,19 @@ export function ReportsBreakdown({ rows }: { rows: ReportBreakdownRow[] }) {
                 <div className="text-xs text-muted-foreground">
                     Miles, time, events and estimated fuel by activity
                 </div>
+                <div className="mt-1.5 text-xs font-medium text-foreground" data-breakdown-scope>
+                    {scope}
+                </div>
             </div>
-            {rows.length === 0 ? (
+            {loading && (
+                <p className="py-8 text-center text-sm text-muted-foreground">Loading…</p>
+            )}
+            {!loading && rows.length === 0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
                     No recorded activity in this period.
                 </p>
-            ) : (
+            )}
+            {!loading && rows.length > 0 && (
                 <div className="overflow-x-auto">
                     <table className="w-full border-collapse text-sm">
                         <thead>
