@@ -45,6 +45,12 @@ EXPECTED_TRIGGERS: tuple[str, ...] = (
     # exista y esté activo es lo que garantiza que el hecho no se reescriba.
     "trg_missing_location_event_append_only",
     "trg_missing_location_event_no_truncate",
+    # RTE09. La historia de precios y las estimaciones finales: si se pudieran
+    # reescribir, un coste histórico cambiaría sin que nada lo dijera (§9).
+    "trg_fuel_reference_append_only",
+    "trg_fuel_reference_no_truncate",
+    "trg_work_session_fuel_estimate_append_only",
+    "trg_work_session_fuel_estimate_no_truncate",
 )
 
 HEALTHY, DEGRADED, NOT_APPLICABLE = "healthy", "degraded", "not_applicable"

@@ -7,10 +7,10 @@ de excepciones de odómetro. Cada una exige en el servidor la misma capacidad qu
 exige su API, para que el enlace no lleve a una pantalla que después devuelve 403
 (AUD-FE-013).
 
-Today / Live entra con RTE07 y su pantalla existe de verdad. Activity y Reports
-siguen **sin registrarse**: son de checkpoints posteriores, y una ruta con una
-pantalla vacía sería exactamente lo que las instrucciones prohíben —representar
-como implementado algo que no lo está.
+Today / Live entra con RTE07, Activity con RTE08 y Reports con RTE09: cada una
+cuando su pantalla existe de verdad. Una ruta con una pantalla vacía sería
+exactamente lo que las instrucciones prohíben —representar como implementado
+algo que no lo está.
 """
 
 from fastapi import APIRouter, Depends, Request
@@ -83,6 +83,21 @@ async def get_route_activity_explorer_page(request: Request):
     return templates.TemplateResponse(
         request=request,
         name="admin/route/activity.html",
+        context={},
+    )
+
+
+@router.get(
+    "/reports",
+    name="RouteReportsPage",
+    # La misma capacidad que `GET /api/reports`: el enlace no lleva a una
+    # pantalla que después devuelve 403.
+    dependencies=[Depends(require_page_permissions(["route.reports.read"]))],
+)
+async def get_route_reports_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/reports.html",
         context={},
     )
 

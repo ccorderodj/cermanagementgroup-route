@@ -219,6 +219,12 @@ class WorkSessionService:
         # que reasignar el vehículo mañana no reescribe el día de ayer.
         vehicle_id: int | None = None
         mpg_snapshot = None
+        fuel_grade_snapshot = None
+        # RTE09 D-1: el estado operativo **de ahora**, congelado en la jornada.
+        # Cambiarlo después en el perfil no reescribe esta jornada.
+        operational_state_snapshot = (
+            perfil.operational_state if perfil is not None else None
+        )
         if perfil is not None and perfil.is_active:
             asignacion = await VehicleAssignmentsDAO.effective_at(
                 company_id=company_id,
@@ -231,6 +237,8 @@ class WorkSessionService:
                 )
                 vehicle_id = vehiculo.id
                 mpg_snapshot = vehiculo.operational_mpg
+                # RTE09 §4: el grado se congela con el resto del vehículo.
+                fuel_grade_snapshot = vehiculo.fuel_grade
 
         try:
             async with transaction() as session:
@@ -248,6 +256,8 @@ class WorkSessionService:
                     start_time_zone=zona,
                     vehicle_id=vehicle_id,
                     mpg_snapshot=mpg_snapshot,
+                    fuel_grade_snapshot=fuel_grade_snapshot,
+                    operational_state_snapshot=operational_state_snapshot,
                 )
                 session.add(jornada)
                 await session.flush()
@@ -284,6 +294,11 @@ class WorkSessionService:
                 # explicar por qué una jornada quedó en una fecha y no en otra.
                 "start_time_zone": {"old": None, "new": zona},
                 "vehicle_id": {"old": None, "new": vehicle_id},
+                "fuel_grade_snapshot": {"old": None, "new": fuel_grade_snapshot},
+                "operational_state_snapshot": {
+                    "old": None,
+                    "new": operational_state_snapshot,
+                },
                 # La auditoría registra las dos horas y de cuál se fio, no solo
                 # el resultado: si una jornada quedó fechada por recepción, el
                 # rastro tiene que decirlo.

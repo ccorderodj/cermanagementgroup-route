@@ -171,6 +171,11 @@ class SupervisorProfile(TimeStampedModel, IsActiveMixin, SoftDeleteMixin, Versio
             postgresql_where=text("deleted_at IS NULL"),
         ),
         UniqueConstraint("id", "company_id", name="uq_supervisor_profile_id_company"),
+        # RTE09 D-1: código de estado de EE. UU. en mayúsculas, o nada.
+        CheckConstraint(
+            "operational_state IS NULL OR operational_state ~ '^[A-Z]{2}$'",
+            name="ck_supervisor_profile_operational_state",
+        ),
         ForeignKeyConstraint(
             ["user_id", "company_id"],
             ["user_company.user_id", "user_company.company_id"],
@@ -192,6 +197,12 @@ class SupervisorProfile(TimeStampedModel, IsActiveMixin, SoftDeleteMixin, Versio
     #: dispositivo y nadie tiene que configurar nada. Cuando existe, prevalece
     #: sobre la del dispositivo al iniciar la jornada.
     operational_time_zone = Column(String(64), nullable=True)
+    #: Estado operativo (RTE09 D-1): el estado cuyo precio de combustible se
+    #: aplica a las jornadas de este supervisor. Código de dos letras del
+    #: catálogo `region`. Lo fija un administrador; vacío, el coste estimado
+    #: espera hasta tenerlo. **No** se deduce de la dirección de la compañía, del
+    #: nombre del vehículo ni del GPS. Se congela en cada jornada al empezar.
+    operational_state = Column(String(2), nullable=True)
 
     def __repr__(self) -> str:
         return (

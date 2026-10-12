@@ -97,6 +97,9 @@ class WorkSessionRead(BaseModel):
     ended_at_source: Optional[str] = None
     vehicle_id: Optional[int] = None
     mpg_snapshot: Optional[Decimal] = None
+    #: RTE09: lo congelado para el coste estimado. `None` en las anteriores.
+    fuel_grade_snapshot: Optional[str] = None
+    operational_state_snapshot: Optional[str] = None
     version: int
     created_at: datetime
     updated_at: datetime

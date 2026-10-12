@@ -185,6 +185,9 @@ class SupervisorProfilesDAO(BaseDAO):
                     SupervisorProfile.operational_time_zone.label(
                         "supervisor_time_zone"
                     ),
+                    SupervisorProfile.operational_state.label(
+                        "supervisor_operational_state"
+                    ),
                 )
                 .join(UserCompany, UserCompany.user_id == Users.id)
                 .outerjoin(Role, Role.id == UserCompany.role_id)
@@ -222,6 +225,7 @@ class SupervisorProfilesDAO(BaseDAO):
                     SupervisorProfile.operational_time_zone.label(
                         "operational_time_zone"
                     ),
+                    SupervisorProfile.operational_state.label("operational_state"),
                     SupervisorProfile.created_at.label("created_at"),
                     SupervisorProfile.updated_at.label("updated_at"),
                     Users.first_name.label("first_name"),
