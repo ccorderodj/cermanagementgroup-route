@@ -369,7 +369,14 @@ semillas. Basta con desplegar.
 
 ## Git
 
-⟨GIT⟩
+| | |
+|---|---|
+| Rama | `feature/rte09-historical-period-breakdown` (desde `dev` `1ece5c7`) |
+| Commits | `c3dee32` implementación, pruebas y este reporte · el siguiente añade este bloque |
+| Push | sí |
+| MR | **!86** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/86 → `dev` |
+| Fusionado | **No**: pendiente de la validación de CER |
+| Árbol | limpio tras el push |
 
 ---
 
