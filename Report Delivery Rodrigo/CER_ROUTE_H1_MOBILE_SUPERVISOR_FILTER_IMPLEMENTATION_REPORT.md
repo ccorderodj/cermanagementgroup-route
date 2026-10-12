@@ -228,4 +228,12 @@ npm run build:prod    compilado (2 avisos de tamaño, preexistentes)
 
 ## 9 · Git
 
-`PENDIENTE`
+| | |
+|---|---|
+| Rama | `fix/h1-mobile-supervisor-filter` |
+| Base | `dev` en `a8968f8` |
+| Commit | `97f5c69` |
+| MR | **!83** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/83 |
+| Árbol | limpio |
+| Fusionado / desplegado | **No.** Sujeto a la validación del PO |
+| Despliegue | sólo bundle; **sin migraciones ni cambios de servidor** |
