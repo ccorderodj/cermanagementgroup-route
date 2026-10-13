@@ -192,8 +192,18 @@ def _duracion_segundos():
     )
 
 
+def _en_alcance(jornadas) -> list:
+    """La condición de alcance histórico sobre `WorkSession`, si la hay.
+
+    `None` —tenant, o la actividad propia— no añade nada. Con rama, sólo las
+    jornadas que **empezaron** mientras la persona estaba en ella
+    (`organization.scope.condicion_de_jornadas`).
+    """
+    return [] if jornadas is None else [jornadas]
+
+
 async def agregados_por_dia(
-    *, company_id: int, user_id: int, inicio: date, fin: date
+    *, company_id: int, user_id: int, inicio: date, fin: date, jornadas=None
 ) -> dict[date, dict]:
     """Millas, paradas y tiempo de actividad por día de negocio del periodo.
 
@@ -256,6 +266,7 @@ async def agregados_por_dia(
                 .where(
                     WorkSession.company_id == company_id,
                     WorkSession.user_id == user_id,
+                    *_en_alcance(jornadas),
                     WorkSession.session_date >= inicio,
                     WorkSession.session_date <= fin,
                 )
@@ -314,7 +325,7 @@ def componer_grupos(
 
 
 async def paradas_del_dia(
-    *, company_id: int, user_id: int, dia: date
+    *, company_id: int, user_id: int, dia: date, jornadas=None
 ) -> list[dict]:
     """Las paradas de un día de negocio, con el contexto que V0.7 enseña.
 
@@ -405,6 +416,7 @@ async def paradas_del_dia(
                 .where(
                     Trip.company_id == company_id,
                     WorkSession.user_id == user_id,
+                    *_en_alcance(jornadas),
                     WorkSession.session_date == dia,
                 )
                 # Por la hora de salida del viaje, que **todas** las filas

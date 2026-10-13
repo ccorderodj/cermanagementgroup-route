@@ -42,7 +42,9 @@ from app.routers_api.fuelreference.service import (
 )
 from app.routers_api.mileage.models import MileageState
 from app.routers_api.mileage.read import millas_oficiales
+from app.routers_api.organization.scope import Alcance, condicion_de_jornadas
 from app.routers_api.reports import dao
+from app.routers_api.worksessions.models import WorkSession
 from app.routers_api.worksessions.time_zones import dia_local, zonas_de_referencia
 
 #: Las filas del *Activity Breakdown* del V0.7, en su orden. `home` no es una
@@ -100,6 +102,7 @@ async def construir(
     ancla: date | None,
     supervisor_user_id: int | None,
     grupo: date | None = None,
+    alcance: Alcance | None = None,
 ) -> tuple[dict, list[dict]]:
     """La vista y las filas enriquecidas que la producen (las del Excel).
 
@@ -111,7 +114,12 @@ async def construir(
     y filas del Excel siguen siendo del periodo principal. Un `grupo` que no es
     uno de esos subgrupos lanza `GrupoFueraDelPeriodo`.
     """
-    autorizados = await supervisores(company_id)
+    # Pantalla y Excel con el mismo alcance (`organization.scope`): el
+    # conjunto se acota antes de leer nada, y cada jornada cuenta sólo si
+    # empezó mientras la persona estaba en la rama.
+    alcance = alcance or Alcance(tenant=True)
+    autorizados = [s for s in await supervisores(company_id) if alcance.ve(s["user_id"])]
+    jornadas = condicion_de_jornadas(alcance, WorkSession.user_id, WorkSession.started_at)
     user_ids = (
         [supervisor_user_id]
         if supervisor_user_id is not None
@@ -129,7 +137,7 @@ async def construir(
         if elegido is None:
             raise GrupoFueraDelPeriodo(grupo)
     filas = await dao.hechos(
-        company_id=company_id, user_ids=user_ids, inicio=inicio, fin=fin
+        company_id=company_id, user_ids=user_ids, inicio=inicio, fin=fin, jornadas=jornadas
     )
 
     combustible = await _combustible_por_jornada(company_id, filas)
@@ -166,7 +174,7 @@ async def construir(
         for etiqueta in f["activity_labels"]
     )
 
-    opciones = await _opciones(company_id, user_ids, rango, hoy, (inicio, fin))
+    opciones = await _opciones(company_id, user_ids, rango, hoy, (inicio, fin), jornadas)
 
     vista = {
         "range": rango,
@@ -198,6 +206,7 @@ async def _opciones(
     rango: str,
     hoy: date,
     mostrado: tuple[date, date],
+    jornadas=None,
 ) -> list[tuple[date, date]]:
     """Las opciones del selector, de la más reciente a la más antigua.
 
@@ -205,7 +214,9 @@ async def _opciones(
     navegador— y retroceden hasta el primer dato del alcance autorizado, con
     el tope de `OPCIONES_MAXIMAS`. Sin datos, sólo el en curso.
     """
-    primero = await dao.primer_dia(company_id=company_id, user_ids=user_ids)
+    primero = await dao.primer_dia(
+        company_id=company_id, user_ids=user_ids, jornadas=jornadas
+    )
     opciones: list[tuple[date, date]] = []
     cursor = periodo(rango, hoy)
     while len(opciones) < OPCIONES_MAXIMAS[rango]:

@@ -14,13 +14,24 @@ Dos límites que este módulo no puede cruzar:
   schema de entrada (D6, AUD-SEC-012).
 * **No desactiva identidades.** Suspender actúa sobre la pertenencia a esta
   compañía; la identidad global es administración de plataforma (D7).
+
+Administración delegada (jerarquía de CER Route)
+------------------------------------------------
+Un `route_manager` (CEO, COO, RM) tiene `users.read/create/update`, y este
+router —montado en `/api/users` **y** en `/api/route/users`— es la única API que
+las exige. Por eso cada endpoint pasa por `organization.delegation`: listas,
+objetivos, cargos y roles acotados a su rama, 404 fuera de ella. Para cualquier
+otro actor la delegación es «sin acotar» y el contrato no cambia.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.core import schema
 from app.core.audit.service import diff, record_event
+from app.core.db.session import transaction
 from app.core.utils.api_paginator import Paginator
+from app.routers_api.organization import delegation as delegada
+from app.routers_api.organization import service as organizacion
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.usermanagement.dao import UserManagementDAO
@@ -35,7 +46,10 @@ from app.routers_api.usermanagement.schemas import (
 )
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
-from app.routers_api.usermanagement.role_policy import ensure_assignable_role
+from app.routers_api.usermanagement.role_policy import (
+    _nombre_del_rol,
+    ensure_assignable_role,
+)
 from app.routers_api.users.permissions import require_permissions
 
 
@@ -46,16 +60,23 @@ router = APIRouter(prefix="/users", tags=["User Management"])
 async def get_users_pagination(
     request: Request,
     params: UsersPaginationParams = Depends(),
+    current_user: Users = Depends(get_current_user),
     _authz: None = Depends(require_permissions(["users.read"])),
     company: TenantContext = Depends(get_company_required),
 ) -> schema.PaginatedResponse[UserManagementRead]:
-    """Usuarios de la compañía activa, ya con su rol resuelto."""
+    """Usuarios de la compañía activa, ya con su rol resuelto.
+
+    Un `route_manager` ve sólo a quienes puede gestionar; el filtro se aplica
+    en la consulta, así que el total y las páginas tampoco cuentan a nadie más.
+    """
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
     page = await UserManagementDAO.paginate(
         page=params.page,
         page_size=params.page_size,
         company_id=company.id,
         q=params.q,
         is_active=params.is_active,
+        user_ids=await delegada.gestionables(d, company_id=company.id),
     )
 
     paginator = Paginator(
@@ -97,9 +118,15 @@ async def list_assignable_roles(
     divergir. Aun así esto es experiencia de usuario — quien mande un rol distinto
     por API recibe 403 igualmente.
     """
-    return await UserManagementDAO.list_assignable_roles(
+    opciones = await UserManagementDAO.list_assignable_roles(
         company_id=company.id, actor_user_id=current_user.id
     )
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    if d.tenant:
+        return opciones
+    # Un manager: sólo los roles de los cargos que puede asignar.
+    permitidos = {delegada.rol_para_cargo(p) for p in d.cargos_asignables}
+    return [o for o in opciones if o["code"] in permitidos]
 
 
 @router.post("")
@@ -115,11 +142,35 @@ async def create_user(
     await ensure_assignable_role(
         actor_user_id=current_user.id, company_id=company.id, role_id=payload.role_id
     )
+    # Un manager sólo crea en su rama: cargo por debajo del suyo, superior en
+    # su rama y el rol de ese cargo. Se valida **antes** de escribir nada.
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    if not d.tenant:
+        delegada.exigir_asignacion(
+            d, position=payload.position, superior_user_id=payload.superior_user_id
+        )
+        delegada.exigir_rol(
+            d,
+            role_name=await _nombre_del_rol(role_id=payload.role_id, company_id=company.id),
+            position=payload.position,
+        )
 
-    created = await UserManagementDAO.create_user_with_company_role(
-        company_id=company.id,
-        **payload.model_dump(),
-    )
+    datos = payload.model_dump(exclude={"position", "superior_user_id"})
+    # Usuario, pertenencia y cargo en una sola transacción: si el cargo no se
+    # puede asignar, la persona no queda creada fuera de la estructura.
+    async with transaction():
+        created = await UserManagementDAO.create_user_with_company_role(
+            company_id=company.id,
+            **datos,
+        )
+        if payload.position is not None:
+            await organizacion.asignar(
+                company_id=company.id,
+                actor_user_id=current_user.id,
+                user_id=created["id"],
+                position=payload.position,
+                superior_user_id=payload.superior_user_id,
+            )
 
     # Dar de alta a alguien en un tenant es de las operaciones más sensibles que
     # hay —concede acceso— y no dejaba traza. Se registra con el mismo mecanismo
@@ -156,6 +207,15 @@ async def update_user(
     await ensure_assignable_role(
         actor_user_id=current_user.id, company_id=company.id, role_id=data.get("role_id")
     )
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
+    if not d.tenant and data.get("role_id") is not None:
+        cargo = (await organizacion.vigentes(company.id)).get(user_id)
+        delegada.exigir_rol(
+            d,
+            role_name=await _nombre_del_rol(role_id=data["role_id"], company_id=company.id),
+            position=cargo.position if cargo else None,
+        )
 
     antes = await UserManagementDAO.find_for_company(
         user_id=user_id, company_id=company.id
@@ -200,6 +260,8 @@ async def set_user_access(
     El usuario sigue existiendo en la plataforma y puede seguir entrando a otros
     tenants donde su pertenencia siga activa.
     """
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
     updated = await UserManagementDAO.set_membership_access(
         user_id=user_id,
         company_id=company.id,
@@ -250,6 +312,10 @@ async def reenroll_user(
         company_id=company.id,
         actor_user_id=current_user.id,
     )
+    # Quien fue retirado ya no está en ninguna rama vigente: un manager no lo
+    # readmite. Lo hace la administración del tenant.
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
 
     fila, membership_id, rol_previo = await UserManagementDAO.reenroll_membership(
         user_id=user_id, company_id=company.id, role_id=payload.role_id
@@ -301,9 +367,19 @@ async def delete_user_from_company(
             detail="You cannot remove your own access to this company.",
         )
 
-    retirado = await UserManagementDAO.delete_membership(
-        user_id=user_id, company_id=company.id
-    )
+    # Su cargo se cierra con la pertenencia. Si tiene subordinados directos,
+    # 409: retirarlo los dejaría colgando de alguien que ya no está.
+    async with transaction():
+        await organizacion.retirar(
+            company_id=company.id,
+            actor_user_id=None,
+            user_id=user_id,
+            sin_error_si_no_hay=True,
+            reason="membership removed",
+        )
+        retirado = await UserManagementDAO.delete_membership(
+            user_id=user_id, company_id=company.id
+        )
 
     await record_event(
         company_id=company.id,

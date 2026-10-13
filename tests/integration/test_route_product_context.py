@@ -72,7 +72,7 @@ async def _existe(email: str) -> bool:
 
 
 @pytest.mark.parametrize("actor", ["route_admin", "owner", "admin"])
-async def test_the_route_contract_offers_exactly_two_roles_to_anyone(
+async def test_the_route_contract_offers_exactly_the_product_roles_to_anyone(
     seeded, alpha_client, actor,
 ):
     """Tests 1 y 3 de la resolución: Administrador, Owner y Admin del núcleo.
@@ -85,10 +85,11 @@ async def test_the_route_contract_offers_exactly_two_roles_to_anyone(
 
     assert respuesta.status_code == 200, respuesta.text
     assert {o["code"] for o in respuesta.json()} == ROUTE_PRODUCT_ROLES
-    assert {o["label"] for o in respuesta.json()} == {"Administrador", "Supervisor"}
+    # Los roles de producto de Route; `route_manager` entró con la jerarquía (D-1).
+    assert {o["label"] for o in respuesta.json()} == {"Administrador", "Route Manager", "Supervisor"}
 
 
-async def test_the_route_contract_offers_two_roles_to_the_platform_superadmin(
+async def test_the_route_contract_offers_the_product_roles_to_the_platform_superadmin(
     seeded,
 ):
     """Test 2, el escenario que destapó el hueco.
@@ -107,7 +108,8 @@ async def test_the_route_contract_offers_two_roles_to_the_platform_superadmin(
 
         por_nucleo = await plataforma.get(f"{RUTA_NUCLEO}/assignable-roles")
         assert por_nucleo.status_code == 200
-        assert len({o["code"] for o in por_nucleo.json()}) == 6, (
+        # Siete con `route_manager` (jerarquía, D-1).
+        assert len({o["code"] for o in por_nucleo.json()}) == 7, (
             "su autoridad sigue intacta en el contrato del núcleo"
         )
 
@@ -120,7 +122,7 @@ async def test_no_technical_code_leaks_as_a_product_label(seeded, alpha_client):
     etiquetas = " ".join(o["label"] for o in opciones)
     assert "route_admin" not in etiquetas
     assert "supervisor" not in etiquetas.lower().replace("supervisor", "", 1) or True
-    assert sorted(o["label"] for o in opciones) == ["Administrador", "Supervisor"]
+    assert sorted(o["label"] for o in opciones) == ["Administrador", "Route Manager", "Supervisor"]
 
 
 # ── Test 4-6: la escritura, por el contrato de Route ─────────────────────────

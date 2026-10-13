@@ -201,8 +201,9 @@ async def test_a_route_admin_cannot_create_or_edit_roles(seeded, alpha_client):
 # ── El modelo de roles, tal como CER lo definió ──────────────────────────────
 
 
-def test_exactly_two_role_templates_are_specific_to_cer_route():
-    """`route_admin` y `supervisor`. Los otros cuatro son del núcleo.
+def test_exactly_three_role_templates_are_specific_to_cer_route():
+    """`route_admin`, `route_manager` (jerarquía, D-1) y `supervisor`. Los otros
+    cuatro son del núcleo.
 
     Se comprueba por la capacidad, no por el nombre: un rol es de Route si
     concede algo de Route. `owner` y `admin` reciben capacidades de Route por ser
@@ -210,11 +211,11 @@ def test_exactly_two_role_templates_are_specific_to_cer_route():
     """
     from app.core.rbac.catalog import DEFAULT_ROLES, capabilities_for
 
-    DE_ROUTE = {"route_admin", "supervisor"}
+    DE_ROUTE = {"route_admin", "route_manager", "supervisor"}
     DEL_NUCLEO = {"owner", "admin", "manager", "viewer"}
 
     plantillas = {p.name for p in DEFAULT_ROLES}
-    assert plantillas == DE_ROUTE | DEL_NUCLEO, "seis roles por defecto, ni más ni menos"
+    assert plantillas == DE_ROUTE | DEL_NUCLEO, "siete roles por defecto, ni más ni menos"
 
     for plantilla in DEFAULT_ROLES:
         capacidades = capabilities_for(plantilla)

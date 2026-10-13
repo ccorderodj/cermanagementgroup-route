@@ -37,6 +37,7 @@ from app.routers_api.vehicles.router import supervisors_router as router_supervi
 from app.routers_api.odometer.router import router as router_odometer
 from app.routers_api.activityexplorer.router import router as router_activity_explorer
 from app.routers_api.reports.router import router as router_reports
+from app.routers_api.organization.router import router as router_organization
 from app.routers_api.live.router import router as router_live
 from app.routers_api.trips.router import router as router_trips
 from app.routers_api.activities.router import router as router_activities
@@ -109,6 +110,7 @@ api_router.include_router(router_odometer)
 api_router.include_router(router_live)
 api_router.include_router(router_activity_explorer)
 api_router.include_router(router_reports)
+api_router.include_router(router_organization)
 
 api_router.include_router(router_platform_settings)
 api_router.include_router(router_platform_diagnostics)

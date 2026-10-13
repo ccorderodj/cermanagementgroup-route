@@ -10,7 +10,7 @@ llamaba, y eran precisamente los que operaban sin compañía.
 """
 
 from fastapi import HTTPException, status
-from sqlalchemy import Select, and_, func, insert, or_, select, update
+from sqlalchemy import Select, and_, false, func, insert, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.core.dao.base import BaseDAO
@@ -59,6 +59,7 @@ class UserManagementDAO(BaseDAO):
         company_id: int,
         q: str | None = None,
         is_active: bool | None = None,
+        user_ids: set[int] | None = None,
         **_: object,
     ) -> Select:
         stmt = (
@@ -79,6 +80,11 @@ class UserManagementDAO(BaseDAO):
                 UserCompany.deleted_at.is_(None),
             )
         )
+
+        # Alcance de la administración delegada (jerarquía): `None` es sin
+        # acotar; un conjunto vacío es **nadie**, no todos.
+        if user_ids is not None:
+            stmt = stmt.where(Users.id.in_(user_ids) if user_ids else false())
 
         # `is_active` filtra por la PERTENENCIA, que es lo que administra el
         # tenant, no por la identidad global.
