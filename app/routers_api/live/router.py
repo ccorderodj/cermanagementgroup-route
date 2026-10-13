@@ -29,6 +29,9 @@ from app.routers_api.users.permissions import require_permissions
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.live import dao
+from app.routers_api.organization.scope import alcance_administrativo
+from app.routers_api.users.dependencies import get_current_user
+from app.routers_api.users.models import Users
 from app.routers_api.live.schemas import LiveSummary, LiveSupervisor, LiveToday
 
 router = APIRouter(prefix="/live", tags=["Route · Today / Live"])
@@ -37,6 +40,7 @@ router = APIRouter(prefix="/live", tags=["Route · Today / Live"])
 @router.get("/today", response_model=LiveToday)
 async def get_today(
     _authz: None = Depends(require_permissions(["route.live.read"])),
+    current_user: Users = Depends(get_current_user),
     company: TenantContext = Depends(get_company_required),
 ) -> LiveToday:
     """El estado operativo de la compañía para el día de negocio en curso.
@@ -45,7 +49,11 @@ async def get_today(
     compañía en la petición sería una autoridad que el navegador no tiene.
     """
     ahora = datetime.now(timezone.utc)
-    filas = await dao.today_rows(company.id, ahora)
+    # Hoy es la rama **vigente**: quien depende de este actor ahora.
+    alcance = await alcance_administrativo(company_id=company.id, actor_user_id=current_user.id)
+    filas = await dao.today_rows(
+        company.id, ahora, None if alcance.tenant else alcance.actuales
+    )
 
     supervisores = [LiveSupervisor(**fila) for fila in filas]
     # Sólo por compatibilidad del contrato (ver `LiveToday.session_date`).

@@ -47,7 +47,7 @@ ESCRITORIO = {"width": 1280, "height": 900}
 ROLES_DEL_NUCLEO = ("Owner", "Admin", "Manager", "Viewer")
 
 
-async def test_the_route_user_form_offers_exactly_the_two_product_roles(
+async def test_the_route_user_form_offers_exactly_the_product_roles(
     seeded, live_server,
 ):
     """FR-01 y caso límite 20, en pantalla.
@@ -80,17 +80,18 @@ async def test_the_route_user_form_offers_exactly_the_two_product_roles(
                 page.get_by_text("Role in this company")
             ).to_have_count(1, timeout=20_000)
 
-            # El selector de rol es el que está junto a su etiqueta; los otros
-            # `combobox` del formulario son género y estado.
-            selector = page.locator("[role='combobox']").last
+            # El selector de rol, por su id: desde la jerarquía el formulario
+            # tiene además Position y Reports to, así que «el último
+            # `combobox`» ya no es el del rol.
+            selector = page.locator("#security-user-role")
             await selector.click()
 
             opciones = page.get_by_role("option")
-            await expect(opciones).to_have_count(2, timeout=20_000)
+            await expect(opciones).to_have_count(3, timeout=20_000)
 
             textos = sorted(await opciones.all_inner_texts())
             assert textos == sorted(ROUTE_PRODUCT_ROLE_LABELS.values()), (
-                f"el selector debe ofrecer exactamente los dos roles: {textos}"
+                f"el selector debe ofrecer exactamente los roles de producto: {textos}"
             )
 
             # Y ni rastro del núcleo ni del código técnico.
@@ -283,7 +284,7 @@ async def test_the_supervisor_reads_the_values_their_trip_needs(seeded, live_ser
     ["platform_admin", "owner", "admin"],
     ids=["superadmin", "core-owner", "core-admin"],
 )
-async def test_the_route_user_form_shows_two_roles_to_every_authority(
+async def test_the_route_user_form_shows_the_product_roles_to_every_authority(
     seeded, alpha_client, live_server, quien,
 ):
     """FR-03, declarado test de aceptación obligatorio, y el test #3.
@@ -324,15 +325,15 @@ async def test_the_route_user_form_shows_two_roles_to_every_authority(
                 page.get_by_text("Role in this company")
             ).to_have_count(1, timeout=20_000)
 
-            selector = page.locator("[role='combobox']").last
+            selector = page.locator("#security-user-role")
             await selector.click()
 
             opciones = page.get_by_role("option")
-            await expect(opciones).to_have_count(2, timeout=20_000)
+            await expect(opciones).to_have_count(3, timeout=20_000)
 
             textos = sorted(await opciones.all_inner_texts())
-            assert textos == ["Administrador", "Supervisor"], (
-                f"{quien} debería ver exactamente los dos roles de producto: {textos}"
+            assert textos == ["Administrador", "Route Manager", "Supervisor"], (
+                f"{quien} debería ver exactamente los roles de producto: {textos}"
             )
 
             # Paso 5: ninguna etiqueta del núcleo.

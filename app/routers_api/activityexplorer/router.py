@@ -58,7 +58,12 @@ from app.routers_api.activityexplorer.schemas import (
 )
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
+from app.routers_api.organization.scope import (
+    alcance_administrativo,
+    condicion_de_jornadas,
+)
 from app.routers_api.users.dependencies import get_current_user
+from app.routers_api.worksessions.models import WorkSession
 from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
 
@@ -71,6 +76,7 @@ async def explorar(
     ancla: Optional[Date] = Query(None, alias="date"),
     supervisor_user_id: Optional[int] = Query(None),
     _authz: None = Depends(require_permissions(["route.activity.read"])),
+    current_user: Users = Depends(get_current_user),
     company: TenantContext = Depends(get_company_required),
 ) -> ExplorerView:
     """Un nivel del explorador para un supervisor y un periodo.
@@ -78,8 +84,15 @@ async def explorar(
     `company` sale del subdominio y nunca del cliente. El supervisor pedido se
     **valida contra el conjunto autorizado**: uno de otra compañía no da 403
     sino 404, porque confirmar que existe ya sería decir algo de otro tenant.
+
+    Un `route_manager` sólo tiene en el conjunto a quienes estuvieron en su
+    rama, y de cada uno sólo las jornadas que empezaron mientras lo estaban
+    (`organization.scope`).
     """
-    autorizados = await dao.supervisores(company.id)
+    alcance = await alcance_administrativo(company_id=company.id, actor_user_id=current_user.id)
+    autorizados = [
+        s for s in await dao.supervisores(company.id) if alcance.ve(s["user_id"])
+    ]
     por_id = {s["user_id"]: s for s in autorizados}
 
     elegido: Optional[int]
@@ -100,6 +113,13 @@ async def explorar(
         ancla=ancla,
         user_id=elegido,
         opciones=[ExplorerSupervisor(**s) for s in autorizados],
+        jornadas=(
+            None
+            if elegido is None
+            else condicion_de_jornadas(
+                alcance, WorkSession.user_id, WorkSession.started_at, {elegido}
+            )
+        ),
     )
 
 
@@ -132,6 +152,7 @@ async def _vista(
     ancla: Optional[Date],
     user_id: Optional[int],
     opciones: list[ExplorerSupervisor],
+    jornadas=None,
 ) -> ExplorerView:
     """Un nivel del explorador para **una** persona ya autorizada.
 
@@ -159,10 +180,11 @@ async def _vista(
 
     if rango == "day":
         paradas = await dao.paradas_del_dia(
-            company_id=company_id, user_id=elegido, dia=inicio
+            company_id=company_id, user_id=elegido, dia=inicio, jornadas=jornadas
         )
         por_dia = await dao.agregados_por_dia(
-            company_id=company_id, user_id=elegido, inicio=inicio, fin=fin
+            company_id=company_id, user_id=elegido, inicio=inicio, fin=fin,
+            jornadas=jornadas,
         )
         datos = por_dia.get(inicio)
         return ExplorerView(
@@ -192,7 +214,7 @@ async def _vista(
         )
 
     por_dia = await dao.agregados_por_dia(
-        company_id=company_id, user_id=elegido, inicio=inicio, fin=fin
+        company_id=company_id, user_id=elegido, inicio=inicio, fin=fin, jornadas=jornadas
     )
     grupos = dao.componer_grupos(rango, inicio, fin, por_dia)
 

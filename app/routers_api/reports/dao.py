@@ -49,7 +49,9 @@ from app.routers_api.vehicles.models import Vehicle
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
 
 
-async def primer_dia(*, company_id: int, user_ids: list[int]) -> date | None:
+async def primer_dia(
+    *, company_id: int, user_ids: list[int], jornadas=None
+) -> date | None:
     """El primer día de negocio con jornada de esos supervisores, o `None`.
 
     Acota las opciones del selector de periodo al alcance autorizado: no
@@ -62,14 +64,19 @@ async def primer_dia(*, company_id: int, user_ids: list[int]) -> date | None:
             select(func.min(WorkSession.session_date)).where(
                 WorkSession.company_id == company_id,
                 WorkSession.user_id.in_(user_ids),
+                *([] if jornadas is None else [jornadas]),
             )
         )
 
 
 async def hechos(
-    *, company_id: int, user_ids: list[int], inicio: date, fin: date
+    *, company_id: int, user_ids: list[int], inicio: date, fin: date, jornadas=None
 ) -> list[dict]:
-    """Los viajes de esos supervisores con `session_date` en el periodo."""
+    """Los viajes de esos supervisores con `session_date` en el periodo.
+
+    `jornadas`: la condición de alcance histórico (`organization.scope`); con
+    rama, sólo las jornadas que empezaron mientras cada persona estaba en ella.
+    """
     if not user_ids:
         return []
 
@@ -133,6 +140,7 @@ async def hechos(
                 .where(
                     Trip.company_id == company_id,
                     WorkSession.user_id.in_(user_ids),
+                    *([] if jornadas is None else [jornadas]),
                     WorkSession.session_date >= inicio,
                     WorkSession.session_date <= fin,
                 )

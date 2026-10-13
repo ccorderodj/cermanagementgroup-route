@@ -311,10 +311,40 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
             "route.reports.export",
         ),
     ),
+    RoleTemplate(
+        name="route_manager",
+        description=(
+            "CER Route manager (CEO, COO, Regional Manager); sees and manages only their branch"
+        ),
+        category="operative",
+        # Jerarquía (D-1): CEO, COO y RM. El **cargo** dice el nivel; este rol
+        # dice qué puede hacer, y `organization.scope` sobre quién: **sólo su
+        # rama**, nunca el tenant. Todas son capacidades existentes; ninguna se
+        # crea para esto.
+        #
+        # `users.read/create/update` (D-1, condición de seguridad): la única API
+        # que las exige es `usermanagement` —montada en `/api/users` y en
+        # `/api/route/users`— y las dos caras pasan por la misma política de
+        # delegación (`organization.delegation`), que acota listas, objetivos,
+        # cargos y roles a la rama. `users.delete` **no** (D-1c): un manager
+        # suspende; retirar del tenant lo hace el Superadmin.
+        capabilities=(
+            "route.worksession.execute",
+            "route.standardvalues.read",
+            "route.live.read",
+            "route.activity.read",
+            "route.reports.read",
+            "route.reports.export",
+            "users.read",
+            "users.create",
+            "users.update",
+        ),
+    ),
 )
 
 
-#: Los dos roles de producto de CER Route, por su código técnico interno.
+#: Los roles de producto de CER Route, por su código técnico interno. Eran dos;
+#: `route_manager` llegó con la jerarquía (D-1).
 #:
 #: Son los **únicos** que el flujo de usuarios de CER Route puede asignar
 #: (FR-01, FR-05). Los del núcleo —`owner`, `admin`, `manager`, `viewer`— siguen
@@ -324,11 +354,14 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
 #: Se conservan los códigos técnicos existentes a propósito: renombrarlos sólo
 #: para cambiar la etiqueta visible obligaría a una migración destructiva de
 #: `role.name` en cada tenant, y la resolución lo prohíbe explícitamente.
-ROUTE_PRODUCT_ROLES: frozenset[str] = frozenset({"route_admin", "supervisor"})
+ROUTE_PRODUCT_ROLES: frozenset[str] = frozenset({"route_admin", "route_manager", "supervisor"})
 
 #: Cómo se llaman en pantalla. El código técnico no se muestra nunca.
 ROUTE_PRODUCT_ROLE_LABELS: dict[str, str] = {
     "route_admin": "Administrador",
+    # «Route Manager» y no «Manager»: así se ve en pantalla el rol `manager`
+    # del núcleo, y el formulario de Route no debe ofrecer nada que se le parezca.
+    "route_manager": "Route Manager",
     "supervisor": "Supervisor",
 }
 

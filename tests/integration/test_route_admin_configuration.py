@@ -227,7 +227,7 @@ async def test_route_admin_cannot_administer_roles_themselves(seeded, alpha_clie
     # Y lo que sustituye a esa lectura sí funciona.
     asignables = await alpha_client.get("/api/users/assignable-roles")
     assert asignables.status_code == 200
-    assert {o["code"] for o in asignables.json()} == {"route_admin", "supervisor"}
+    assert {o["code"] for o in asignables.json()} == {"route_admin", "route_manager", "supervisor"}
 
 
 # ── Designación de supervisor desde el producto ─────────────────────────────
