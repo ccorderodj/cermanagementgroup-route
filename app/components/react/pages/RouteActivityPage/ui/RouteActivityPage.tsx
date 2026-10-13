@@ -1,20 +1,19 @@
-import { NotBuiltYet, RouteMobileShell } from '@/widgets/RouteShell';
+import { RouteMobileShell } from '@/widgets/RouteShell';
+import { ActivityExplorerPanel } from '@/widgets/RouteActivityExplorer';
 
 /**
- * Historial del supervisor.
+ * Activity del supervisor (`/route/activity`, RTE08 personal).
  *
- * El Activity Explorer (Year -> Month -> Week -> Day -> Activity) llega en
- * RTE08, y depende de que antes exista la jornada que lo alimenta. Enseñar aquí
- * una jerarquía vacía daría la impresión de un módulo terminado sin datos, que
- * es distinto de un módulo que todavía no existe.
+ * Su propia historia, por Day / Week / Month / Year, con el mismo explorador
+ * que la vista de administración y dentro del shell de My Route. **Sin
+ * selector de supervisor**: el servidor decide el sujeto con la sesión
+ * (`GET /api/activity-explorer/me`), así que no hay nada que elegir ni un
+ * directorio que mostrar. Sólo lectura.
  */
 const RouteActivityPage = () => (
     <RouteMobileShell title="Activity" active="activity">
-        <div data-testid="RouteActivityPage" className="flex flex-col gap-4">
-            <NotBuiltYet
-                feature="The Activity Explorer"
-                checkpoint="RTE08"
-            />
+        <div data-testid="RouteActivityPage" className="flex flex-col">
+            <ActivityExplorerPanel scope="self" />
         </div>
     </RouteMobileShell>
 );

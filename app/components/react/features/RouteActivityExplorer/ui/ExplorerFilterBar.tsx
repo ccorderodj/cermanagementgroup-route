@@ -29,6 +29,9 @@ import {
  * En escritorio nada cambia: los dos campos, en la misma fila y con el mismo
  * ancho. En móvil el selector ocupa el ancho de la barra, que es donde cabe sin
  * desbordar y donde se pulsa con el dedo.
+ *
+ * La actividad propia (`/route/activity`) no tiene selector de supervisor
+ * (`showSupervisor={false}`): no hay a quién elegir.
  */
 interface ExplorerFilterBarProps {
     supervisors: ExplorerSupervisor[];
@@ -43,6 +46,8 @@ interface ExplorerFilterBarProps {
      * supervisor se dibuja siempre (H-1).
      */
     showDate?: boolean;
+    /** `false` en la actividad propia: sin selector ni directorio. */
+    showSupervisor?: boolean;
 }
 
 export function ExplorerFilterBar({
@@ -54,48 +59,53 @@ export function ExplorerFilterBar({
     range,
     onRangeChange,
     showDate = true,
+    showSupervisor = true,
 }: ExplorerFilterBarProps) {
     return (
         <div className="mb-4 flex flex-col items-stretch gap-3 md:flex-row md:items-end md:justify-between">
-            <div className="flex gap-3">
-                <div className="flex min-w-0 flex-1 flex-col gap-1 md:flex-initial">
-                    <label
-                        htmlFor="explorer-supervisor"
-                        className="text-xs font-medium text-muted-foreground"
-                    >
-                        Supervisor
-                    </label>
-                    <select
-                        id="explorer-supervisor"
-                        className="h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground md:w-auto"
-                        value={supervisorUserId ?? ''}
-                        onChange={(e) => onSupervisorChange(Number(e.target.value))}
-                    >
-                        {supervisors.map((s) => (
-                            <option key={s.user_id} value={s.user_id}>
-                                {s.name}
-                            </option>
-                        ))}
-                    </select>
+            {(showSupervisor || showDate) && (
+                <div className="flex gap-3">
+                    {showSupervisor && (
+                        <div className="flex min-w-0 flex-1 flex-col gap-1 md:flex-initial">
+                            <label
+                                htmlFor="explorer-supervisor"
+                                className="text-xs font-medium text-muted-foreground"
+                            >
+                                Supervisor
+                            </label>
+                            <select
+                                id="explorer-supervisor"
+                                className="h-9 w-full rounded-md border border-border bg-card px-3 text-sm text-foreground md:w-auto"
+                                value={supervisorUserId ?? ''}
+                                onChange={(e) => onSupervisorChange(Number(e.target.value))}
+                            >
+                                {supervisors.map((s) => (
+                                    <option key={s.user_id} value={s.user_id}>
+                                        {s.name}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+                    )}
+                    {showDate && (
+                        <div className="flex flex-col gap-1">
+                            <label
+                                htmlFor="explorer-date"
+                                className="text-xs font-medium text-muted-foreground"
+                            >
+                                Date
+                            </label>
+                            <input
+                                id="explorer-date"
+                                type="date"
+                                className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
+                                value={date}
+                                onChange={(e) => onDateChange(e.target.value)}
+                            />
+                        </div>
+                    )}
                 </div>
-                {showDate && (
-                    <div className="flex flex-col gap-1">
-                        <label
-                            htmlFor="explorer-date"
-                            className="text-xs font-medium text-muted-foreground"
-                        >
-                            Date
-                        </label>
-                        <input
-                            id="explorer-date"
-                            type="date"
-                            className="h-9 rounded-md border border-border bg-card px-3 text-sm text-foreground"
-                            value={date}
-                            onChange={(e) => onDateChange(e.target.value)}
-                        />
-                    </div>
-                )}
-            </div>
+            )}
 
             <div className="flex gap-0.5 rounded-xl bg-muted p-1">
                 {EXPLORER_RANGES.map((r) => (
