@@ -22,6 +22,20 @@ Y el alcance lo decide el servidor
 Las opciones del selector de supervisor salen de aquí, no de una lista que el
 navegador filtre. Cuando exista jerarquía organizativa será este modelo de
 lectura el que estreche el conjunto, sin que la pantalla cambie.
+
+La actividad propia: `/me` (RTE08 personal)
+-------------------------------------------
+El supervisor consulta **su** historia en `/route/activity`. No usa el endpoint
+de arriba: aquél exige `route.activity.read`, que es historia de toda la
+compañía, y dársela al supervisor ampliaría su alcance. `/me` exige
+`route.worksession.execute` —la capacidad con la que ya ejecuta su jornada y
+entra al shell— y el sujeto **no es un parámetro**: es el usuario de la sesión,
+en el tenant del subdominio. Un `supervisor_user_id`, `user_id` o `company_id`
+en la petición no forma parte del contrato y se ignora. Tampoco devuelve el
+directorio de supervisores.
+
+Las dos rutas construyen la vista con la misma función (`_vista`): mismas
+consultas, mismas reglas (R-1, H-2), mismos números.
 """
 
 from __future__ import annotations
@@ -44,6 +58,8 @@ from app.routers_api.activityexplorer.schemas import (
 )
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
+from app.routers_api.users.dependencies import get_current_user
+from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
 
 router = APIRouter(prefix="/activity-explorer", tags=["Route · Activity Explorer"])
@@ -78,10 +94,53 @@ async def explorar(
         # Como la línea base: el primero de la lista queda seleccionado.
         elegido = autorizados[0]["user_id"] if autorizados else None
 
-    hoy = await dao.dia_actual_de(company.id, elegido)
-    inicio, fin = dao.periodo(rango, ancla or hoy)
+    return await _vista(
+        company_id=company.id,
+        rango=rango,
+        ancla=ancla,
+        user_id=elegido,
+        opciones=[ExplorerSupervisor(**s) for s in autorizados],
+    )
 
-    opciones = [ExplorerSupervisor(**s) for s in autorizados]
+
+@router.get("/me", response_model=ExplorerView)
+async def explorar_lo_propio(
+    rango: ExplorerRange = Query("day", alias="range"),
+    ancla: Optional[Date] = Query(None, alias="date"),
+    _authz: None = Depends(require_permissions(["route.worksession.execute"])),
+    current_user: Users = Depends(get_current_user),
+    company: TenantContext = Depends(get_company_required),
+) -> ExplorerView:
+    """La actividad **propia** del usuario de la sesión, en este tenant.
+
+    El sujeto sale de la sesión y la compañía del subdominio; no hay parámetro
+    que los cambie. Sin directorio: `supervisors` va vacío.
+    """
+    return await _vista(
+        company_id=company.id,
+        rango=rango,
+        ancla=ancla,
+        user_id=current_user.id,
+        opciones=[],
+    )
+
+
+async def _vista(
+    *,
+    company_id: int,
+    rango: str,
+    ancla: Optional[Date],
+    user_id: Optional[int],
+    opciones: list[ExplorerSupervisor],
+) -> ExplorerView:
+    """Un nivel del explorador para **una** persona ya autorizada.
+
+    Quien llama decide el sujeto y lo ha validado: el administrador contra el
+    conjunto de supervisores elegibles; `/me`, con la sesión.
+    """
+    elegido = user_id
+    hoy = await dao.dia_actual_de(company_id, elegido)
+    inicio, fin = dao.periodo(rango, ancla or hoy)
 
     if elegido is None:
         # Una compañía sin supervisores es un estado, no un error. Y no se
@@ -100,10 +159,10 @@ async def explorar(
 
     if rango == "day":
         paradas = await dao.paradas_del_dia(
-            company_id=company.id, user_id=elegido, dia=inicio
+            company_id=company_id, user_id=elegido, dia=inicio
         )
         por_dia = await dao.agregados_por_dia(
-            company_id=company.id, user_id=elegido, inicio=inicio, fin=fin
+            company_id=company_id, user_id=elegido, inicio=inicio, fin=fin
         )
         datos = por_dia.get(inicio)
         return ExplorerView(
@@ -133,7 +192,7 @@ async def explorar(
         )
 
     por_dia = await dao.agregados_por_dia(
-        company_id=company.id, user_id=elegido, inicio=inicio, fin=fin
+        company_id=company_id, user_id=elegido, inicio=inicio, fin=fin
     )
     grupos = dao.componer_grupos(rango, inicio, fin, por_dia)
 

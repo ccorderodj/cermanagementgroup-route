@@ -31,3 +31,23 @@ export async function fetchExplorer(params: {
     const response = await $api.get('/activity-explorer', { params: query });
     return parseApi(explorerViewSchema, response.data, 'fetchExplorer');
 }
+
+/**
+ * La actividad **propia** (RTE08 personal, `/route/activity`).
+ *
+ * No hay parámetro de persona: el servidor toma el usuario de la sesión y el
+ * tenant del subdominio. Mismo contrato y mismos números que `fetchExplorer`
+ * para esa persona; `supervisors` llega vacío.
+ */
+export async function fetchMyActivity(params: {
+    range: ExplorerRange;
+    /** Como en `fetchExplorer`: `null` deja el día de negocio al servidor. */
+    date: string | null;
+}): Promise<ExplorerView> {
+    const query: Record<string, string> = { range: params.range };
+    if (params.date) {
+        query.date = params.date;
+    }
+    const response = await $api.get('/activity-explorer/me', { params: query });
+    return parseApi(explorerViewSchema, response.data, 'fetchMyActivity');
+}

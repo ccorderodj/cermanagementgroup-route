@@ -16,4 +16,4 @@ export {
     formatClock,
     spanBetween,
 } from './model/types';
-export { fetchExplorer } from './model/services/explorerService';
+export { fetchExplorer, fetchMyActivity } from './model/services/explorerService';
