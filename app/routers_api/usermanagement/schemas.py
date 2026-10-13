@@ -25,6 +25,11 @@ class UserManagementCreate(BaseModel):
     gender: bool = False
     password: str = Field(min_length=MIN_PASSWORD_LENGTH)
     role_id: int
+    #: Jerarquía de CER Route: cargo y superior, en la misma operación. Un
+    #: `route_manager` está **obligado** a darlos (la persona nueva queda en su
+    #: rama); para el resto son opcionales.
+    position: Optional[str] = None
+    superior_user_id: Optional[int] = None
 
     model_config = ConfigDict(extra="forbid")
 

@@ -50,7 +50,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import Integer, func, or_, select, tuple_
+from sqlalchemy import Integer, false, func, or_, select, tuple_
 
 from app.core.db.session import db_session
 from app.routers_api.activities.models import (
@@ -64,6 +64,7 @@ from app.routers_api.mileage.read import (
     pendientes,
     sin_resolver,
 )
+from app.routers_api.companies.models import UserCompany
 from app.routers_api.trips.models import Trip, TripStatus
 from app.routers_api.users.models import Users
 from app.routers_api.vehicles.models import SupervisorProfile, Vehicle
@@ -78,13 +79,41 @@ def _iniciales(nombre: str, apellido: str) -> str:
     return f"{(nombre or '?')[:1]}{(apellido or '')[:1]}".upper() or "?"
 
 
-async def today_rows(company_id: int, ahora: datetime) -> list[dict]:
+def _vivos(company_id: int, usuarios_visibles: set[int] | None) -> list:
+    """Las condiciones que deciden quién aparece hoy.
+
+    * **Alcance** (jerarquía): `usuarios_visibles` es la rama **vigente** de un
+      `route_manager`; `None`, el tenant. Un conjunto vacío es nadie.
+    * **Operación viva**: una pertenencia suspendida o retirada, o una identidad
+      desactivada, no es alguien que esté trabajando hoy. Su historia sigue en
+      Activity y Reports; aquí no aparece.
+    """
+    condiciones = [
+        SupervisorProfile.user_id.in_(
+            select(UserCompany.user_id).where(
+                UserCompany.company_id == company_id,
+                UserCompany.is_active.is_(True),
+                UserCompany.deleted_at.is_(None),
+            )
+        ),
+        Users.is_active.is_(True),
+    ]
+    if usuarios_visibles is not None:
+        condiciones.append(
+            SupervisorProfile.user_id.in_(usuarios_visibles) if usuarios_visibles else false()
+        )
+    return condiciones
+
+
+async def today_rows(
+    company_id: int, ahora: datetime, usuarios_visibles: set[int] | None = None
+) -> list[dict]:
     """Una fila por supervisor autorizado, con todo lo que la pantalla enseña.
 
-    El conjunto de supervisores lo decide **el servidor**. Hoy son todos los
-    perfiles activos de la compañía; cuando exista jerarquía organizativa será
-    este `where` el que se estreche, sin que la pantalla cambie una línea. Por
-    eso el frontend nunca filtra por rol: no sabría hacerlo y no debe.
+    El conjunto de supervisores lo decide **el servidor**: los perfiles activos
+    de la compañía, acotados a la rama vigente cuando quien mira es un
+    `route_manager` (`organization.scope`). Por eso el frontend nunca filtra por
+    rol: no sabría hacerlo y no debe.
 
     `ahora` es un instante, no una fecha: cada supervisor lo convierte a **su**
     día con su propia zona (T-1/T-2).
@@ -104,6 +133,7 @@ async def today_rows(company_id: int, ahora: datetime) -> list[dict]:
                     SupervisorProfile.company_id == company_id,
                     SupervisorProfile.is_active.is_(True),
                     SupervisorProfile.deleted_at.is_(None),
+                    *_vivos(company_id, usuarios_visibles),
                 )
                 .order_by(Users.first_name, Users.last_name)
             )
@@ -187,6 +217,7 @@ async def today_rows(company_id: int, ahora: datetime) -> list[dict]:
                     SupervisorProfile.company_id == company_id,
                     SupervisorProfile.is_active.is_(True),
                     SupervisorProfile.deleted_at.is_(None),
+                    *_vivos(company_id, usuarios_visibles),
                 )
                 .order_by(Users.first_name, Users.last_name)
             )

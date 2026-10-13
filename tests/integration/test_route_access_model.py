@@ -64,10 +64,12 @@ async def _crear(cliente, *, sufijo: str, role_id: int):
 # ── El modelo, en el catálogo ────────────────────────────────────────────────
 
 
-def test_cer_route_has_exactly_two_product_roles():
-    assert ROUTE_PRODUCT_ROLES == {"route_admin", "supervisor"}
+def test_cer_route_has_exactly_three_product_roles():
+    """Eran dos (FR-01); la jerarquía añadió `route_manager` (D-1 del PO)."""
+    assert ROUTE_PRODUCT_ROLES == {"route_admin", "route_manager", "supervisor"}
     assert ROUTE_PRODUCT_ROLE_LABELS == {
         "route_admin": "Administrador",
+        "route_manager": "Route Manager",
         "supervisor": "Supervisor",
     }
 
@@ -345,7 +347,7 @@ async def test_the_administrator_reads_and_manages_the_values(seeded, alpha_clie
 # ── Caso límite 20: los roles del núcleo, fuera del selector ─────────────────
 
 
-async def test_the_assignable_roles_endpoint_offers_exactly_the_two_route_roles(
+async def test_the_assignable_roles_endpoint_offers_exactly_the_route_roles(
     seeded, alpha_client,
 ):
     """Caso 20, por API. El selector del navegador se valida aparte.
@@ -358,7 +360,7 @@ async def test_the_assignable_roles_endpoint_offers_exactly_the_two_route_roles(
     assert respuesta.status_code == 200
     opciones = respuesta.json()
     assert {o["code"] for o in opciones} == ROUTE_PRODUCT_ROLES
-    assert {o["label"] for o in opciones} == {"Administrador", "Supervisor"}
+    assert {o["label"] for o in opciones} == {"Administrador", "Route Manager", "Supervisor"}
     for opcion in opciones:
         assert opcion["id"] == seeded.alpha.roles[opcion["code"]]
 

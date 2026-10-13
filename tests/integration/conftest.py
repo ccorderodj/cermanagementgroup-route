@@ -281,6 +281,7 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "platform_health_check",
     "role_permission_change_request",
     "role_permission",
+    "org_assignment",
     "user_company",
     "company_state",
     "role",

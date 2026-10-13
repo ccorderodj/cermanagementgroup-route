@@ -13,6 +13,9 @@ interface IPostUserManagementPayload {
     password: string;
     gender?: boolean;
     role_id: number;
+    /** Jerarquía de CER Route: cargo y superior, en la misma operación. */
+    position?: string;
+    superior_user_id?: number;
     /**
      * Desde qué producto se administra. No viaja en el cuerpo: decide **a qué
      * ruta** se envía, y con ello qué roles acepta el servidor.
