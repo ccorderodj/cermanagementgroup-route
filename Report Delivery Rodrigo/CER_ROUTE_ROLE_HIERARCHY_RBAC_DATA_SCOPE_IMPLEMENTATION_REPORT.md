@@ -241,7 +241,13 @@ D-3 «vigente» en vez de «por periodo» ahorraría unas 3 h.
 
 ## 6 · Git
 
-⟨GIT⟩
+| | |
+|---|---|
+| Rama | `docs/hierarchy-rbac-control-a` (desde `dev` `153f9e6`) |
+| Cambio | este reporte y la instrucción; **ningún código** |
+| Commit | `606255d` · el siguiente añade este bloque |
+| MR | **!88** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/88 → `dev` |
+| Fusionado | **No** |
 
 ---
 
