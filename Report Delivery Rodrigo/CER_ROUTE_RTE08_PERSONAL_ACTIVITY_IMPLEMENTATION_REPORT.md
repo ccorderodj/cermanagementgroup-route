@@ -195,7 +195,13 @@ consume, no los reimplementa.
 
 ## 7 · MR, estado y riesgos
 
-⟨GIT⟩
+| | |
+|---|---|
+| Rama | `feature/rte08-personal-activity` (desde `dev` `5939a9e`) |
+| Commits | `acac811` implementación, pruebas y este reporte · el siguiente añade este bloque |
+| Push | sí |
+| MR | **!87** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/87 → `dev` |
+| Fusionado / desplegado | **No**: pendiente de validación de CER y autorización del PO |
 
 **Hallazgo incidental, preexistente y también en el admin:** un viaje sin
 actividad muestra su hora como `— · 11:43 PM UTC——`. El «UTC» es la regla
