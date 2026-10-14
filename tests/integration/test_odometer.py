@@ -520,7 +520,7 @@ async def test_another_supervisor_cannot_read_the_photo(seeded, alpha_client):
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     otro = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={
                 "username": "otrosupodo",
                 "email": "otrosupodo@alpha.example.com",

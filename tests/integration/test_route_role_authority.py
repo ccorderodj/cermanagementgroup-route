@@ -53,7 +53,10 @@ async def _crear_usuario_con_rol(cliente, *, sufijo: str, role_id: int, superior
     }
     if superior is not None:
         cuerpo["superior_user_id"] = superior
-    return await cliente.post("/api/users", json=cuerpo)
+    # V1.4: un rol de la jerarquía (con superior) sólo entra por CER Route; la
+    # escalada por el contrato general se sigue midiendo sin superior.
+    ruta = "/api/route/users" if superior is not None else "/api/users"
+    return await cliente.post(ruta, json=cuerpo)
 
 
 # ── Lo que un Route Admin debería poder asignar, y puede ─────────────────────

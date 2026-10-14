@@ -58,7 +58,10 @@ async def _crear(cliente, *, sufijo: str, role_id: int, superior: int | None = N
     }
     if superior is not None:
         cuerpo["superior_user_id"] = superior
-    return await cliente.post("/api/users", json=cuerpo)
+    # V1.4: un rol de la jerarquía (con superior) sólo entra por CER Route; la
+    # escalada por el contrato general se sigue midiendo sin superior.
+    ruta = "/api/route/users" if superior is not None else "/api/users"
+    return await cliente.post(ruta, json=cuerpo)
 
 
 # ── El modelo, en el catálogo ────────────────────────────────────────────────
@@ -162,13 +165,13 @@ async def test_the_administrator_can_switch_a_user_between_route_roles(
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
 
     ascenso = await alpha_client.put(
-        f"/api/users/{supervisor.id}",
+        f"/api/route/users/{supervisor.id}",
         json={"role_id": seeded.alpha.roles["route_admin"]},
     )
     assert ascenso.status_code == 200, ascenso.text
 
     vuelta = await alpha_client.put(
-        f"/api/users/{supervisor.id}",
+        f"/api/route/users/{supervisor.id}",
         # V1.3: volver a un cargo de la jerarquía es elegir a quién reporta.
         json={
             "role_id": seeded.alpha.roles["supervisor"],

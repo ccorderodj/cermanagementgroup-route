@@ -481,13 +481,18 @@ async def _promover_a_supervisor(alpha_client, seeded, usuario: str) -> None:
     Hace falta porque sólo `supervisor` y `route_admin` traen
     `route.worksession.execute` en los roles por defecto, y este test necesita
     cuatro jornadas simultáneas en estados distintos. Se concede con
-    `PUT /api/users/{id}`, que es la pantalla real de administración: inventar
-    la capacidad por SQL probaría un estado que el producto no puede alcanzar.
+    `PUT /api/route/users/{id}`, que es la pantalla real de administración
+    (V1.4: un rol de la jerarquía sólo por CER Route y con su superior):
+    inventar la capacidad por SQL probaría un estado que el producto no puede
+    alcanzar.
     """
     await alpha_client.login(seeded.alpha.users["owner"].email)
     respuesta = await alpha_client.put(
-        f"/api/users/{seeded.alpha.users[usuario].id}",
-        json={"role_id": seeded.alpha.roles["supervisor"]},
+        f"/api/route/users/{seeded.alpha.users[usuario].id}",
+        json={
+            "role_id": seeded.alpha.roles["supervisor"],
+            "superior_user_id": seeded.alpha.users["ceo_base"].id,
+        },
     )
     assert respuesta.status_code == 200, respuesta.text
 

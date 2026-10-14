@@ -294,7 +294,8 @@ async def test_re_enrollment_is_audited_without_the_credential(
     user_id = await _retirar(alpha_client, seeded, "auditada")
     await alpha_client.post(
         f"/api/route/users/{user_id}/reenrollment",
-        json={"role_id": seeded.alpha.roles["supervisor"]},
+        json={"role_id": seeded.alpha.roles["supervisor"],
+              "superior_user_id": seeded.alpha.users["ceo_base"].id},
     )
 
     async with async_session_maker() as session:
@@ -421,7 +422,8 @@ async def test_two_simultaneous_re_enrollments_restore_once(seeded, alpha_client
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     user_id = await _retirar(alpha_client, seeded, "simultanea")
 
-    cuerpo = {"role_id": seeded.alpha.roles["supervisor"]}
+    cuerpo = {"role_id": seeded.alpha.roles["supervisor"],
+              "superior_user_id": seeded.alpha.users["ceo_base"].id}
     a, b = await asyncio.gather(
         alpha_client.post(f"/api/route/users/{user_id}/reenrollment", json=cuerpo),
         alpha_client.post(f"/api/route/users/{user_id}/reenrollment", json=cuerpo),

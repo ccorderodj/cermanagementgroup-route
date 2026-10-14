@@ -761,7 +761,7 @@ async def test_deleting_a_designation_requires_the_capability(seeded, alpha_clie
 
 async def _crear_usuario(cliente, seeded, username: str) -> dict:
     respuesta = await cliente.post(
-        "/api/users",
+        "/api/route/users",
         json={
             "username": username,
             "email": f"{username}@alpha.example.com",

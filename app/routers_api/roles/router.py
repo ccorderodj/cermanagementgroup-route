@@ -10,10 +10,11 @@ Todo cuelga de la compañía activa: los roles son del tenant (D8), y ninguna
 consulta de este módulo se hace sin `company_id`.
 """
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import TypeAdapter
 
 from app.core import schema
+from app.core.rbac.catalog import ROUTE_LEGACY_ROLES, ROUTE_PRODUCT_ROLES
 from app.core.utils.api_paginator import Paginator
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.companies.context import TenantContext
@@ -146,6 +147,18 @@ async def create_role(
     return RoleRead.model_validate(created)
 
 
+#: Roles cuyo **nombre** es un contrato: CER Route deduce de él el cargo y el
+#: alcance de datos de sus miembros. Renombrar «COO» dejaría a todos los COO
+#: sin cargo y con alcance de compañía entera; borrarlo, sin rol que asignar
+#: (V1.4, FR-01). Sus capacidades y su descripción sí se pueden cambiar.
+_NOMBRES_FIJOS = ROUTE_PRODUCT_ROLES | ROUTE_LEGACY_ROLES
+
+
+async def _nombre_actual(*, role_id: int, company_id: int) -> str:
+    rol = await RolesDAO.get_for_company(role_id=role_id, company_id=company_id)
+    return rol.name
+
+
 @router.put("/{role_id}")
 async def update_role(
     role_id: int,
@@ -153,6 +166,16 @@ async def update_role(
     _authz: None = Depends(require_permissions(["roles.update"])),
     company: TenantContext = Depends(get_company_required),
 ) -> RoleRead:
+    nombre = await _nombre_actual(role_id=role_id, company_id=company.id)
+    if (
+        nombre in _NOMBRES_FIJOS
+        and payload.name is not None
+        and payload.name.strip() != nombre
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CER Route roles keep their name: the hierarchy depends on it.",
+        )
     updated = await RolesDAO.update_for_company(
         role_id=role_id,
         company_id=company.id,
@@ -167,5 +190,10 @@ async def delete_role(
     _authz: None = Depends(require_permissions(["roles.delete"])),
     company: TenantContext = Depends(get_company_required),
 ) -> RoleRead:
+    if await _nombre_actual(role_id=role_id, company_id=company.id) in _NOMBRES_FIJOS:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="CER Route roles cannot be deleted: the hierarchy depends on them.",
+        )
     deleted = await RolesDAO.soft_delete(role_id=role_id, company_id=company.id)
     return RoleRead.model_validate(deleted)
