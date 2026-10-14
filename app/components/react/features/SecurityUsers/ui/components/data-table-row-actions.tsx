@@ -23,6 +23,7 @@ import { useUser } from '@/app/providers/StoreProvider';
 import {
     deleteUserManagement,
     setUserAccess,
+    type UserManagementContract,
     type UserManagementEntity,
 } from '@/entities/UserManagement';
 import SecurityUserForm from '../SecurityUserForm';
@@ -33,11 +34,18 @@ interface DataTableRowActionsProps<TData> {
     onEdited: (data: UserManagementEntity) => void;
     onDeleted?: (userId: number) => void;
     onError?: (message: string) => void;
+    /**
+     * Desde qué producto se administra. **Edit user tiene que usar el mismo
+     * contrato que Create user**: sin él, en Users de CER Route la edición
+     * abría el formulario del núcleo —catálogo genérico de roles, sin
+     * «Reports to»— y guardaba por `/api/users` (V1.3, AC-01).
+     */
+    contract?: UserManagementContract;
 }
 
 export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData>) {
     const {
-        row, disabled, onEdited, onDeleted, onError,
+        row, disabled, onEdited, onDeleted, onError, contract,
     } = props;
 
     const dispatch = useAppDispatch();
@@ -126,7 +134,7 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
                         </DialogDescription>
                     </DialogHeader>
 
-                    <SecurityUserForm getData={getData} initialData={rowData} />
+                    <SecurityUserForm getData={getData} initialData={rowData} contract={contract} />
 
                     <Button type="button" variant="outline" onClick={closeDialog}>
                         <X className="mr-2 size-4" />

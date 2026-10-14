@@ -75,7 +75,8 @@ async def test_route_admin_can_create_a_tenant_user(seeded, alpha_client):
 
     respuesta = await alpha_client.post(
         "/api/users",
-        json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
+        json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
+                  "superior_user_id": seeded.alpha.users["ceo_base"].id},
     )
 
     assert respuesta.status_code == 200, respuesta.text
@@ -94,7 +95,8 @@ async def test_the_created_user_belongs_only_to_the_acting_tenant(
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
+                  "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )
     ).json()
 
@@ -111,7 +113,8 @@ async def test_route_admin_can_update_and_suspend_a_user(seeded, alpha_client):
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
+                  "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )
     ).json()
 
@@ -227,7 +230,9 @@ async def test_route_admin_cannot_administer_roles_themselves(seeded, alpha_clie
     # Y lo que sustituye a esa lectura sí funciona.
     asignables = await alpha_client.get("/api/users/assignable-roles")
     assert asignables.status_code == 200
-    assert {o["code"] for o in asignables.json()} == {"route_admin", "route_manager", "supervisor"}
+    assert {o["code"] for o in asignables.json()} == {
+        "route_admin", "CEO", "COO", "Regional Manager", "OSM", "supervisor", "Sales",
+    }
 
 
 # ── Designación de supervisor desde el producto ─────────────────────────────
@@ -515,7 +520,8 @@ async def test_user_administration_is_audited_by_core(seeded, alpha_client):
     creado = (
         await alpha_client.post(
             "/api/users",
-            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"]},
+            json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
+                  "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )
     ).json()
 

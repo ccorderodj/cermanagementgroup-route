@@ -1,5 +1,5 @@
 """
-Jerarquía organizacional, RBAC y alcance de datos (Control C).
+Jerarquía organizacional, RBAC y alcance de datos (V1.3: un rol por cargo).
 
 El organigrama de prueba, en alpha (todo por API, como lo haría el Superadmin):
 
@@ -7,18 +7,21 @@ El organigrama de prueba, en alpha (todo por API, como lo haría el Superadmin):
      ├── COO
      │    ├── RM-A ── OSM-A, SUP-A
      │    └── SUP-C                (COO → Supervisor, sin RM)
-     └── RM-B ── SUP-B             (CEO → RM, sin COO)
+     ├── RM-B ── SUP-B             (CEO → RM, sin COO)
+     └── SALES-A                   (Sales, directo al CEO)
 
     `supervisor` (sembrado) queda **sin asignar**.
 
-CEO, COO, RM-A y RM-B tienen el rol `route_manager`; OSM-A y los SUP, el rol
-`supervisor`. Beta es el otro tenant.
+Cada persona tiene el rol de su cargo (CEO, COO, Regional Manager, OSM,
+supervisor, Sales) y su superior se elige **al crearla**, en la misma
+operación. Beta es el otro tenant.
 
-Lo que se defiende: invariantes del modelo (nivel, ciclos, superior único,
-tenant, concurrencia, auditoría), el alcance por rama en Today, Activity,
-Reports y Excel, la historia por periodo con `started_at` (D-3), la
-administración delegada por **todas** las rutas de usuarios y la igualdad
-OSM = Supervisor.
+Lo que se defiende: los seis roles con sus capacidades efectivas, el cargo que
+sale del rol, los superiores permitidos (Sales sólo bajo un CEO), las
+invariantes del modelo, el alcance por rama en Today, Activity, Reports y Excel
+—COO y RM **nunca** ven a Sales—, la historia por periodo (D-3), la
+administración delegada por todas las rutas de usuarios, la igualdad
+OSM = Supervisor = Sales y el `route_manager` heredado.
 """
 
 from __future__ import annotations
@@ -41,32 +44,70 @@ pytestmark = pytest.mark.integration
 ORG = "/api/route/organization"
 DIA = date(2026, 9, 16)
 
+#: Clave de la persona → (rol, superior). En orden: cada superior antes.
+ORGANIGRAMA: tuple[tuple[str, str, str | None], ...] = (
+    ("ceo", "CEO", None),
+    ("coo", "COO", "ceo"),
+    ("rm_a", "Regional Manager", "coo"),
+    ("rm_b", "Regional Manager", "ceo"),
+    ("osm_a", "OSM", "rm_a"),
+    ("sup_a", "supervisor", "rm_a"),
+    ("sup_b", "supervisor", "rm_b"),
+    ("sup_c", "supervisor", "coo"),
+    ("sales_a", "Sales", "ceo"),
+)
+EJECUTORES = ("osm_a", "sup_a", "sup_b", "sup_c", "sales_a")
+
 
 # ── Ayudas ──────────────────────────────────────────────────────────────────
 
 
-async def _persona(cliente, seeded, clave: str, rol: str, *, compania: str = "alpha") -> SeededUser:
+async def _alta(cliente, seeded, clave, rol, superior=None, *, actor="route_admin", compania="alpha"):
+    """POST de alta por el contrato de Route; devuelve la respuesta."""
     empresa = getattr(seeded, compania)
-    await cliente.login(empresa.users["route_admin"].email)
-    r = await cliente.post(
-        "/api/route/users",
-        json={
-            "username": f"{compania}_{clave}",
-            "email": f"{clave}@{compania}.example.com",
-            "first_name": clave.upper(),
-            "last_name": "Org",
-            "password": TEST_PASSWORD,
-            "role_id": empresa.roles[rol],
-        },
-    )
-    assert r.status_code in (200, 201), r.text
+    await cliente.login(empresa.users[actor].email)
+    cuerpo = {
+        "username": f"{compania}_{clave}",
+        "email": f"{clave}@{compania}.example.com",
+        "first_name": clave.upper(),
+        "last_name": "Org",
+        "password": TEST_PASSWORD,
+        "role_id": empresa.roles[rol],
+    }
+    if superior is not None:
+        cuerpo["superior_user_id"] = empresa.users[superior].id
+    return await cliente.post("/api/route/users", json=cuerpo)
+
+
+async def _persona(cliente, seeded, clave, rol, superior=None, *, compania="alpha") -> SeededUser:
+    r = await _alta(cliente, seeded, clave, rol, superior, compania=compania)
+    assert r.status_code in (200, 201), (clave, r.text)
+    empresa = getattr(seeded, compania)
     usuario = SeededUser(id=r.json()["id"], email=f"{clave}@{compania}.example.com",
                          username=f"{compania}_{clave}", role=rol)
     empresa.users[clave] = usuario
     return usuario
 
 
+async def _organigrama(cliente, seeded, *, perfiles: bool = True) -> None:
+    for clave, rol, jefe in ORGANIGRAMA:
+        await _persona(cliente, seeded, clave, rol, jefe)
+    if perfiles:
+        for clave in (*EJECUTORES, "supervisor"):
+            await _perfil_y_vehiculo(cliente, seeded, unidad=f"V-ORG-{clave}", usuario=clave)
+
+
+async def _superior(cliente, seeded, clave, jefe, *, actor="route_admin", **extra):
+    """Cambia a quién reporta, por la edición del usuario (rol + superior)."""
+    await cliente.login(seeded.alpha.users[actor].email)
+    return await cliente.put(
+        f"/api/route/users/{seeded.alpha.users[clave].id}",
+        json={"superior_user_id": seeded.alpha.users[jefe].id if jefe else None, **extra},
+    )
+
+
 async def _cargo(cliente, seeded, clave, posicion, superior=None, *, actor="route_admin", **extra):
+    """Por la API de organización (sigue existiendo; el cargo debe ser el del rol)."""
     await cliente.login(seeded.alpha.users[actor].email)
     return await cliente.put(
         f"{ORG}/{seeded.alpha.users[clave].id}",
@@ -76,28 +117,6 @@ async def _cargo(cliente, seeded, clave, posicion, superior=None, *, actor="rout
             **extra,
         },
     )
-
-
-async def _organigrama(cliente, seeded, *, perfiles: bool = True) -> None:
-    for clave in ("ceo", "coo", "rm_a", "rm_b"):
-        await _persona(cliente, seeded, clave, "route_manager")
-    for clave in ("osm_a", "sup_a", "sup_b", "sup_c"):
-        await _persona(cliente, seeded, clave, "supervisor")
-    for clave, cargo, jefe in (
-        ("ceo", "ceo", None),
-        ("coo", "coo", "ceo"),
-        ("rm_a", "regional_manager", "coo"),
-        ("rm_b", "regional_manager", "ceo"),
-        ("osm_a", "osm", "rm_a"),
-        ("sup_a", "supervisor", "rm_a"),
-        ("sup_b", "supervisor", "rm_b"),
-        ("sup_c", "supervisor", "coo"),
-    ):
-        r = await _cargo(cliente, seeded, clave, cargo, jefe)
-        assert r.status_code == 200, (clave, r.text)
-    if perfiles:
-        for clave in ("osm_a", "sup_a", "sup_b", "sup_c", "supervisor"):
-            await _perfil_y_vehiculo(cliente, seeded, unidad=f"V-ORG-{clave}", usuario=clave)
 
 
 def _ids(seeded, *claves) -> set[int]:
@@ -143,8 +162,27 @@ async def _ejecutar(sql: str, **p):
         await s.commit()
 
 
+async def _vigente(seeded, clave):
+    filas = await _filas(
+        "SELECT position, superior_user_id, version FROM org_assignment "
+        "WHERE user_id = :u AND valid_to IS NULL",
+        u=seeded.alpha.users[clave].id,
+    )
+    return filas[0] if filas else None
+
+
+async def _capacidades(role_id: int) -> set[str]:
+    return {
+        f.name
+        for f in await _filas(
+            "SELECT p.name FROM permission p JOIN role_permission rp ON rp.permission_id = p.id "
+            "WHERE rp.role_id = :r AND rp.is_active",
+            r=role_id,
+        )
+    }
+
+
 async def _retrofechar(company_id: int, desde: datetime) -> None:
-    """Prepara la historia: las asignaciones abiertas valen desde `desde`."""
     await _ejecutar(
         "UPDATE org_assignment SET valid_from = :d WHERE company_id = :c AND valid_to IS NULL",
         d=desde, c=company_id,
@@ -155,71 +193,200 @@ async def _iniciada(jornada_id: int, instante: datetime) -> None:
     await _ejecutar("UPDATE work_session SET started_at = :t WHERE id = :i", t=instante, i=jornada_id)
 
 
-# ── Modelo e invariantes ────────────────────────────────────────────────────
-
-
-async def test_niveles_opcionales_y_sin_backfill(seeded, alpha_client):
-    """CEO→RM sin COO y COO→Supervisor sin RM son válidos; nadie más tiene cargo."""
-    assert await _filas("SELECT 1 FROM org_assignment") == [], "sin asignaciones inferidas"
-    await _organigrama(alpha_client, seeded, perfiles=False)
-    filas = await _filas(
-        "SELECT user_id, position, superior_user_id FROM org_assignment WHERE valid_to IS NULL"
+async def _trasladar_en(user_id: int, t: datetime) -> None:
+    """Fija el instante del último traslado de `user_id` (preparación de prueba)."""
+    await _ejecutar(
+        "UPDATE org_assignment SET valid_to = :t WHERE user_id = :u AND valid_to IS NOT NULL", t=t, u=user_id
     )
-    assert len(filas) == 8
-    assert seeded.alpha.users["supervisor"].id not in {f.user_id for f in filas}
+    await _ejecutar(
+        "UPDATE org_assignment SET valid_from = :t WHERE user_id = :u AND valid_to IS NULL", t=t, u=user_id
+    )
+
+
+# ── Roles y capacidades efectivas ───────────────────────────────────────────
+
+
+MANDO = {
+    "route.worksession.execute", "route.standardvalues.read", "route.live.read",
+    "route.activity.read", "route.reports.read", "route.reports.export",
+    "users.read", "users.create", "users.update",
+}
+EJECUCION = {"route.worksession.execute", "route.standardvalues.read"}
+
+
+async def test_los_seis_roles_con_sus_capacidades_efectivas(seeded):
+    for rol in ("CEO", "COO", "Regional Manager"):
+        assert await _capacidades(seeded.alpha.roles[rol]) == MANDO, rol
+    for rol in ("OSM", "supervisor", "Sales"):
+        assert await _capacidades(seeded.alpha.roles[rol]) == EJECUCION, rol
+    # El heredado conserva las de mando; `route_admin` no cambia.
+    assert await _capacidades(seeded.alpha.roles["route_manager"]) == MANDO
+    assert len(await _capacidades(seeded.alpha.roles["route_admin"])) == 16
+    categorias = await _filas(
+        "SELECT DISTINCT category FROM role WHERE company_id = :c AND name IN "
+        "('CEO','COO','Regional Manager','OSM','Sales')",
+        c=seeded.alpha.id,
+    )
+    assert {f.category for f in categorias} == {"operative"}, "management da autoridad de aprobación"
+
+
+async def test_el_formulario_de_route_ofrece_los_roles_por_su_nombre(seeded, alpha_client):
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    r = await alpha_client.get("/api/route/users/assignable-roles")
+    assert {o["label"] for o in r.json()} == {
+        "Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales",
+    }
+    assert "route_manager" not in {o["code"] for o in r.json()}, "el heredado ya no se ofrece"
+
+
+async def test_el_rol_heredado_ya_no_se_asigna(seeded, alpha_client):
+    r = await _alta(alpha_client, seeded, "viejo", "route_manager")
+    assert r.status_code == 403
+
+
+# ── Estructura: superior por persona y por cargo ────────────────────────────
+
+
+async def test_organigrama_completo_sin_niveles_ficticios_y_sin_backfill(seeded, alpha_client):
+    # Sólo el CEO raíz que siembra la fixture: nada inferido.
+    sembrados = {seeded.alpha.users["ceo_base"].id, seeded.beta.users["ceo_base"].id}
+    assert {f.user_id for f in await _filas("SELECT user_id FROM org_assignment")} == sembrados
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    filas = {
+        f.user_id: (f.position, f.superior_user_id)
+        for f in await _filas(
+            "SELECT user_id, position, superior_user_id FROM org_assignment WHERE valid_to IS NULL"
+        )
+    }
+    u = seeded.alpha.users
+    assert filas[u["sales_a"].id] == ("sales", u["ceo"].id)
+    assert filas[u["rm_b"].id] == ("regional_manager", u["ceo"].id)
+    assert filas[u["sup_c"].id] == ("supervisor", u["coo"].id)
+    assert filas[u["ceo"].id] == ("ceo", None)
+    assert u["supervisor"].id not in filas
 
 
 @pytest.mark.parametrize(
-    ("clave", "cargo", "jefe", "codigo"),
+    ("clave", "rol", "jefe"),
     [
-        ("sup_a", "supervisor", "osm_a", 422),   # lateral Supervisor → OSM
-        ("osm_a", "osm", "sup_a", 422),          # lateral OSM → Supervisor
-        ("rm_b", "regional_manager", "rm_a", 422),  # par
-        ("coo", "coo", "rm_a", 422),             # superior de nivel inferior
-        ("sup_a", "supervisor", "sup_a", 422),   # a sí mismo
+        ("x_sales_coo", "Sales", "coo"),          # Sales sólo bajo un CEO
+        ("x_sales_rm", "Sales", "rm_a"),
+        ("x_sales_sin", "Sales", None),           # y siempre con superior
+        ("x_sup_osm", "supervisor", "osm_a"),     # lateral
+        ("x_osm_sup", "OSM", "sup_a"),            # lateral
+        ("x_rm_rm", "Regional Manager", "rm_a"),  # par
+        ("x_coo_rm", "COO", "rm_a"),              # de un inferior
+        ("x_coo_sin", "COO", None),               # sin superior
+        ("x_sup_sales", "supervisor", "sales_a"),  # Sales no es superior de nadie
     ],
 )
-async def test_relaciones_invalidas_se_rechazan(seeded, alpha_client, clave, cargo, jefe, codigo):
+async def test_superiores_no_permitidos_se_rechazan_sin_crear_nada(seeded, alpha_client, clave, rol, jefe):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    r = await _cargo(alpha_client, seeded, clave, cargo, jefe)
-    assert r.status_code == codigo, r.text
+    r = await _alta(alpha_client, seeded, clave, rol, jefe)
+    assert r.status_code == 422, r.text
+    assert await _filas('SELECT 1 FROM "user" WHERE username = :u', u=f"alpha_{clave}") == []
 
 
-async def test_superior_de_otro_tenant_y_objetivo_de_otro_tenant(seeded, alpha_client, beta_client):
+async def test_superior_de_otro_tenant_o_inactivo(seeded, alpha_client, beta_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    ajeno = await _persona(beta_client, seeded, "beta_rm", "route_manager", compania="beta")
+    ajeno = await _persona(beta_client, seeded, "beta_ceo", "CEO", compania="beta")
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     r = await alpha_client.put(
-        f"{ORG}/{seeded.alpha.users['sup_a'].id}",
-        json={"position": "supervisor", "superior_user_id": ajeno.id},
+        f"/api/route/users/{seeded.alpha.users['sales_a'].id}", json={"superior_user_id": ajeno.id}
     )
     assert r.status_code == 422
-    r = await alpha_client.put(f"{ORG}/{ajeno.id}", json={"position": "supervisor"})
-    assert r.status_code == 404
+    # Un CEO suspendido no es elegible.
+    otro = await _persona(alpha_client, seeded, "ceo2", "CEO")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    await alpha_client.put(f"/api/route/users/{otro.id}/access", json={"is_active": False})
+    r = await _superior(alpha_client, seeded, "sales_a", "ceo2")
+    assert r.status_code == 422
+    assert (await _vigente(seeded, "sales_a")).superior_user_id == seeded.alpha.users["ceo"].id
+
+
+async def test_el_cargo_sigue_al_rol(seeded, alpha_client):
+    """No hay dos controles contradictorios: el cargo es el del rol."""
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    assert (await _cargo(alpha_client, seeded, "sup_a", "osm", "rm_a")).status_code == 422
+    assert (await _vigente(seeded, "sup_a")).position == "supervisor"
+
+
+async def test_el_superadmin_queda_fuera_del_arbol(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    admin2 = await _persona(alpha_client, seeded, "admin2", "route_admin")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    r = await alpha_client.put(f"{ORG}/{admin2.id}", json={
+        "position": "supervisor", "superior_user_id": seeded.alpha.users["rm_a"].id})
+    assert r.status_code == 422
+    assert await _filas("SELECT 1 FROM org_assignment WHERE user_id = :u", u=admin2.id) == []
+
+
+async def test_cambiar_rol_y_superior_es_atomico(seeded, alpha_client):
+    """Pasar SUP-A a Sales sin cambiar de superior (RM-A) no es válido: no cambia
+    ni el rol ni el superior."""
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    sup_a = seeded.alpha.users["sup_a"].id
+    r = await alpha_client.put(f"/api/route/users/{sup_a}", json={"role_id": seeded.alpha.roles["Sales"]})
+    assert r.status_code == 422
+    rol = await _filas(
+        "SELECT r.name FROM user_company uc JOIN role r ON r.id = uc.role_id "
+        "WHERE uc.user_id = :u AND uc.company_id = :c", u=sup_a, c=seeded.alpha.id,
+    )
+    assert rol[0].name == "supervisor"
+    assert (await _vigente(seeded, "sup_a")).position == "supervisor"
+    # Con el superior adecuado, sí: rol y cargo cambian juntos.
+    r = await alpha_client.put(f"/api/route/users/{sup_a}", json={
+        "role_id": seeded.alpha.roles["Sales"], "superior_user_id": seeded.alpha.users["ceo"].id})
+    assert r.status_code == 200, r.text
+    vigente = await _vigente(seeded, "sup_a")
+    assert (vigente.position, vigente.superior_user_id) == ("sales", seeded.alpha.users["ceo"].id)
+    eventos = await _filas(
+        "SELECT changes FROM audit_event WHERE entity_type = 'org_assignment' "
+        "AND entity_id = :u AND action = 'reassign'", u=sup_a,
+    )
+    assert eventos[-1].changes["position"] == {"old": "supervisor", "new": "sales"}
 
 
 async def test_un_manager_con_subordinados_no_baja_ni_se_retira(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    assert (await _cargo(alpha_client, seeded, "rm_a", "supervisor", "coo")).status_code == 409
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     rm_a = seeded.alpha.users["rm_a"].id
+    r = await alpha_client.put(f"/api/route/users/{rm_a}", json={"role_id": seeded.alpha.roles["supervisor"]})
+    assert r.status_code == 409
     assert (await alpha_client.delete(f"{ORG}/{rm_a}")).status_code == 409
     assert (await alpha_client.delete(f"/api/route/users/{rm_a}")).status_code == 409
+    # Un CEO con Sales directo no puede pasar a COO.
+    ceo = seeded.alpha.users["ceo"].id
+    r = await alpha_client.put(f"/api/route/users/{ceo}", json={"role_id": seeded.alpha.roles["COO"]})
+    assert r.status_code in (409, 422)
+
+
+async def test_pasar_a_ceo_deja_sin_superior(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    r = await alpha_client.put(
+        f"/api/route/users/{seeded.alpha.users['sup_c'].id}", json={"role_id": seeded.alpha.roles["CEO"]}
+    )
+    assert r.status_code == 200, r.text
+    vigente = await _vigente(seeded, "sup_c")
+    assert (vigente.position, vigente.superior_user_id) == ("ceo", None)
 
 
 async def test_nadie_se_asigna_a_si_mismo(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
+    await _como(alpha_client, seeded, "rm_a")
+    r = await alpha_client.put(f"{ORG}/{seeded.alpha.users['rm_a'].id}", json={
+        "position": "regional_manager", "superior_user_id": seeded.alpha.users["ceo"].id})
+    assert r.status_code in (403, 404)
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    r = await alpha_client.put(
-        f"{ORG}/{seeded.alpha.users['route_admin'].id}",
-        json={"position": "ceo"},
-    )
-    assert r.status_code == 403
+    r = await alpha_client.put(f"{ORG}/{seeded.alpha.users['route_admin'].id}", json={"position": "ceo"})
+    assert r.status_code in (403, 422)
 
 
 async def test_reasignar_cierra_y_abre_sin_solape_y_audita(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    assert (await _cargo(alpha_client, seeded, "sup_a", "supervisor", "rm_b")).status_code == 200
+    assert (await _superior(alpha_client, seeded, "sup_a", "rm_b")).status_code == 200
     filas = await _filas(
         "SELECT superior_user_id, valid_from, valid_to, version FROM org_assignment "
         "WHERE user_id = :u ORDER BY valid_from",
@@ -252,10 +419,7 @@ async def test_la_base_rechaza_dos_asignaciones_abiertas(seeded, alpha_client):
 
 async def test_dos_reasignaciones_simultaneas_una_gana(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    version = (await _filas(
-        "SELECT version FROM org_assignment WHERE user_id = :u AND valid_to IS NULL",
-        u=seeded.alpha.users["sup_a"].id,
-    ))[0].version
+    version = (await _vigente(seeded, "sup_a")).version
 
     async def intento(jefe: str) -> int:
         async with TenantClient("alpha") as c:
@@ -274,32 +438,31 @@ async def test_dos_reasignaciones_simultaneas_una_gana(seeded, alpha_client):
 # ── Alcance: Today, Activity, Reports, Excel ────────────────────────────────
 
 
-async def test_today_por_rama_vigente(seeded, alpha_client):
+async def test_today_por_rama_y_sales_solo_para_el_ceo(seeded, alpha_client):
     await _organigrama(alpha_client, seeded)
     assert await _hoy(alpha_client, seeded, "rm_a") == _ids(seeded, "osm_a", "sup_a")
     assert await _hoy(alpha_client, seeded, "rm_b") == _ids(seeded, "sup_b")
     assert await _hoy(alpha_client, seeded, "coo") == _ids(seeded, "osm_a", "sup_a", "sup_c")
-    assert await _hoy(alpha_client, seeded, "ceo") == _ids(seeded, "osm_a", "sup_a", "sup_b", "sup_c")
-    # El Superadmin conserva el tenant, incluido quien no tiene cargo.
-    assert await _hoy(alpha_client, seeded, "route_admin") == _ids(
-        seeded, "osm_a", "sup_a", "sup_b", "sup_c", "supervisor"
-    )
+    assert await _hoy(alpha_client, seeded, "ceo") == _ids(seeded, *EJECUTORES)
+    assert await _hoy(alpha_client, seeded, "route_admin") == _ids(seeded, *EJECUTORES, "supervisor")
 
 
 async def test_activity_por_rama_y_404_fuera(seeded, alpha_client):
     await _organigrama(alpha_client, seeded)
-    assert await _explorables(alpha_client, seeded, "rm_a") == _ids(seeded, "osm_a", "sup_a")
-    await _como(alpha_client, seeded, "rm_a")
+    assert await _explorables(alpha_client, seeded, "coo") == _ids(seeded, "osm_a", "sup_a", "sup_c")
+    assert seeded.alpha.users["sales_a"].id in await _explorables(alpha_client, seeded, "ceo")
     params = {"range": "week", "date": DIA.isoformat()}
-    ajeno = await alpha_client.get(
-        "/api/activity-explorer",
-        params={**params, "supervisor_user_id": seeded.alpha.users["sup_b"].id},
-    )
-    falso = await alpha_client.get(
-        "/api/activity-explorer", params={**params, "supervisor_user_id": 987654321}
-    )
-    assert ajeno.status_code == falso.status_code == 404
-    assert ajeno.json() == falso.json()
+    for actor in ("coo", "rm_a"):
+        await _como(alpha_client, seeded, actor)
+        ajeno = await alpha_client.get(
+            "/api/activity-explorer",
+            params={**params, "supervisor_user_id": seeded.alpha.users["sales_a"].id},
+        )
+        falso = await alpha_client.get(
+            "/api/activity-explorer", params={**params, "supervisor_user_id": 987654321}
+        )
+        assert ajeno.status_code == falso.status_code == 404
+        assert ajeno.json() == falso.json()
 
 
 async def test_reports_y_excel_con_el_mismo_alcance(seeded, alpha_client):
@@ -307,30 +470,40 @@ async def test_reports_y_excel_con_el_mismo_alcance(seeded, alpha_client):
     await _jornada(alpha_client, seeded, millas="10.0", usuario="sup_a")
     await _jornada(alpha_client, seeded, millas="4.0", usuario="osm_a")
     await _jornada(alpha_client, seeded, millas="7.0", usuario="sup_b")
+    await _jornada(alpha_client, seeded, millas="3.0", usuario="sales_a")
     await _jornada(alpha_client, seeded, millas="2.0", usuario="supervisor")
 
-    rm_a = await _informe(alpha_client, seeded, "rm_a")
-    assert {s["user_id"] for s in rm_a["supervisors"]} == _ids(seeded, "osm_a", "sup_a")
-    assert rm_a["summary"]["official_miles"] == "14.0"
-    assert (await _informe(alpha_client, seeded, "ceo"))["summary"]["official_miles"] == "21.0"
-    assert (await _informe(alpha_client, seeded, "route_admin"))["summary"]["official_miles"] == "23.0"
+    assert (await _informe(alpha_client, seeded, "rm_a"))["summary"]["official_miles"] == "14.0"
+    assert (await _informe(alpha_client, seeded, "coo"))["summary"]["official_miles"] == "14.0"
+    assert (await _informe(alpha_client, seeded, "ceo"))["summary"]["official_miles"] == "24.0"
+    assert (await _informe(alpha_client, seeded, "route_admin"))["summary"]["official_miles"] == "26.0"
 
-    await _como(alpha_client, seeded, "rm_a")
     params = {"range": "week", "date": DIA.isoformat()}
-    for ruta in ("/api/reports", "/api/reports/export"):
-        r = await alpha_client.get(
-            ruta, params={**params, "supervisor_user_id": seeded.alpha.users["sup_b"].id}
-        )
-        assert r.status_code == 404, ruta
+    for actor in ("coo", "rm_a"):
+        await _como(alpha_client, seeded, actor)
+        for ruta in ("/api/reports", "/api/reports/export"):
+            r = await alpha_client.get(
+                ruta, params={**params, "supervisor_user_id": seeded.alpha.users["sales_a"].id}
+            )
+            assert r.status_code == 404, (actor, ruta)
+        excel = await alpha_client.get("/api/reports/export", params=params)
+        filas = list(load_workbook(BytesIO(excel.content))["Activity Detail"].iter_rows(values_only=True))[1:]
+        assert 3.0 not in [f[8] for f in filas], f"{actor}: el Excel no trae a Sales"
+    await _como(alpha_client, seeded, "ceo")
     excel = await alpha_client.get("/api/reports/export", params=params)
-    assert excel.status_code == 200
     filas = list(load_workbook(BytesIO(excel.content))["Activity Detail"].iter_rows(values_only=True))[1:]
-    assert sorted(f[8] for f in filas) == [4.0, 10.0], "las filas del Excel = la pantalla"
+    assert sorted(f[8] for f in filas) == [3.0, 4.0, 7.0, 10.0]
 
 
 async def test_un_manager_sin_cargo_no_ve_a_nadie(seeded, alpha_client):
+    """Un `route_manager` heredado sin asignación: nada, nunca el tenant."""
     await _organigrama(alpha_client, seeded)
-    await _persona(alpha_client, seeded, "huerfano", "route_manager")
+    huerfano = await _persona(alpha_client, seeded, "huerfano", "OSM", "rm_a")
+    await _ejecutar(
+        "UPDATE user_company SET role_id = :r WHERE user_id = :u AND company_id = :c",
+        r=seeded.alpha.roles["route_manager"], u=huerfano.id, c=seeded.alpha.id,
+    )
+    await _ejecutar("DELETE FROM org_assignment WHERE user_id = :u", u=huerfano.id)
     await _jornada(alpha_client, seeded, millas="10.0", usuario="sup_a")
     assert await _hoy(alpha_client, seeded, "huerfano") == set()
     assert await _explorables(alpha_client, seeded, "huerfano") == set()
@@ -338,35 +511,57 @@ async def test_un_manager_sin_cargo_no_ve_a_nadie(seeded, alpha_client):
     assert vista["supervisors"] == [] and vista["summary"]["official_miles"] == "0.0"
     await _como(alpha_client, seeded, "huerfano")
     r = await alpha_client.get("/api/users/pagination", params={"page": 1, "page_size": 50})
-    assert r.json()["count"] == 0 if "count" in r.json() else r.json()["results"] == []
+    assert r.json()["count"] == 0
 
 
-async def test_osm_y_supervisor_son_iguales(seeded, alpha_client):
+async def test_route_manager_heredado_ve_su_rama_no_el_tenant(seeded, alpha_client):
+    """Quien ya tenía `route_manager` con cargo conserva el alcance de su rama."""
+    await _organigrama(alpha_client, seeded)
+    await _ejecutar(
+        "UPDATE user_company SET role_id = :r WHERE user_id = :u AND company_id = :c",
+        r=seeded.alpha.roles["route_manager"], u=seeded.alpha.users["rm_b"].id, c=seeded.alpha.id,
+    )
+    assert await _hoy(alpha_client, seeded, "rm_b") == _ids(seeded, "sup_b")
+
+
+async def test_osm_supervisor_y_sales_son_iguales(seeded, alpha_client):
     await _organigrama(alpha_client, seeded)
     permisos = {}
-    for clave in ("osm_a", "sup_a"):
+    for clave in ("osm_a", "sup_a", "sales_a"):
         await _como(alpha_client, seeded, clave)
         permisos[clave] = sorted(
-            (await _filas(
+            f.name for f in await _filas(
                 "SELECT p.name FROM permission p JOIN role_permission rp ON rp.permission_id = p.id "
                 "JOIN user_company uc ON uc.role_id = rp.role_id WHERE uc.user_id = :u",
                 u=seeded.alpha.users[clave].id,
-            ))
+            )
         )
         for ruta in ("/api/live/today", "/api/activity-explorer", "/api/reports",
-                     "/api/users/pagination", ORG):
+                     "/api/users/pagination", "/api/route/users/pagination", ORG):
             assert (await alpha_client.get(ruta)).status_code == 403, (clave, ruta)
         assert (await alpha_client.get("/api/activity-explorer/me")).status_code == 200
-    assert permisos["osm_a"] == permisos["sup_a"]
+    assert permisos["osm_a"] == permisos["sup_a"] == permisos["sales_a"]
+
+
+async def test_sales_ejecuta_y_ve_solo_lo_suyo(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded)
+    hecho = await _jornada(alpha_client, seeded, millas="3.0", usuario="sales_a")
+    assert hecho["viaje"]["id"]
+    await _jornada(alpha_client, seeded, millas="10.0", usuario="sup_a")
+    await _como(alpha_client, seeded, "sales_a")
+    r = await alpha_client.get("/api/activity-explorer/me", params={"range": "week", "date": DIA.isoformat()})
+    assert r.status_code == 200
+    assert r.json()["supervisor_user_id"] == seeded.alpha.users["sales_a"].id
+    assert [g["official_miles"] for g in r.json()["groups"]] == ["3.0"]
 
 
 async def test_un_manager_en_su_activity_personal_ve_solo_lo_suyo(seeded, alpha_client):
     await _organigrama(alpha_client, seeded)
     await _jornada(alpha_client, seeded, millas="10.0", usuario="sup_a")
-    await _como(alpha_client, seeded, "rm_a")
+    await _como(alpha_client, seeded, "ceo")
     r = await alpha_client.get("/api/activity-explorer/me", params={"range": "week", "date": DIA.isoformat()})
     assert r.status_code == 200
-    assert r.json()["supervisor_user_id"] == seeded.alpha.users["rm_a"].id
+    assert r.json()["supervisor_user_id"] == seeded.alpha.users["ceo"].id
     assert r.json()["groups"] == []
 
 
@@ -374,26 +569,16 @@ async def test_un_manager_en_su_activity_personal_ve_solo_lo_suyo(seeded, alpha_
 
 
 async def test_traslado_rm_a_rm_b_por_started_at(seeded, alpha_client):
-    """Antes de T, de RM-A; desde T, de RM-B. La jornada que empieza antes de T y
-    termina después es entera de RM-A."""
     await _organigrama(alpha_client, seeded)
     await _retrofechar(seeded.alpha.id, datetime(2026, 1, 1, tzinfo=timezone.utc))
     antes = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="10.0", usuario="sup_a")
     cruza = await _jornada(alpha_client, seeded, dia=date(2026, 9, 15), millas="3.0", usuario="sup_a")
     despues = await _jornada(alpha_client, seeded, dia=date(2026, 9, 17), millas="5.0", usuario="sup_a")
 
-    assert (await _cargo(alpha_client, seeded, "sup_a", "supervisor", "rm_b")).status_code == 200
-    t = datetime(2026, 9, 16, 3, 0, tzinfo=timezone.utc)
-    await _ejecutar(
-        "UPDATE org_assignment SET valid_to = :t WHERE user_id = :u AND valid_to IS NOT NULL",
-        t=t, u=seeded.alpha.users["sup_a"].id,
-    )
-    await _ejecutar(
-        "UPDATE org_assignment SET valid_from = :t WHERE user_id = :u AND valid_to IS NULL",
-        t=t, u=seeded.alpha.users["sup_a"].id,
-    )
+    assert (await _superior(alpha_client, seeded, "sup_a", "rm_b")).status_code == 200
+    u = seeded.alpha.users["sup_a"].id
+    await _trasladar_en(u, datetime(2026, 9, 16, 3, 0, tzinfo=timezone.utc))
     await _iniciada(antes["jornada"]["id"], datetime(2026, 9, 14, 13, tzinfo=timezone.utc))
-    # Empieza la noche del 15 y termina la madrugada del 16, pasado T.
     await _iniciada(cruza["jornada"]["id"], datetime(2026, 9, 16, 1, tzinfo=timezone.utc))
     await _iniciada(despues["jornada"]["id"], datetime(2026, 9, 17, 13, tzinfo=timezone.utc))
     await _ejecutar(
@@ -401,70 +586,50 @@ async def test_traslado_rm_a_rm_b_por_started_at(seeded, alpha_client):
         t=datetime(2026, 9, 16, 6, tzinfo=timezone.utc), i=cruza["jornada"]["id"],
     )
 
-    a = await _informe(alpha_client, seeded, "rm_a", supervisor_user_id=seeded.alpha.users["sup_a"].id)
-    b = await _informe(alpha_client, seeded, "rm_b", supervisor_user_id=seeded.alpha.users["sup_a"].id)
+    a = await _informe(alpha_client, seeded, "rm_a", supervisor_user_id=u)
+    b = await _informe(alpha_client, seeded, "rm_b", supervisor_user_id=u)
     assert a["summary"]["official_miles"] == "13.0", "las dos que empezaron antes de T"
     assert b["summary"]["official_miles"] == "5.0", "sólo la que empezó después"
-    # Hoy, sólo RM-B lo tiene.
-    assert seeded.alpha.users["sup_a"].id not in await _hoy(alpha_client, seeded, "rm_a")
-    assert seeded.alpha.users["sup_a"].id in await _hoy(alpha_client, seeded, "rm_b")
-    # Las jornadas no se tocaron.
-    sesiones = await _filas(
-        "SELECT count(*) AS n FROM work_session WHERE user_id = :u", u=seeded.alpha.users["sup_a"].id
-    )
+    assert u not in await _hoy(alpha_client, seeded, "rm_a")
+    assert u in await _hoy(alpha_client, seeded, "rm_b")
+    sesiones = await _filas("SELECT count(*) AS n FROM work_session WHERE user_id = :u", u=u)
     assert sesiones[0].n == 3
 
 
 async def test_mover_una_rama_entera(seeded, alpha_client):
-    """RM-A pasa del COO al CEO: el COO deja de ver la rama desde T; el CEO la
-    sigue viendo, porque estaba por encima antes y después."""
     await _organigrama(alpha_client, seeded)
     await _retrofechar(seeded.alpha.id, datetime(2026, 1, 1, tzinfo=timezone.utc))
     previa = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="10.0", usuario="sup_a")
     posterior = await _jornada(alpha_client, seeded, dia=date(2026, 9, 17), millas="5.0", usuario="sup_a")
-    assert (await _cargo(alpha_client, seeded, "rm_a", "regional_manager", "ceo")).status_code == 200
-    t = datetime(2026, 9, 16, tzinfo=timezone.utc)
-    await _ejecutar(
-        "UPDATE org_assignment SET valid_to = :t WHERE user_id = :u AND valid_to IS NOT NULL",
-        t=t, u=seeded.alpha.users["rm_a"].id,
-    )
-    await _ejecutar(
-        "UPDATE org_assignment SET valid_from = :t WHERE user_id = :u AND valid_to IS NULL",
-        t=t, u=seeded.alpha.users["rm_a"].id,
-    )
+    assert (await _superior(alpha_client, seeded, "rm_a", "ceo")).status_code == 200
+    await _trasladar_en(seeded.alpha.users["rm_a"].id, datetime(2026, 9, 16, tzinfo=timezone.utc))
+    await _iniciada(previa["jornada"]["id"], datetime(2026, 9, 14, 13, tzinfo=timezone.utc))
+    await _iniciada(posterior["jornada"]["id"], datetime(2026, 9, 17, 13, tzinfo=timezone.utc))
+    assert (await _informe(alpha_client, seeded, "coo"))["summary"]["official_miles"] == "10.0"
+    assert (await _informe(alpha_client, seeded, "ceo"))["summary"]["official_miles"] == "15.0"
+
+
+async def test_sales_asignado_y_desasignado_sin_fuga_historica(seeded, alpha_client):
+    """SUP-C (bajo el COO) pasa a Sales bajo el CEO en T: lo anterior queda en la
+    rama del COO; lo posterior, sólo para el CEO."""
+    await _organigrama(alpha_client, seeded)
+    await _retrofechar(seeded.alpha.id, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    previa = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="6.0", usuario="sup_c")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    sup_c = seeded.alpha.users["sup_c"].id
+    r = await alpha_client.put(f"/api/route/users/{sup_c}", json={
+        "role_id": seeded.alpha.roles["Sales"], "superior_user_id": seeded.alpha.users["ceo"].id})
+    assert r.status_code == 200, r.text
+    await _trasladar_en(sup_c, datetime(2026, 9, 16, tzinfo=timezone.utc))
+    posterior = await _jornada(alpha_client, seeded, dia=date(2026, 9, 17), millas="2.0", usuario="sup_c")
     await _iniciada(previa["jornada"]["id"], datetime(2026, 9, 14, 13, tzinfo=timezone.utc))
     await _iniciada(posterior["jornada"]["id"], datetime(2026, 9, 17, 13, tzinfo=timezone.utc))
 
-    coo = await _informe(alpha_client, seeded, "coo")
-    ceo = await _informe(alpha_client, seeded, "ceo")
-    assert coo["summary"]["official_miles"] == "10.0"
-    assert ceo["summary"]["official_miles"] == "15.0"
-
-
-async def test_historia_anterior_a_la_relacion_no_se_expone(seeded, alpha_client):
-    """El supervisor sin asignar trabajó antes; al asignarlo a RM-A hoy, RM-A no
-    hereda esa historia (no se infiere quién lo supervisaba)."""
-    await _organigrama(alpha_client, seeded)
-    await _jornada(alpha_client, seeded, millas="9.0", usuario="supervisor")
-    await _iniciada(
-        (await _filas("SELECT id FROM work_session WHERE user_id = :u",
-                      u=seeded.alpha.users["supervisor"].id))[0].id,
-        datetime(2026, 9, 16, 13, tzinfo=timezone.utc),
-    )
-    assert (await _cargo(alpha_client, seeded, "supervisor", "supervisor", "rm_a")).status_code == 200
-    vista = await _informe(alpha_client, seeded, "rm_a")
-    assert vista["summary"]["official_miles"] == "0.0"
-    assert (await _informe(alpha_client, seeded, "route_admin"))["summary"]["official_miles"] == "9.0"
-
-
-async def test_el_cambio_rige_en_la_siguiente_lectura(seeded, alpha_client):
-    await _organigrama(alpha_client, seeded)
-    assert seeded.alpha.users["sup_a"].id in await _hoy(alpha_client, seeded, "rm_a")
-    await _cargo(alpha_client, seeded, "sup_a", "supervisor", "rm_b")
-    assert seeded.alpha.users["sup_a"].id not in await _hoy(alpha_client, seeded, "rm_a")
-    await _como(alpha_client, seeded, "rm_a")
-    r = await alpha_client.put(f"/api/users/{seeded.alpha.users['sup_a'].id}", json={"first_name": "X"})
-    assert r.status_code == 404
+    coo = await _informe(alpha_client, seeded, "coo", supervisor_user_id=sup_c)
+    assert coo["summary"]["official_miles"] == "6.0"
+    assert sup_c not in await _hoy(alpha_client, seeded, "coo")
+    ceo = await _informe(alpha_client, seeded, "ceo", supervisor_user_id=sup_c)
+    assert ceo["summary"]["official_miles"] == "8.0"
 
 
 async def test_suspendido_sale_de_today_y_su_historia_queda(seeded, alpha_client):
@@ -483,31 +648,46 @@ async def test_suspendido_sale_de_today_y_su_historia_queda(seeded, alpha_client
 
 
 @pytest.mark.parametrize("base", ["/api/users", "/api/route/users"])
-async def test_el_manager_lista_solo_su_rama(seeded, alpha_client, base):
+@pytest.mark.parametrize(
+    ("actor", "visibles"),
+    [
+        ("ceo", ("coo", "rm_a", "rm_b", "osm_a", "sup_a", "sup_b", "sup_c", "sales_a")),
+        ("coo", ("rm_a", "osm_a", "sup_a", "sup_c")),
+        ("rm_a", ("osm_a", "sup_a")),
+    ],
+)
+async def test_cada_manager_lista_solo_su_rama(seeded, alpha_client, base, actor, visibles):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    await _como(alpha_client, seeded, "rm_a")
+    await _como(alpha_client, seeded, actor)
     r = await alpha_client.get(f"{base}/pagination", params={"page": 1, "page_size": 100})
     assert r.status_code == 200, r.text
     cuerpo = r.json()
-    assert {u["id"] for u in cuerpo["results"]} == _ids(seeded, "osm_a", "sup_a")
-    assert cuerpo["count"] == 2, "el total tampoco cuenta a nadie más"
+    assert {u["id"] for u in cuerpo["results"]} == _ids(seeded, *visibles)
+    assert cuerpo["count"] == len(visibles), "el total tampoco cuenta a nadie más"
 
 
 @pytest.mark.parametrize("base", ["/api/users", "/api/route/users"])
-@pytest.mark.parametrize("objetivo", ["sup_b", "coo", "rm_b", "rm_a", "route_admin", "owner"])
-async def test_el_manager_no_toca_fuera_de_su_rama(seeded, alpha_client, base, objetivo):
+@pytest.mark.parametrize(
+    ("actor", "objetivo"),
+    [
+        ("coo", "sales_a"), ("rm_a", "sales_a"), ("rm_a", "sup_b"), ("rm_a", "coo"),
+        ("rm_a", "rm_b"), ("rm_a", "rm_a"), ("coo", "ceo"), ("coo", "route_admin"),
+        ("ceo", "owner"),
+    ],
+)
+async def test_el_manager_no_toca_fuera_de_su_rama(seeded, alpha_client, base, actor, objetivo):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    await _como(alpha_client, seeded, "rm_a")
+    await _como(alpha_client, seeded, actor)
     uid = seeded.alpha.users[objetivo].id
     assert (await alpha_client.put(f"{base}/{uid}", json={"first_name": "X"})).status_code == 404
     assert (await alpha_client.put(f"{base}/{uid}/access", json={"is_active": False})).status_code == 404
     assert (await alpha_client.put(f"{ORG}/{uid}", json={"position": "supervisor",
-            "superior_user_id": seeded.alpha.users["rm_a"].id})).status_code == 404
+            "superior_user_id": seeded.alpha.users[actor].id})).status_code == 404
 
 
 async def test_el_manager_no_toca_otro_tenant(seeded, alpha_client, beta_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    await _como(alpha_client, seeded, "rm_a")
+    await _como(alpha_client, seeded, "ceo")
     beta = seeded.beta.users["supervisor"].id
     for base in ("/api/users", "/api/route/users"):
         assert (await alpha_client.put(f"{base}/{beta}", json={"first_name": "X"})).status_code == 404
@@ -520,21 +700,18 @@ async def test_el_manager_gestiona_su_rama(seeded, alpha_client):
     sup_a = seeded.alpha.users["sup_a"].id
     assert (await alpha_client.put(f"/api/route/users/{sup_a}", json={"first_name": "Ana"})).status_code == 200
     assert (await alpha_client.put(f"/api/route/users/{sup_a}/access", json={"is_active": False})).status_code == 200
-    # Suspendido sigue en su rama: su superior le devuelve el acceso.
     assert (await alpha_client.put(f"/api/route/users/{sup_a}/access", json={"is_active": True})).status_code == 200
-    r = await alpha_client.put(f"{ORG}/{sup_a}", json={
-        "position": "osm", "superior_user_id": seeded.alpha.users["rm_a"].id})
+    # SUP-A pasa a OSM bajo el propio RM: rol y cargo juntos.
+    r = await alpha_client.put(f"/api/route/users/{sup_a}", json={"role_id": seeded.alpha.roles["OSM"]})
     assert r.status_code == 200, r.text
+    assert (await _vigente(seeded, "sup_a")).position == "osm"
 
 
 async def test_el_manager_no_borra_ni_readmite(seeded, alpha_client):
-    """Retirar es del Superadmin (D-1c); readmitir a quien fue retirado, también:
-    retirado ya no está en ninguna rama."""
     await _organigrama(alpha_client, seeded, perfiles=False)
     await _como(alpha_client, seeded, "rm_a")
     sup_a = seeded.alpha.users["sup_a"].id
     assert (await alpha_client.delete(f"/api/route/users/{sup_a}")).status_code == 403
-
     sup_c = seeded.alpha.users["sup_c"].id
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     assert (await alpha_client.delete(f"/api/route/users/{sup_c}")).status_code == 204
@@ -545,49 +722,44 @@ async def test_el_manager_no_borra_ni_readmite(seeded, alpha_client):
 
 
 @pytest.mark.parametrize(
-    ("actor", "cargo", "jefe", "rol", "codigo"),
+    ("actor", "rol", "jefe", "codigo"),
     [
-        ("rm_a", "supervisor", "rm_a", "supervisor", 200),
-        ("rm_a", "osm", "osm_a", "supervisor", 422),            # OSM no es superior de nadie
-        ("rm_a", "regional_manager", "rm_a", "route_manager", 403),  # su nivel
-        ("rm_a", "supervisor", "rm_b", "supervisor", 403),       # rama ajena
-        ("rm_a", "supervisor", "rm_a", "route_admin", 403),      # escalar
-        ("rm_a", "supervisor", "rm_a", "route_manager", 403),    # rol que no es del cargo
-        ("rm_a", None, None, "supervisor", 403),                 # sin cargo: fuera de su rama
-        ("coo", "regional_manager", "coo", "route_manager", 200),
-        ("coo", "coo", "coo", "route_manager", 403),
-        ("ceo", "coo", "ceo", "route_manager", 200),
-        ("ceo", "ceo", "ceo", "route_manager", 403),
+        ("rm_a", "supervisor", "rm_a", 200),
+        ("rm_a", "OSM", "rm_a", 200),
+        ("rm_a", "supervisor", "osm_a", 422),              # OSM no es superior de nadie
+        ("rm_a", "Regional Manager", "rm_a", 403),         # su nivel
+        ("rm_a", "supervisor", "rm_b", 403),               # rama ajena
+        ("rm_a", "route_admin", "rm_a", 403),              # escalar
+        ("rm_a", "Sales", "rm_a", 403),                    # Sales: sólo un CEO
+        ("rm_a", "supervisor", None, 403),                 # sin superior: fuera de su rama
+        ("coo", "Regional Manager", "coo", 200),
+        ("coo", "Sales", "coo", 403),
+        ("coo", "Sales", "ceo", 403),                      # el CEO no es de su rama
+        ("coo", "COO", "coo", 403),
+        ("ceo", "COO", "ceo", 200),
+        ("ceo", "Sales", "ceo", 200),
+        ("ceo", "Sales", "coo", 422),                      # Sales sólo bajo CEO directo
+        ("ceo", "CEO", "ceo", 403),
     ],
 )
-async def test_alta_delegada(seeded, alpha_client, actor, cargo, jefe, rol, codigo):
+async def test_alta_delegada(seeded, alpha_client, actor, rol, jefe, codigo):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    await _como(alpha_client, seeded, actor)
-    r = await alpha_client.post(
-        "/api/route/users",
-        json={
-            "username": f"alpha_nuevo_{actor}", "email": f"nuevo_{actor}@alpha.example.com",
-            "first_name": "Nuevo", "last_name": "Org", "password": TEST_PASSWORD,
-            "role_id": seeded.alpha.roles[rol],
-            "position": cargo,
-            "superior_user_id": seeded.alpha.users[jefe].id if jefe else None,
-        },
-    )
-    assert r.status_code == (codigo if codigo != 200 else r.status_code), r.text
+    r = await _alta(alpha_client, seeded, f"nuevo_{actor}", rol, jefe, actor=actor)
     if codigo == 200:
-        assert r.status_code in (200, 201)
+        assert r.status_code in (200, 201), r.text
         fila = await _filas(
-            "SELECT position, superior_user_id FROM org_assignment WHERE user_id = :u AND valid_to IS NULL",
+            "SELECT superior_user_id FROM org_assignment WHERE user_id = :u AND valid_to IS NULL",
             u=r.json()["id"],
         )
-        assert (fila[0].position, fila[0].superior_user_id) == (cargo, seeded.alpha.users[jefe].id)
+        assert fila[0].superior_user_id == seeded.alpha.users[jefe].id
     else:
+        assert r.status_code == codigo, r.text
         assert await _filas(
-            "SELECT 1 FROM \"user\" WHERE email = :e", e=f"nuevo_{actor}@alpha.example.com"
+            'SELECT 1 FROM "user" WHERE username = :u', u=f"alpha_nuevo_{actor}"
         ) == [], "nada se creó"
 
 
-@pytest.mark.parametrize("rol", ["route_admin", "route_manager", "owner"])
+@pytest.mark.parametrize("rol", ["route_admin", "route_manager", "owner", "Sales", "COO"])
 async def test_el_manager_no_escala_un_rol(seeded, alpha_client, rol):
     await _organigrama(alpha_client, seeded, perfiles=False)
     await _como(alpha_client, seeded, "rm_a")
@@ -595,72 +767,48 @@ async def test_el_manager_no_escala_un_rol(seeded, alpha_client, rol):
         f"/api/users/{seeded.alpha.users['sup_a'].id}", json={"role_id": seeded.alpha.roles[rol]}
     )
     assert r.status_code == 403
-
-
-async def test_un_route_admin_en_la_rama_no_es_gestionable(seeded, alpha_client):
-    """Un Superadmin colocado bajo un RM no queda a merced del RM (contraseña)."""
-    await _organigrama(alpha_client, seeded, perfiles=False)
-    admin2 = await _persona(alpha_client, seeded, "admin2", "route_admin")
-    assert (await _cargo(alpha_client, seeded, "admin2", "supervisor", "rm_a")).status_code == 200
-    await _como(alpha_client, seeded, "rm_a")
-    r = await alpha_client.put(f"/api/users/{admin2.id}", json={"password": "Otra-Clave-123!"})
-    assert r.status_code == 404
+    assert (await _vigente(seeded, "sup_a")).position == "supervisor"
 
 
 async def test_roles_asignables_por_nivel(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    esperado = {"rm_a": {"supervisor"}, "coo": {"route_manager", "supervisor"}}
+    esperado = {
+        "rm_a": {"OSM", "supervisor"},
+        "coo": {"Regional Manager", "OSM", "supervisor"},
+        "ceo": {"COO", "Regional Manager", "OSM", "supervisor", "Sales"},
+    }
     for actor, roles in esperado.items():
         await _como(alpha_client, seeded, actor)
         r = await alpha_client.get("/api/route/users/assignable-roles")
-        assert {o["code"] for o in r.json()} == roles
-        o = (await alpha_client.get(f"{ORG}/options")).json()
-        nivel = {"rm_a": 2, "coo": 3}[actor]
-        assert all(p["level"] < nivel for p in o["positions"])
+        assert {o["code"] for o in r.json()} == roles, actor
 
 
 async def test_ejecutores_no_administran(seeded, alpha_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    for clave in ("osm_a", "sup_a"):
+    for clave in ("osm_a", "sup_a", "sales_a"):
         await _como(alpha_client, seeded, clave)
         assert (await alpha_client.get("/api/route/users/pagination")).status_code == 403
         assert (await alpha_client.put(
             f"{ORG}/{seeded.alpha.users['sup_b'].id}", json={"position": "supervisor"}
         )).status_code == 403
-
-
-# ── Catálogo y provisión ────────────────────────────────────────────────────
-
-
-async def test_route_manager_tiene_exactamente_lo_aprobado(seeded):
-    filas = await _filas(
-        "SELECT p.name FROM permission p JOIN role_permission rp ON rp.permission_id = p.id "
-        "WHERE rp.role_id = :r",
-        r=seeded.alpha.roles["route_manager"],
-    )
-    assert {f.name for f in filas} == {
-        "route.worksession.execute", "route.standardvalues.read", "route.live.read",
-        "route.activity.read", "route.reports.read", "route.reports.export",
-        "users.read", "users.create", "users.update",
-    }
-
-
-async def test_la_alineacion_concede_route_manager_a_tenants_existentes(seeded):
-    from app.db.scripts.align_role_capabilities import alinear
-
-    await _ejecutar("DELETE FROM role_permission WHERE role_id = :r", r=seeded.alpha.roles["route_manager"])
-    await alinear()
-    filas = await _filas(
-        "SELECT p.name FROM permission p JOIN role_permission rp ON rp.permission_id = p.id "
-        "WHERE rp.role_id = :r",
-        r=seeded.alpha.roles["route_manager"],
-    )
-    nombres = {f.name for f in filas}
-    assert len(nombres) == 9 and "users.delete" not in nombres
+        r = await alpha_client.post("/api/route/users", json={
+            "username": f"alpha_x_{clave}", "email": f"x_{clave}@alpha.example.com",
+            "first_name": "X", "last_name": "Y", "password": TEST_PASSWORD,
+            "role_id": seeded.alpha.roles["supervisor"],
+        })
+        assert r.status_code == 403
 
 
 async def test_el_manager_no_alcanza_candidatos_de_supervisor(seeded, alpha_client):
-    """La otra API con `users.read` exige además `route.vehicles.read`."""
     await _organigrama(alpha_client, seeded, perfiles=False)
     await _como(alpha_client, seeded, "ceo")
     assert (await alpha_client.get("/api/supervisors/candidates")).status_code == 403
+
+
+async def test_las_opciones_de_superior_respetan_rol_y_rama(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await _como(alpha_client, seeded, "coo")
+    o = (await alpha_client.get(f"{ORG}/options")).json()
+    assert {s["user_id"] for s in o["superiors"]} == _ids(seeded, "coo", "rm_a", "osm_a", "sup_a", "sup_c")
+    assert o["allowed_parents"]["sales"] == ["ceo"]
+    assert o["role_positions"]["Sales"] == "sales"

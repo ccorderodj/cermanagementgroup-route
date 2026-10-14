@@ -88,6 +88,13 @@ async def _rellenar(page, *, username: str, password: str, rol: str) -> None:
     await page.get_by_role("option", name="Active", exact=True).click()
     await page.locator("#security-user-role").click()
     await page.get_by_role("option", name=rol, exact=True).click()
+    # V1.3: un cargo que depende de otro exige «Reports to». El CEO raíz que
+    # siembra la fixture es el superior de estas altas.
+    if rol not in ("Administrador", "CEO"):
+        superior = page.locator("#security-user-superior")
+        await expect(superior).to_be_visible(timeout=20_000)
+        await superior.click()
+        await page.get_by_role("option", name="Ceo_base Tester · CEO").click()
 
 
 async def _pertenencias(company_id: int, username: str) -> list[dict]:
@@ -206,6 +213,7 @@ async def test_a_removed_user_is_re_added_only_after_explicit_confirmation(
                 "password": BUENA,
                 "gender": True,
                 "role_id": seeded.alpha.roles["supervisor"],
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()

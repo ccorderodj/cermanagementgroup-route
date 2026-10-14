@@ -425,6 +425,8 @@ async def test_a_trip_of_another_supervisor_returns_not_found(seeded, alpha_clie
                 "last_name": "Sup",
                 "password": TEST_PASSWORD,
                 "role_id": seeded.alpha.roles["supervisor"],
+                # Jerarquía (V1.3): un Supervisor entra con su superior.
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()
@@ -1004,6 +1006,8 @@ async def test_current_does_not_leak_another_supervisors_trip(
                 "first_name": "Sup", "last_name": "Dos",
                 "password": TEST_PASSWORD,
                 "role_id": seeded.alpha.roles["supervisor"],
+                # Jerarquía (V1.3): un Supervisor entra con su superior.
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()

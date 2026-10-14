@@ -47,31 +47,28 @@ pytestmark = pytest.mark.integration
 ROLES_DEL_NUCLEO = ("owner", "admin", "manager", "viewer")
 
 
-async def _crear(cliente, *, sufijo: str, role_id: int):
-    return await cliente.post(
-        "/api/users",
-        json={
-            "username": f"a02_{sufijo}",
-            "email": f"a02_{sufijo}@alpha.example.com",
-            "first_name": "A02",
-            "last_name": sufijo,
-            "password": TEST_PASSWORD,
-            "role_id": role_id,
-        },
-    )
+async def _crear(cliente, *, sufijo: str, role_id: int, superior: int | None = None):
+    cuerpo = {
+        "username": f"a02_{sufijo}",
+        "email": f"a02_{sufijo}@alpha.example.com",
+        "first_name": "A02",
+        "last_name": sufijo,
+        "password": TEST_PASSWORD,
+        "role_id": role_id,
+    }
+    if superior is not None:
+        cuerpo["superior_user_id"] = superior
+    return await cliente.post("/api/users", json=cuerpo)
 
 
 # ── El modelo, en el catálogo ────────────────────────────────────────────────
 
 
-def test_cer_route_has_exactly_three_product_roles():
-    """Eran dos (FR-01); la jerarquía añadió `route_manager` (D-1 del PO)."""
-    assert ROUTE_PRODUCT_ROLES == {"route_admin", "route_manager", "supervisor"}
-    assert ROUTE_PRODUCT_ROLE_LABELS == {
-        "route_admin": "Administrador",
-        "route_manager": "Route Manager",
-        "supervisor": "Supervisor",
-    }
+def test_cer_route_offers_the_approved_product_roles():
+    """Eran dos (FR-01); V1.3: un rol por cargo, más el Administrador. El
+    `route_manager` heredado ya no se ofrece."""
+    assert ROUTE_PRODUCT_ROLES == {"route_admin", "CEO", "COO", "Regional Manager", "OSM", "supervisor", "Sales"}
+    assert set(ROUTE_PRODUCT_ROLE_LABELS.values()) == {"Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales"}
 
 
 def test_the_core_roles_are_preserved_and_are_not_route_personas():
@@ -149,7 +146,11 @@ async def test_the_administrator_can_create_both_route_roles(
 ):
     """Casos 1 y 2."""
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    respuesta = await _crear(alpha_client, sufijo=rol, role_id=seeded.alpha.roles[rol])
+    respuesta = await _crear(
+        alpha_client, sufijo=rol, role_id=seeded.alpha.roles[rol],
+        # V1.3: un Supervisor entra con su superior.
+        superior=seeded.alpha.users["ceo_base"].id if rol == "supervisor" else None,
+    )
     assert respuesta.status_code == 200, respuesta.text
 
 
@@ -168,7 +169,11 @@ async def test_the_administrator_can_switch_a_user_between_route_roles(
 
     vuelta = await alpha_client.put(
         f"/api/users/{supervisor.id}",
-        json={"role_id": seeded.alpha.roles["supervisor"]},
+        # V1.3: volver a un cargo de la jerarquía es elegir a quién reporta.
+        json={
+            "role_id": seeded.alpha.roles["supervisor"],
+            "superior_user_id": seeded.alpha.users["ceo_base"].id,
+        },
     )
     assert vuelta.status_code == 200, vuelta.text
 
@@ -360,7 +365,9 @@ async def test_the_assignable_roles_endpoint_offers_exactly_the_route_roles(
     assert respuesta.status_code == 200
     opciones = respuesta.json()
     assert {o["code"] for o in opciones} == ROUTE_PRODUCT_ROLES
-    assert {o["label"] for o in opciones} == {"Administrador", "Route Manager", "Supervisor"}
+    assert {o["label"] for o in opciones} == {
+        "Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales",
+    }
     for opcion in opciones:
         assert opcion["id"] == seeded.alpha.roles[opcion["code"]]
 

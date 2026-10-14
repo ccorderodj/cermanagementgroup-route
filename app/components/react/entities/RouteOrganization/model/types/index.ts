@@ -28,6 +28,9 @@ export const orgOptionsSchema = z.object({
         level: z.number(),
     })),
     superior_required: z.boolean(),
+    /** V1.3: el cargo de cada rol y de qué cargos puede depender cada cargo. */
+    role_positions: z.record(z.string(), z.string()),
+    allowed_parents: z.record(z.string(), z.array(z.string())),
     current: orgAssignmentSchema.nullable().optional(),
 });
 export type OrgOptions = z.infer<typeof orgOptionsSchema>;

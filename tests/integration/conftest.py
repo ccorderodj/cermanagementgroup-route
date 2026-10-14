@@ -29,7 +29,7 @@ from dataclasses import dataclass
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import insert, select
+from sqlalchemy import insert, select, text
 
 from app.config import settings
 from app.core.rbac.catalog import CAPABILITIES, DEFAULT_ROLES, capabilities_for
@@ -177,6 +177,10 @@ async def _seed_company(session, *, name: str, subdomain: str, capabilities) -> 
         # nada, y probar eso es justamente el punto.
         ("route_admin", "route_admin", True, True),
         ("supervisor", "supervisor", True, True),
+        # Jerarquía (V1.3): un CEO raíz. Dar de alta por Route a alguien con un
+        # cargo que depende de otro exige elegir a quién reporta; las pruebas
+        # que no tratan de la jerarquía lo ponen bajo éste.
+        ("ceo_base", "CEO", True, True),
     ]
 
     for key, role_name, platform_active, membership_active in accounts:
@@ -212,6 +216,15 @@ async def _seed_company(session, *, name: str, subdomain: str, capabilities) -> 
             username=username,
             role=role_name,
         )
+
+    # El CEO raíz, con su cargo: sin él no sería un superior elegible.
+    await session.execute(
+        text(
+            "INSERT INTO org_assignment (company_id, user_id, position, valid_from, version) "
+            "VALUES (:c, :u, 'ceo', now(), 1)"
+        ),
+        {"c": company_id, "u": users["ceo_base"].id},
+    )
 
     return SeededCompany(id=company_id, subdomain=subdomain, roles=roles, users=users)
 

@@ -58,7 +58,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 
 from app.core.db.session import db_session
-from app.core.rbac.catalog import ROUTE_PRODUCT_ROLES
+from app.core.rbac.catalog import ROUTE_LEGACY_ROLES, ROUTE_PRODUCT_ROLES
 from app.routers_api.usermanagement.product_context import es_contexto_de_route
 from app.routers_api.companies.models import UserCompany
 from app.routers_api.roles.models import Role
@@ -100,7 +100,9 @@ async def acota_a_roles_de_route(*, actor_user_id: int, company_id: int) -> bool
     rol_del_actor = await _rol_de_quien_llama(
         user_id=actor_user_id, company_id=company_id
     )
-    return rol_del_actor in ROUTE_PRODUCT_ROLES
+    # Quien tiene un rol heredado de Route (`route_manager`) también es actor
+    # de Route: sigue acotado a los roles de producto.
+    return rol_del_actor in ROUTE_PRODUCT_ROLES | ROUTE_LEGACY_ROLES
 
 
 async def ensure_assignable_role(

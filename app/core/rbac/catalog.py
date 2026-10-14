@@ -200,6 +200,28 @@ class RoleTemplate:
     capabilities: tuple[str, ...] | str
 
 
+#: Lo que ejecuta su propia jornada y nada más: Supervisor, OSM y Sales.
+CAPACIDADES_DE_EJECUCION: tuple[str, ...] = (
+    "route.worksession.execute",
+    "route.standardvalues.read",
+)
+
+#: CEO, COO y Regional Manager (y el `route_manager` heredado). El **alcance**
+#: de todas —también `users.*`— lo acota la jerarquía (`organization.scope`,
+#: `organization.delegation`): sólo su rama, nunca el tenant. `users.delete`
+#: no: un manager suspende; retirar del tenant lo hace el Superadmin.
+CAPACIDADES_DE_MANDO: tuple[str, ...] = (
+    *CAPACIDADES_DE_EJECUCION,
+    "route.live.read",
+    "route.activity.read",
+    "route.reports.read",
+    "route.reports.export",
+    "users.read",
+    "users.create",
+    "users.update",
+)
+
+
 DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
     RoleTemplate(
         name="owner",
@@ -252,10 +274,7 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
         # usuarios, ni roles, ni vehículos, ni las listas, ni aprueba
         # excepciones. La lectura es una capacidad aparte justamente para que
         # esto se pueda decir en una línea y comprobarse en un test.
-        capabilities=(
-            "route.worksession.execute",
-            "route.standardvalues.read",
-        ),
+        capabilities=CAPACIDADES_DE_EJECUCION,
     ),
     RoleTemplate(
         name="route_admin",
@@ -314,37 +333,58 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
     RoleTemplate(
         name="route_manager",
         description=(
-            "CER Route manager (CEO, COO, Regional Manager); sees and manages only their branch"
+            "Legacy CER Route manager; sees and manages only their branch. "
+            "Replaced by CEO, COO and Regional Manager"
         ),
         category="operative",
-        # Jerarquía (D-1): CEO, COO y RM. El **cargo** dice el nivel; este rol
-        # dice qué puede hacer, y `organization.scope` sobre quién: **sólo su
-        # rama**, nunca el tenant. Todas son capacidades existentes; ninguna se
-        # crea para esto.
-        #
-        # `users.read/create/update` (D-1, condición de seguridad): la única API
-        # que las exige es `usermanagement` —montada en `/api/users` y en
-        # `/api/route/users`— y las dos caras pasan por la misma política de
-        # delegación (`organization.delegation`), que acota listas, objetivos,
-        # cargos y roles a la rama. `users.delete` **no** (D-1c): un manager
-        # suspende; retirar del tenant lo hace el Superadmin.
-        capabilities=(
-            "route.worksession.execute",
-            "route.standardvalues.read",
-            "route.live.read",
-            "route.activity.read",
-            "route.reports.read",
-            "route.reports.export",
-            "users.read",
-            "users.create",
-            "users.update",
-        ),
+        # **Legado** (V1.3): ya no se ofrece al asignar roles. Se conserva para
+        # quien lo tenga —sin reasignaciones automáticas— con las mismas
+        # capacidades de mando y el mismo alcance **de rama**, nunca de tenant.
+        capabilities=CAPACIDADES_DE_MANDO,
+    ),
+    # ── Jerarquía de CER Route (V1.3): un rol por cargo ─────────────────────
+    #
+    # El **nombre** de estos roles es el visible: Roles & Permissions y la
+    # lista de usuarios enseñan `role.name` tal cual. El cargo organizacional
+    # sale del rol (`organization.models.CARGO_DE_ROL`) y el alcance de la
+    # jerarquía (`organization.scope`). Todos `operative`: `management` da
+    # autoridad para aprobar cambios de permisos, que estos cargos no tienen.
+    RoleTemplate(
+        name="CEO",
+        description="CER Route CEO; sees and manages only their branch",
+        category="operative",
+        capabilities=CAPACIDADES_DE_MANDO,
+    ),
+    RoleTemplate(
+        name="COO",
+        description="CER Route COO; sees and manages only their branch",
+        category="operative",
+        capabilities=CAPACIDADES_DE_MANDO,
+    ),
+    RoleTemplate(
+        name="Regional Manager",
+        description="CER Route Regional Manager; sees and manages only their branch",
+        category="operative",
+        capabilities=CAPACIDADES_DE_MANDO,
+    ),
+    # OSM y Sales: **exactamente** las capacidades del Supervisor. El nombre
+    # distingue el cargo; el acceso es el mismo (decisión del PO).
+    RoleTemplate(
+        name="OSM",
+        description="CER Route on-site manager; mobile workday, own activity only",
+        category="operative",
+        capabilities=CAPACIDADES_DE_EJECUCION,
+    ),
+    RoleTemplate(
+        name="Sales",
+        description="CER Route sales; mobile workday, own activity only; reports to a CEO",
+        category="operative",
+        capabilities=CAPACIDADES_DE_EJECUCION,
     ),
 )
 
 
-#: Los roles de producto de CER Route, por su código técnico interno. Eran dos;
-#: `route_manager` llegó con la jerarquía (D-1).
+#: Los roles de producto de CER Route que se pueden **asignar**.
 #:
 #: Son los **únicos** que el flujo de usuarios de CER Route puede asignar
 #: (FR-01, FR-05). Los del núcleo —`owner`, `admin`, `manager`, `viewer`— siguen
@@ -354,15 +394,26 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
 #: Se conservan los códigos técnicos existentes a propósito: renombrarlos sólo
 #: para cambiar la etiqueta visible obligaría a una migración destructiva de
 #: `role.name` en cada tenant, y la resolución lo prohíbe explícitamente.
-ROUTE_PRODUCT_ROLES: frozenset[str] = frozenset({"route_admin", "route_manager", "supervisor"})
+#:
+#: V1.3: un rol por cargo —CEO, COO, Regional Manager, OSM, Supervisor, Sales—
+#: más el Administrador. `route_manager` deja de asignarse (legado).
+ROUTE_PRODUCT_ROLES: frozenset[str] = frozenset({
+    "route_admin", "CEO", "COO", "Regional Manager", "OSM", "supervisor", "Sales",
+})
+
+#: Roles de Route que ya no se asignan pero siguen existiendo en quien los
+#: tenga. Cuentan como «de Route» para acotar a quien los tiene.
+ROUTE_LEGACY_ROLES: frozenset[str] = frozenset({"route_manager"})
 
 #: Cómo se llaman en pantalla. El código técnico no se muestra nunca.
 ROUTE_PRODUCT_ROLE_LABELS: dict[str, str] = {
     "route_admin": "Administrador",
-    # «Route Manager» y no «Manager»: así se ve en pantalla el rol `manager`
-    # del núcleo, y el formulario de Route no debe ofrecer nada que se le parezca.
-    "route_manager": "Route Manager",
+    "CEO": "CEO",
+    "COO": "COO",
+    "Regional Manager": "Regional Manager",
+    "OSM": "OSM",
     "supervisor": "Supervisor",
+    "Sales": "Sales",
 }
 
 

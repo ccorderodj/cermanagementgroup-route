@@ -233,6 +233,7 @@ export const SecurityUsersPanel = ({ contract }: SecurityUsersPanelProps = {}) =
                                 onEdited={handleEdited}
                                 onDeleted={handleDeleted}
                                 disabled={!canUpdate}
+                                contract={contract}
                             />
                         ),
                     }}

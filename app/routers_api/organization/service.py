@@ -25,7 +25,12 @@ from app.core.audit.service import record_event
 from app.core.dao.concurrency import ensure_version
 from app.core.db.session import db_session, transaction
 from app.routers_api.companies.models import UserCompany
-from app.routers_api.organization.models import NIVEL, OrgAssignment, OrgPosition
+from app.routers_api.organization.models import (
+    CARGO_DE_ROL,
+    PADRES_PERMITIDOS,
+    OrgAssignment,
+    OrgPosition,
+)
 from app.routers_api.roles.models import Role
 from app.routers_api.users.models import Users
 
@@ -214,7 +219,31 @@ async def asignar(
         if expected_version is not None:
             ensure_version(current=previa.version if previa else 0, expected=expected_version)
 
-        nivel = NIVEL[position]
+        # El cargo **sale del rol** (V1.3): no puede contradecirlo. Sólo el
+        # `route_manager` heredado conserva un cargo de mando a elegir; fuera de
+        # eso —Superadmin, roles del núcleo— no hay cargo: están fuera del árbol.
+        rol = await _rol(session, company_id=company_id, user_id=user_id)
+        esperado = CARGO_DE_ROL.get(rol)
+        if esperado is not None and esperado != position:
+            raise _error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "The position must match the person's CER Route role.",
+            )
+        if esperado is None and not (
+            rol == "route_manager"
+            and position in (OrgPosition.CEO, OrgPosition.COO, OrgPosition.REGIONAL_MANAGER)
+        ):
+            raise _error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "This role has no place in the CER Route hierarchy.",
+            )
+
+        permitidos = PADRES_PERMITIDOS[position]
+        if superior_user_id is None and permitidos:
+            raise _error(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "This role needs a superior: choose the person they report to.",
+            )
         if superior_user_id is not None:
             jefe = actuales.get(superior_user_id)
             if jefe is None or not await _miembro(
@@ -224,10 +253,10 @@ async def asignar(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "The superior must be an active member with a position in this company.",
                 )
-            if NIVEL[jefe.position] <= nivel:
+            if jefe.position not in permitidos:
                 raise _error(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
-                    "The superior must hold a strictly higher position.",
+                    "That person cannot be the superior for this role.",
                 )
             if superior_user_id in descendientes(actuales, user_id):
                 raise _error(
@@ -235,13 +264,14 @@ async def asignar(
                     "That superior reports to this person: it would create a cycle.",
                 )
 
-        # Quien tiene subordinados no puede bajar a su nivel o por debajo:
-        # dejaría una relación con el superior igual o inferior.
+        # Quien tiene subordinados no puede pasar a un cargo del que ellos no
+        # puedan depender (p. ej. un CEO con Sales directo que pasa a COO).
         directos = [a for a in actuales.values() if a.superior_user_id == user_id]
-        if directos and nivel <= max(NIVEL[a.position] for a in directos):
+        if any(position not in PADRES_PERMITIDOS[a.position] for a in directos):
             raise _error(
                 status.HTTP_409_CONFLICT,
-                "This person has direct reports at that level or above. Reassign them first.",
+                "This person has direct reports who cannot report to that role. "
+                "Reassign them first.",
             )
 
         if (
@@ -292,6 +322,67 @@ async def asignar(
             reason=reason,
         )
         return _fila(nueva)
+
+
+async def _rol(session, *, company_id: int, user_id: int) -> str | None:
+    """El rol de la persona dentro de la transacción en curso (suspendida
+    incluida; retirada, no)."""
+    return await session.scalar(
+        select(Role.name)
+        .join(UserCompany, UserCompany.role_id == Role.id)
+        .where(
+            UserCompany.user_id == user_id,
+            UserCompany.company_id == company_id,
+            UserCompany.deleted_at.is_(None),
+        )
+    )
+
+
+async def sincronizar_con_rol(
+    *,
+    company_id: int,
+    actor_user_id: int | None,
+    user_id: int,
+    superior_user_id: int | None,
+    superior_dado: bool,
+    reason: str | None = None,
+) -> None:
+    """Deja el cargo de la persona coherente con su rol **actual**.
+
+    Se llama dentro de la misma transacción que cambia el rol o el superior:
+    si el conjunto —rol nuevo, superior nuevo, rama resultante— no es válido,
+    se deshace todo, también el cambio de rol (V1.3, FR-03).
+
+    * Rol con cargo (CEO … Sales): asigna ese cargo con el superior dado o, si
+      no se dio, con el que tenía. Si el cargo exige superior y no lo hay, 422.
+    * Rol sin cargo (Superadmin, núcleo): cierra el cargo que tuviera.
+    * `route_manager` heredado: no se toca; su cargo se cambia expresamente.
+    """
+    async with transaction() as session:
+        rol = await _rol(session, company_id=company_id, user_id=user_id)
+    cargo = CARGO_DE_ROL.get(rol)
+    if cargo is not None:
+        previa = (await vigentes(company_id)).get(user_id)
+        jefe = superior_user_id if superior_dado else (previa.superior_user_id if previa else None)
+        if not PADRES_PERMITIDOS[cargo]:
+            # El CEO es raíz: pasar a CEO deja a la persona sin superior.
+            jefe = None
+        await asignar(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            user_id=user_id,
+            position=cargo,
+            superior_user_id=jefe,
+            reason=reason,
+        )
+    elif rol != "route_manager":
+        await retirar(
+            company_id=company_id,
+            actor_user_id=None,
+            user_id=user_id,
+            sin_error_si_no_hay=True,
+            reason=reason or "role without a CER Route position",
+        )
 
 
 async def retirar(

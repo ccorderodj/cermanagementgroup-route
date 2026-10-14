@@ -18,7 +18,12 @@ from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.organization import delegation as delegada
 from app.routers_api.organization import service
-from app.routers_api.organization.models import ETIQUETA, NIVEL
+from app.routers_api.organization.models import (
+    CARGO_DE_ROL,
+    ETIQUETA,
+    NIVEL,
+    PADRES_PERMITIDOS,
+)
 from app.routers_api.organization.schemas import (
     OrgAssignmentRead,
     OrgAssignmentWrite,
@@ -103,6 +108,8 @@ async def opciones(
             for u, a in sorted(candidatos.items(), key=lambda t: (-NIVEL[t[1].position], t[0]))
         ],
         superior_required=not d.tenant,
+        role_positions=dict(CARGO_DE_ROL),
+        allowed_parents={c: sorted(p) for c, p in PADRES_PERMITIDOS.items()},
         current=actual,
     )
 
@@ -121,9 +128,6 @@ async def asignar(
     delegada.exigir_asignacion(
         d, position=payload.position, superior_user_id=payload.superior_user_id
     )
-    if not d.tenant:
-        rol = await service.rol_en_compania(company_id=company.id, user_id=user_id)
-        delegada.exigir_rol(d, role_name=rol, position=payload.position)
     await service.asignar(
         company_id=company.id,
         actor_user_id=current_user.id,

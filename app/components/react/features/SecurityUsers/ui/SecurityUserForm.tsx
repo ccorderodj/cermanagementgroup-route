@@ -25,12 +25,7 @@ import {
     ToastAction,
 } from '@/shared/ui/shadcn/new-york';
 import { normalizeRejectedPayload } from '@/shared/api';
-import {
-    deleteOrgAssignment,
-    fetchOrgOptions,
-    putOrgAssignment,
-    type OrgOptions,
-} from '@/entities/RouteOrganization';
+import { fetchOrgOptions, type OrgOptions } from '@/entities/RouteOrganization';
 import { ConfirmDestructiveDialog } from '@/features/Common';
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch/useAppDispatch';
@@ -79,8 +74,7 @@ const SecurityUserFormSchema = z.object({
     // El rol vive en user_company, pero desde la UI es un campo del usuario:
     // crear a alguien sin decidir qué puede hacer no es un flujo válido.
     role_id: z.string({ required_error: 'Role is required' }).min(1, 'Role is required'),
-    /** Jerarquía de CER Route (sólo en su contrato). `none`: sin cargo / sin superior. */
-    position: z.string().optional(),
+    /** CER Route (V1.3): a quién reporta. El cargo sale del rol. `none`: sin superior. */
     superior: z.string().optional(),
 }).refine((values) => {
     return /\S+@\S+\.\S+/.test(values.email.trim());
@@ -88,16 +82,17 @@ const SecurityUserFormSchema = z.object({
 
 type SecurityUserFormValues = z.infer<typeof SecurityUserFormSchema>;
 
-/** Valor de «sin cargo» / «sin superior» en los selectores. */
+/** Valor de «sin superior» en el selector. */
 const SIN = 'none';
 
-/** Etiquetas de cargo para superiores de nivel mayor que el propio del actor. */
+/** Etiquetas de cargo de los candidatos a superior. */
 const POSICION: Record<string, string> = {
     ceo: 'CEO',
     coo: 'COO',
     regional_manager: 'Regional Manager',
     osm: 'OSM',
     supervisor: 'Supervisor',
+    sales: 'Sales',
 };
 
 export default function SecurityUserForm(props: SecurityUserFormProps) {
@@ -113,10 +108,10 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
     const [showConfirmPassword, setShowConfirmPassword] = useState(false);
     const [roles, setRoles] = useState<AssignableRole[]>([]);
     /**
-     * Cargo y superior: sólo en el formulario de CER Route. Las opciones las
-     * da el servidor según quién administra —un manager sólo ve cargos por
-     * debajo del suyo y superiores de su rama— y vuelve a validarlas al
-     * guardar.
+     * «Reports to»: sólo en el formulario de CER Route (V1.3). El cargo sale
+     * del rol elegido; aquí se elige la **persona** a la que reporta, entre
+     * las que el servidor ofrece para ese cargo y para quien administra. El
+     * servidor vuelve a validarlo todo al guardar.
      */
     const esRoute = contract === 'cer-route';
     const [org, setOrg] = useState<OrgOptions | null>(null);
@@ -153,7 +148,6 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 gender: defaultGender,
                 is_active: defaultIsActive,
                 role_id: initialData?.role_id ? String(initialData.role_id) : '',
-                position: SIN,
                 superior: SIN,
             };
         },
@@ -174,12 +168,13 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
     // formulario (lo escrito se perdería).
     useEffect(() => {
         if (!org) return;
-        form.setValue('position', org.current?.position ?? SIN);
         form.setValue(
             'superior',
             org.current?.superior_user_id != null ? String(org.current.superior_user_id) : SIN,
         );
-    }, [form, org]);
+        // También tras cada `reset`: en Edit user el formulario se reinicia con
+        // los datos de la fila y, sin esto, borraba el superior ya cargado.
+    }, [defaultValues, form, org]);
 
     /**
      * La readmisión esperando confirmación. `null` = ninguna.
@@ -193,27 +188,27 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
         roleId: number;
     } | null>(null);
 
-    /** Fija o quita el cargo si cambió. El servidor valida nivel, rama y versión. */
-    const guardarCargo = useCallback(async (userId: number, values: SecurityUserFormValues) => {
-        const actual = org?.current ?? null;
-        const cargo = values.position && values.position !== SIN ? values.position : null;
-        const jefe = values.superior && values.superior !== SIN ? Number(values.superior) : null;
-        if (cargo === null) {
-            if (actual) {
-                await dispatch(deleteOrgAssignment({ userId, version: actual.version })).unwrap();
-            }
-            return;
-        }
-        if (actual && actual.position === cargo && (actual.superior_user_id ?? null) === jefe) {
-            return;
-        }
-        await dispatch(putOrgAssignment({
-            userId,
-            position: cargo,
-            superiorUserId: jefe,
-            version: actual?.version ?? 0,
-        })).unwrap();
-    }, [dispatch, org]);
+    const rolElegido = form.watch('role_id');
+    const codigoDelRol = roles.find((rol) => String(rol.id) === rolElegido)?.code;
+    const cargoDelRol = codigoDelRol ? org?.role_positions[codigoDelRol] : undefined;
+    const padresDelRol = useMemo(
+        () => (esRoute && org && cargoDelRol ? org.allowed_parents[cargoDelRol] ?? [] : []),
+        [cargoDelRol, esRoute, org],
+    );
+    const candidatos = useMemo(
+        () => (org ? org.superiors.filter((c) => padresDelRol.includes(c.position)) : []),
+        [org, padresDelRol],
+    );
+
+    /** El superior a enviar: sólo en Route y sólo si el rol lo lleva. */
+    const superiorElegido = useCallback(
+        (values: SecurityUserFormValues) => (
+            padresDelRol.length > 0 && values.superior && values.superior !== SIN
+                ? Number(values.superior)
+                : undefined
+        ),
+        [padresDelRol],
+    );
 
     const onSubmit = useCallback(async (values: SecurityUserFormValues) => {
         const password = values.password?.trim() || '';
@@ -229,6 +224,14 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
             form.setError('password', {
                 type: 'manual',
                 message: `Password must be at least ${MIN_PASSWORD} characters`,
+            });
+            return;
+        }
+
+        if (padresDelRol.length > 0 && (!values.superior || values.superior === SIN)) {
+            form.setError('superior', {
+                type: 'manual',
+                message: 'Choose who this person reports to',
             });
             return;
         }
@@ -250,13 +253,10 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                         password: isPasswordProvided ? password : undefined,
                         gender: values.gender === 'true',
                         role_id: Number(values.role_id),
+                        superior_user_id: superiorElegido(values),
                         contract,
                     },
                 })).unwrap();
-
-                if (esRoute && org) {
-                    await guardarCargo(initialData.id, values);
-                }
 
                 // Suspender o reactivar es una operación distinta de editar:
                 // actúa sobre la pertenencia a esta compañía, no sobre la
@@ -287,12 +287,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                     role_id: Number(values.role_id),
                     // Cargo y superior en la misma operación: un manager no
                     // puede dejar a una persona nueva fuera de su rama.
-                    position: esRoute && values.position && values.position !== SIN
-                        ? values.position
-                        : undefined,
-                    superior_user_id: esRoute && values.superior && values.superior !== SIN
-                        ? Number(values.superior)
-                        : undefined,
+                    superior_user_id: superiorElegido(values),
                     contract,
                 })).unwrap();
                 getData(created);
@@ -310,7 +305,6 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                     gender: undefined,
                     is_active: undefined,
                     role_id: '',
-                    position: SIN,
                     superior: SIN,
                 });
             }
@@ -377,7 +371,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 action: <ToastAction altText="Try again">Try again</ToastAction>,
             });
         }
-    }, [contract, dispatch, esRoute, form, getData, guardarCargo, initialData, isEditMode, org, toast]);
+    }, [contract, dispatch, form, getData, initialData, isEditMode, padresDelRol, superiorElegido, toast]);
 
     /** Confirmada, se restaura el acceso y se refresca la lista. */
     const confirmarReadmision = useCallback(async () => {
@@ -647,77 +641,36 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                         )}
                     />
 
-                    {esRoute && org && (org.positions.length > 0 || org.current) && (
-                        <>
-                            <FormField
-                                control={form.control}
-                                name="position"
-                                render={({ field }) => (
-                                    <FormItem className="flex flex-col">
-                                        <FormControl>
-                                            <Select value={field.value ?? SIN} onValueChange={field.onChange}>
-                                                <SelectTrigger id="security-user-position" className="w-full">
-                                                    <SelectValue placeholder="Select position" />
-                                                </SelectTrigger>
-                                                <SelectContent>
-                                                    {!org.superior_required && (
-                                                        <SelectItem value={SIN}>No position</SelectItem>
-                                                    )}
-                                                    {org.positions.map((p) => (
-                                                        <SelectItem key={p.code} value={p.code}>
-                                                            {p.label}
-                                                        </SelectItem>
-                                                    ))}
-                                                </SelectContent>
-                                            </Select>
-                                        </FormControl>
-                                        <FormLabel>Position</FormLabel>
-                                        <FormMessage />
-                                    </FormItem>
-                                )}
-                            />
-
-                            <FormField
-                                control={form.control}
-                                name="superior"
-                                render={({ field }) => {
-                                    const nivel = org.positions.find(
-                                        (p) => p.code === form.watch('position'),
-                                    )?.level ?? 0;
-                                    return (
-                                        <FormItem className="flex flex-col">
-                                            <FormControl>
-                                                <Select
-                                                    value={field.value ?? SIN}
-                                                    onValueChange={field.onChange}
-                                                    disabled={!nivel}
-                                                >
-                                                    <SelectTrigger id="security-user-superior" className="w-full">
-                                                        <SelectValue placeholder="Select superior" />
-                                                    </SelectTrigger>
-                                                    <SelectContent>
-                                                        {!org.superior_required && (
-                                                            <SelectItem value={SIN}>No superior (top of branch)</SelectItem>
-                                                        )}
-                                                        {org.superiors
-                                                            .filter((c) => c.level > nivel)
-                                                            .map((c) => (
-                                                                <SelectItem key={c.user_id} value={String(c.user_id)}>
-                                                                    {`${c.name} · ${org.positions.find(
-                                                                        (p) => p.code === c.position,
-                                                                    )?.label ?? POSICION[c.position] ?? c.position}`}
-                                                                </SelectItem>
-                                                            ))}
-                                                    </SelectContent>
-                                                </Select>
-                                            </FormControl>
-                                            <FormLabel>Reports to</FormLabel>
-                                            <FormMessage />
-                                        </FormItem>
-                                    );
-                                }}
-                            />
-                        </>
+                    {esRoute && org && padresDelRol.length > 0 && (
+                        <FormField
+                            control={form.control}
+                            name="superior"
+                            render={({ field }) => (
+                                <FormItem className="flex flex-col">
+                                    <FormControl>
+                                        <Select value={field.value ?? SIN} onValueChange={field.onChange}>
+                                            <SelectTrigger id="security-user-superior" className="w-full">
+                                                <SelectValue placeholder="Select who they report to" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {candidatos.map((c) => (
+                                                    <SelectItem key={c.user_id} value={String(c.user_id)}>
+                                                        {`${c.name} · ${POSICION[c.position] ?? c.position}`}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </FormControl>
+                                    <FormLabel>Reports to</FormLabel>
+                                    {candidatos.length === 0 && (
+                                        <p className="text-xs text-destructive">
+                                            No eligible superior for this role yet.
+                                        </p>
+                                    )}
+                                    <FormMessage />
+                                </FormItem>
+                            )}
+                        />
                     )}
 
                     <div className="md:col-span-2">

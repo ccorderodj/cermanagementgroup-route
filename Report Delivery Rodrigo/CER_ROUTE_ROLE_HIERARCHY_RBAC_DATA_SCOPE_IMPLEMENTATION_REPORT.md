@@ -1,4 +1,305 @@
-# CER Route · Jerarquía organizacional, roles, permisos y alcance de datos
+# CER Route · Jerarquía con roles diferenciados y superior por usuario
+
+**Informe final V1.3** · 14 de octubre de 2026
+**Instrucción ejecutada:** `CER_ROUTE_HIERARCHY_DISTINCT_ROLES_PARENT_SCOPE_SINGLE_INSTRUCTION_V1_3.md`
+**Base:** `dev` en `8ce2931` (MR !89 ya fusionado) · **Rama:** `feature/hierarchy-distinct-roles`
+
+Este informe sustituye a la cabecera del anterior. La entrega V1.1 (MR !89) y
+su Control A se conservan debajo como **Anexo B**, sin borrar su evidencia.
+
+---
+
+## Proposed Status
+
+`ROLE HIERARCHY V1.3 (DISTINCT ROLES + REPORTS TO) COMPLETE / READY FOR CER VALIDATION`
+
+Propuesto, no declarado: **la certificación es de CER**. No se fusiona ni se
+despliega sin su autorización.
+
+---
+
+## 1 · Verification Gate — por qué el PO no veía lo construido
+
+| Observación del PO | Causa | Clasificación |
+|---|---|---|
+| **Edit user** sólo ofrecía roles genéricos y no tenía «Reports to» | El diálogo **Edit user** de Users de CER Route abría el formulario **sin el contrato `cer-route`**: catálogo genérico de roles del tenant, sin «Reports to», y guardaba por `/api/users`. **Create user** sí recibía el contrato; por eso el alta funcionaba y la edición no | **`CONFIRMED`**: lo destapó el E2E nuevo; corregido en `data-table-row-actions.tsx` + `SecurityUsersPanel.tsx` |
+| `Route_manager` con **0** capacidades en Roles & Permissions | La migración 0017 creaba el rol **vacío** y dejaba las capacidades a la alineación (*converge*); el contenedor (`Dockerfile`) no ejecuta ni migraciones ni *converge* al arrancar. Migrado sin alinear → 0 | Mecanismo **`CONFIRMED`** en el código; que ése fuera el estado del entorno del PO, **`LIKELY`** (sin acceso a ese entorno) |
+| «Edit user» además sin el superior guardado al reabrir | El formulario se reiniciaba con los datos de la fila **después** de cargar el superior y lo borraba | **`CONFIRMED`** (diagnóstico con la respuesta real del servidor); corregido |
+
+**SHA:** base `dev` `8ce2931` = MR !89 (`c18d1dd`, mismo contenido que el
+entregado `a83dc96`). El bundle se reconstruye con cada cambio de frontend;
+**no se ha desplegado nada** en ningún entorno operativo.
+
+---
+
+## 2 · Esquema y catálogo final
+
+### Los seis roles (nombre visible = nombre del rol)
+
+| Rol | Código | Cargo (`org_assignment.position`) | Capacidades | Puede depender de | Alcance |
+|---|---|---|---|---|---|
+| **CEO** | `CEO` | `ceo` | 9 de mando | — (raíz) | sus descendientes, Sales incluido |
+| **COO** | `COO` | `coo` | 9 de mando | CEO | sus descendientes; **nunca** Sales |
+| **Regional Manager** | `Regional Manager` | `regional_manager` | 9 de mando | COO **o** CEO | sus descendientes |
+| **OSM** | `OSM` | `osm` | 2 de ejecución | RM, COO **o** CEO | sólo lo propio |
+| **Supervisor** | `supervisor` (sin cambio) | `supervisor` | 2 de ejecución | RM, COO **o** CEO | sólo lo propio |
+| **Sales** | `Sales` | `sales` | 2 de ejecución | **sólo CEO** | sólo lo propio |
+| Superadmin | `route_admin` | — (fuera del árbol) | 16, **sin cambios** | — | tenant (contrato vigente) |
+| *Heredado* | `route_manager` | el que tuviera | 9 de mando (reparadas) | — | **su rama, nunca el tenant**; ya no se asigna |
+
+- **Mando** (9): ejecutar jornada, leer listas, Today, Activity, Reports,
+  Excel, `users.read/create/update`.
+- **Ejecución** (2): ejecutar jornada, leer listas.
+- **Ninguna capacidad nueva.** Todos `operative`: `management` da autoridad de
+  aprobación de permisos en el núcleo y no se usa para cargos de negocio.
+
+### Cómo se guarda «Reports to»
+
+En `org_assignment.superior_user_id`, la misma tabla de V1.1, con sus
+vigencias `[valid_from, valid_to)`, concurrencia y auditoría. **No hay tabla
+nueva.**
+
+- **El cargo sale del rol** (`CARGO_DE_ROL`): no hay un control «Position»
+  que pueda contradecirlo.
+- **La regla estructural** —qué cargos pueden ser superiores de cuál—
+  (`PADRES_PERMITIDOS`) se valida en el servidor y **no transfiere permisos**.
+- **Cambiar rol y superior es una sola transacción.** Si el conjunto (rol
+  nuevo, superior nuevo, rama resultante) no es válido, no cambia nada.
+- **Pasar a CEO** deja a la persona sin superior.
+- **Pasar a un rol sin cargo** (Superadmin) cierra su cargo.
+
+### Usuarios existentes
+
+**Nadie se reasigna.**
+- Quien tenga `supervisor` sigue igual, con o sin cargo.
+- Quien tenga `route_manager` lo conserva, con alcance de rama.
+- La transición a los roles nuevos se hace expresamente desde Edit user.
+
+---
+
+## 3 · Expected → Implemented → Evidence → Gap → Impact
+
+| AC | Estado | Implementado | Evidencia | Gap / Impacto |
+|---|---|---|---|---|
+| **AC-01** Pantalla real | **COMPLETED** | Edit user con contrato de Route | §1; E2E «crea Sales y persiste al reabrir»; captura antes/después | — |
+| **AC-02** Seis roles con capacidades efectivas | **COMPLETED** | catálogo + 0018 concede | captura Roles & Permissions (CEO 9 · COO 9 · RM 9 · OSM 2 · Sales 2 · Supervisor 2); `test_los_seis_roles_con_sus_capacidades_efectivas` | — |
+| **AC-03** Rol + superior concreto, persiste | **COMPLETED** | formulario Rol + Reports to | E2E: guardar, recargar, reabrir → «Sales» y «CEO Org · CEO» | — |
+| **AC-04** Dos ramas: COO/RM nunca ven Sales | **COMPLETED** | política de alcance | `test_today_por_rama_y_sales_solo_para_el_ceo`, `test_activity…`, `test_reports_y_excel…`; E2E Today por cargo | — |
+| **AC-05** Rechazos sin cambios parciales | **COMPLETED** | validación atómica | `test_superiores_no_permitidos…` (9 casos, nada se crea), `test_cambiar_rol_y_superior_es_atomico`, `test_alta_delegada` (16), `test_superior_de_otro_tenant_o_inactivo` | — |
+| **AC-06** OSM = Supervisor = Sales | **COMPLETED** | mismas 2 capacidades | `test_osm_supervisor_y_sales_son_iguales`; E2E permisos idénticos | — |
+| **AC-07** Todas las superficies filtran | **COMPLETED** | misma política | matriz §4 | — |
+| **AC-08** Traslados y cambios de rol con historia | **COMPLETED** | vigencias + `started_at` | `test_traslado…`, `test_mover_una_rama_entera`, `test_sales_asignado_y_desasignado_sin_fuga_historica` | — |
+| **AC-09** Estado y Zona horaria intactos | **COMPLETED** | — | §6: ningún archivo de esa área en el diff | — |
+| **AC-10** Sin reasignaciones; legado acotado; idempotente | **COMPLETED** | 0018 sólo añade | `test_crea_los_roles_con_capacidades…` (membresías idénticas antes/después), `test_route_manager_heredado_ve_su_rama…`, `test_un_manager_sin_cargo…` | — |
+| **AC-11** Escritorio y móvil | **COMPLETED** | — | capturas §5 | — |
+| **AC-12** Migración reversible y suites | **COMPLETED** | — | §5, §7 | 6 fallos previos ajenos; 3 por revisión ajena en la base de pruebas, verdes aisladas (§7) |
+
+---
+
+## 4 · Matriz de seguridad actor × objetivo × API
+
+Todas por **API directa**, por los dos montajes de usuarios (`/api/users` y
+`/api/route/users`). «Rama» = descendiente vigente gestionable.
+
+| Ruta | CEO | COO / RM sobre **Sales** u otra rama | Fuera de alcance (par, superior, sí mismo, `route_admin`, `owner`) | Otro tenant | OSM / Supervisor / Sales |
+|---|---|---|---|---|---|
+| `GET …/pagination` | su rama, Sales incluido; `count` = filas | no aparece | no aparecen | — | 403 |
+| `PUT …/{id}` | 200 en su rama | **404** | **404** | **404** | 403 |
+| `PUT …/{id}/access` | 200 | **404** | **404** | **404** | 403 |
+| `PUT …/{id}` con `role_id` = Sales / COO / `route_admin` / `route_manager` / `owner` (RM sobre su Supervisor) | — | **403** y el cargo no cambia | — | — | 403 |
+| `POST /api/route/users` (alta) | 200: COO, RM, OSM, Supervisor, **Sales bajo él** | **403**: COO crea Sales, RM crea Sales; **422**: CEO crea Sales bajo COO | **403**: su nivel o superior | — | 403 |
+| `GET /api/route/organization/options` | candidatos de su rama | — | — | — | 403 |
+| `PUT /api/route/organization/{id}` | 200 dentro de nivel y rama | **404** | **404** | **404** | 403 |
+| `GET /api/live/today` | su rama + Sales | **sin Sales** | — | — | 403 |
+| `GET /api/activity-explorer` | su rama + Sales | **404** idéntico a un id inexistente | — | 404 | 403 |
+| `GET /api/reports` · `/export` | su rama + Sales | **404**; el Excel no trae las filas de Sales | — | 404 | 403 |
+| `GET /api/supervisors/candidates` | **403** | 403 | — | — | 403 |
+
+---
+
+## 5 · Migración, provisioning, rollback y capturas
+
+### Migración `0018_route_distinct_roles` (base de pruebas aislada)
+
+| Paso | Resultado |
+|---|---|
+| `alembic heads` | **un** head: `0018_route_distinct_roles` |
+| `upgrade` → `downgrade -1` → `upgrade` | OK |
+| `alembic check` | «No new upgrade operations detected» |
+| Con compañías reales: crea los cinco roles **con sus capacidades** en cada una | prueba |
+| Repara `route_manager` de 0 a 9 | prueba |
+| No cambia ninguna pertenencia ni crea jerarquía | prueba |
+| Un rol propio con el mismo nombre (otra descripción) | **se detiene**, sin aplicar nada (prueba) |
+| Bajada | conserva los roles **con miembros** (nadie queda sin rol) y retira los vacíos; se detiene si hay cargos `sales` (prueba) |
+| Subir tras una bajada que conservó roles | los reconoce por nombre **y** descripción y los reutiliza, sin duplicar (prueba) |
+
+**Provisioning al desplegar:**
+1. Migración `0018`: ya concede las capacidades; no depende de *converge*.
+2. *Converge* sigue siendo inocuo: sólo añade lo que falte.
+3. El Superadmin carga la estructura desde Users de CER Route.
+
+**Rollback:** `alembic downgrade 0017_org_hierarchy`, con los límites de la
+tabla anterior.
+
+### Auditoría
+
+Cada asignación, reasignación y cambio de rol con cargo escribe `audit_event`
+(`org_assignment`) con actor, compañía, instante, cargo y superior anterior y
+nuevo. Un cambio de rol de Supervisor a Sales queda como `position:
+supervisor → sales`.
+
+### Capturas
+
+Locales en `var/screenshots/hierarchy-v13/`, fuera del repositorio:
+
+| Captura | Qué muestra |
+|---|---|
+| `escritorio-roles-and-permissions.png` | los seis roles con su número de capacidades; `Route_manager` 9 (heredado) |
+| `escritorio-alta-sales.png` | Create user: rol **Sales**, Reports to sólo con CEOs |
+| `escritorio-editar-sales.png` | **Edit user tras recargar**: «Sales» y «CEO Org · CEO» |
+| `movil-alta-supervisor.png` | el mismo formulario a 390 px con Reports to |
+| `escritorio-ceo-today.png` · `movil-ceo-today.png` | el CEO ve a Sales |
+| `escritorio-coo-today.png` · `movil-rm_a-today.png` | COO y RM, sin Sales |
+| `movil-{osm_a,sup_a,sales_a}-activity.png` | los tres ejecutores, la misma Activity propia |
+
+---
+
+## 6 · Estado operativo y Zona horaria: sin cambios
+
+`git diff dev` (archivos):
+- **Backend:** `catalog`, `organization/*`, `usermanagement/*`, migración 0018.
+- **Frontend:** formulario de usuarios, su diálogo de edición, la entidad
+  `RouteOrganization`, el servicio de edición.
+- **Pruebas.**
+
+**Ninguno** de jornada, zona horaria, estado operativo, supervisores/vehículos,
+Today, Activity ni Reports. Ninguna línea añadida o quitada menciona zona
+horaria, estado operativo, `session_date` ni offsets. Sin migraciones
+temporales.
+
+---
+
+## 7 · Pruebas y regresión
+
+| Lote | Pruebas | Resultado |
+|---|---|---|
+| Jerarquía V1.3 `test_org_hierarchy.py` | 87 | **PASS** |
+| Migración 0018 `test_route_roles_migration.py` | 4 | **PASS** |
+| Roles y usuarios (acceso, contexto, configuración, autoridad, readmisión, provisioning) + jerarquía + migración | 232 | 231 PASS · 1 FAIL (el previo de abajo) |
+| E2E formulario + jerarquía + acceso (`test_org_hierarchy_browser`, `test_route_access_browser`, `test_user_creation_browser`) | 24 | **24/24 PASS** |
+| Ciclo de vida, odómetro, viajes, jornada, ciclo de vida en navegador (tras adaptar) | 212 | **212/212 PASS** |
+| Migraciones de `recovery_accuracy` y roles | 12 | **PASS** |
+| `test_route_notes_migration_safety` (sola) | 7 | **PASS** |
+| `npm run check` | — | exit 0 |
+| Suite completa, 3 workers (local), tras todo lo anterior | 1484 | 1460 PASS · 8 FAIL · 1 ERROR · 15 omitidas · exit 1 |
+| Repetición aislada de los 3 afectados por el entorno (`test_route_roles_migration`, `test_route_notes_migration_safety`) | 11 | **11/11 PASS** |
+
+**Ninguno de los 9 de la suite completa es de V1.3** (`CONFIRMED` por su
+mensaje):
+
+| Grupo | Pruebas | Causa |
+|---|---|---|
+| Previos | 6: `test_provisioning_alignment` (12 vs 16) y los 5 E2E de ubicación offline | ya fallaban antes; sin tocar. Causa raíz de los offline, `UNVERIFIED` |
+| Entorno | 2 de `test_route_roles_migration` + 1 ERROR en `test_route_notes_migration_safety::test_m4` | la base de pruebas del worker apareció con una revisión de Alembic **ajena al repositorio** (`29f1164fc835`). Otro proceso de la máquina usa las mismas bases de prueba; ya ocurrió con `f5c5fde65b15` y `925db8990bcf`. Repetidas aisladas: **11/11 PASS** |
+
+**Primera suite completa de V1.3** (antes de las correcciones): 1.440 PASS,
+21 FAIL, 6 ERROR. Clasificados y resueltos en la lista siguiente.
+
+**Recomendación (ya hecha antes):** dar a CER Route su propia base de pruebas.
+Eliminaría este falso negativo.
+
+### Fallos encontrados y su clase (`CONFIRMED` por su mensaje)
+
+1. **Defecto de producto:** Edit user sin contrato de Route (§1). Corregido.
+2. **Defecto de producto:** Edit user borraba el superior al reabrir (§1).
+   Corregido.
+3. **Defecto de producto:** cambiar **sólo** «Reports to» respondía 400 («No
+   fields provided»). Corregido; una edición totalmente vacía sigue
+   respondiendo 400, como antes.
+4. **Defecto de producto (migración):** la bajada de la 0018 fallaba si alguien
+   tenía un rol nuevo. Corregido: conserva los roles con miembros.
+5. **Pruebas desactualizadas por V1.3:**
+   - unas fijaban la lista antigua de roles;
+   - otras daban de alta un Supervisor por Route **sin superior**, que V1.3
+     ya no permite: ahora usan el CEO raíz que la fixture siembra por tenant.
+
+   Ninguna perdió lo que comprueba.
+6. **Dependencia de orden previa:** `test_route_notes_migration_safety` falla
+   si se ejecuta justo después de `test_recovery_accuracy_migration`, que deja
+   una fila en una tabla append-only. Sola pasa 7/7. Ya estaba pendiente; no se
+   toca.
+
+---
+
+## 8 · Riesgos, decisiones y deuda
+
+- **Consecuencia de producto:** desde Users de CER Route, dar de alta a un
+  Supervisor (u OSM, RM, COO, Sales) **exige** elegir a quién reporta (FR-02).
+  Una compañía **sin CEO cargado** no puede crear supervisores por Route hasta
+  tenerlo. El contrato del núcleo (`/api/users` por un admin del núcleo) no
+  cambia.
+- **El nombre del rol es el visible.** CEO, COO, Regional Manager, OSM y Sales
+  se llaman así en la base. Supervisor conserva `supervisor`, que la pantalla
+  muestra con mayúscula.
+- **S-2 y S-3** (núcleo): documentados y sin tocar.
+  - `manager` puede conceder `owner`.
+  - `roles.create` permite crear roles `management`.
+- `test_provisioning_alignment` (12 vs 16) y los 5 E2E de ubicación offline:
+  previos, sin tocar.
+
+**Acción operativa al desplegar** (no la hace el trabajo local):
+1. Migración `0018`.
+2. El Superadmin asigna los roles nuevos y «Reports to» a cada persona.
+3. Que todos recarguen la aplicación.
+
+---
+
+## 9 · Git
+
+| | |
+|---|---|
+| Rama | `feature/hierarchy-distinct-roles` (desde `dev` `8ce2931`) |
+| Commits | `e5371b6` implementación, pruebas y este informe · el siguiente añade este bloque |
+| Push | sí |
+| MR | **!90** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/90 → `dev` |
+| Relación | MR !88 (Control A, documental) y MR !89 (V1.1, fusionado) son anteriores; éste corrige y amplía V1.1 |
+| Fusionado / desplegado | **No**: pendiente de certificación de CER |
+
+---
+
+## Estimación
+
+**Este ajuste: 0 h restantes de desarrollo.** Queda la certificación de CER.
+
+| Componente | LoC | Coeficiente | Horas-agente |
+|---|---|---|---|
+| Backend (catálogo, organización, usuarios, migración 0018) | ≈ 400 | 150–200 LoC/h | 2,3 |
+| Frontend (formulario, Edit user, entidad) | ≈ 230 | 50–70 LoC/h | 3,8 |
+| Pruebas de integración y migración | ≈ 600 | 80–100 LoC/h | 6,7 |
+| E2E | ≈ 240 | 50–70 LoC/h | 4,0 |
+| **Total** | **≈ 1470** | | **≈ 17 h** |
+
+| Siguiente | Estado | Volumen | Complejidad | Horas-agente |
+|---|---|---|---|---|
+| Ajustes tras la validación de CER | pendiente | desconocido | UI + dominio | 2–4 (+30 % → 2,6–5,2) |
+
+---
+
+## Siguiente paso
+
+Certificación de CER sobre el MR, desde Users de CER Route (crear y editar con
+Rol + Reports to) y Roles & Permissions. Después, el despliegue con las
+acciones del §8. **No se fusiona ni se despliega sin autorización.**
+
+---
+
+## Anexo B · Entrega V1.1 (MR !89, fusionado) — evidencia anterior, sin cambios
+
+Informe de la implementación V1.1 (rol `route_manager`, estructura,
+alcance y delegación), con su Control A como anexo propio. Se conserva tal
+cual. V1.3 (arriba) lo corrige y amplía.
+
+### CER Route · Jerarquía organizacional, roles, permisos y alcance de datos
 
 **Informe final · Control B (implementación) + Control C (pruebas y entrega)** ·
 13 de octubre de 2026
@@ -10,7 +311,7 @@
 
 ---
 
-## Proposed Status
+### Proposed Status
 
 `ROLE HIERARCHY + RBAC + DATA SCOPE COMPLETE / READY FOR CER VALIDATION`
 
@@ -26,7 +327,7 @@ despliega sin su autorización expresa.
 
 ---
 
-## 1 · AS-BUILT real (implementado)
+### 1 · AS-BUILT real (implementado)
 
 | Pieza | Qué se construyó | Dónde |
 |---|---|---|
@@ -52,7 +353,7 @@ despliega sin su autorización expresa.
 
 ---
 
-## 2 · Matriz final cargo → rol → capacidades → alcance
+### 2 · Matriz final cargo → rol → capacidades → alcance
 
 | Cargo (nivel) | Rol | Capacidades | Alcance administrativo | Activity personal |
 |---|---|---|---|---|
@@ -69,7 +370,7 @@ despliega sin su autorización expresa.
 - mismas pantallas (todas las de administración responden 403 a los dos);
 - la misma Activity propia.
 
-### Delegación efectiva
+#### Delegación efectiva
 
 | Actor | Gestiona a | Cargos que asigna | Rol que asigna | Superior posible |
 |---|---|---|---|---|
@@ -89,7 +390,7 @@ despliega sin su autorización expresa.
 
 ---
 
-## 3 · Expected → Implemented → Evidence → Gap → Impact
+### 3 · Expected → Implemented → Evidence → Gap → Impact
 
 | AC | Estado | Implementado | Evidencia | Gap / Impacto |
 |---|---|---|---|---|
@@ -108,7 +409,7 @@ despliega sin su autorización expresa.
 
 ---
 
-## 4 · Matriz de rutas administrativas × actor × objetivo
+### 4 · Matriz de rutas administrativas × actor × objetivo
 
 Todas probadas por **API directa**. «Rama» = descendiente vigente gestionable.
 
@@ -135,7 +436,7 @@ la protección.
 
 ---
 
-## 5 · Migración, historial y traslados
+### 5 · Migración, historial y traslados
 
 **Migración** — en la base de pruebas aislada (`MODE=TEST`), nunca en la local
 de desarrollo ni en producción:
@@ -179,7 +480,7 @@ Casos probados:
 
 ---
 
-## 6 · Pruebas y regresión
+### 6 · Pruebas y regresión
 
 | Lote | Pruebas | Resultado |
 |---|---|---|
@@ -211,7 +512,7 @@ No se repitió la suite entera tras la verificación. El único cambio de
 producto posterior es la etiqueta («Route Manager», fallo 5 de abajo), y las pruebas que la tocan están
 en las 115.
 
-### Fallos durante la ejecución, todos corregidos (`CONFIRMED`)
+#### Fallos durante la ejecución, todos corregidos (`CONFIRMED`)
 
 1. **Defecto de producto:** un manager que suspendía a un subordinado **no
    podía reactivarlo**. El rol se buscaba sólo con la pertenencia activa, y el
@@ -248,7 +549,7 @@ en las 115.
 
 ---
 
-## 7 · No regresión: OSM/Supervisor, Activity, exportaciones
+### 7 · No regresión: OSM/Supervisor, Activity, exportaciones
 
 - **OSM y Supervisor:** mismos permisos y misma Activity propia; 403 en Today,
   Activity admin, Reports, Users y organización (integración y E2E).
@@ -262,7 +563,7 @@ en las 115.
 
 ---
 
-## 8 · Riesgos, deuda y decisiones evitadas
+### 8 · Riesgos, deuda y decisiones evitadas
 
 **Decisiones no autorizadas que se evitaron:**
 - Ninguna capacidad nueva.
@@ -306,7 +607,7 @@ en las 115.
 
 ---
 
-## 9 · Git
+### 9 · Git
 
 | | |
 |---|---|
@@ -319,7 +620,7 @@ en las 115.
 
 ---
 
-## Estimación
+### Estimación
 
 **Este frente: 0 h restantes de desarrollo.** Queda la certificación de CER.
 
@@ -340,21 +641,21 @@ Frente a las 37 h base (48 con margen) del Control A.
 
 ---
 
-## Siguiente paso
+### Siguiente paso
 
 Certificación de CER sobre el MR. Tras ella, el despliegue con las cuatro
 acciones operativas del §8. **No se fusiona ni se despliega sin autorización.**
 
 ---
 
-## Anexo A · Control A (13/10/2026) — evidencia inicial, sin cambios
+### Anexo A · Control A (13/10/2026) — evidencia inicial, sin cambios
 
 Preflight y puerta de decisión entregados en MR !88. Su estado era `BLOCKED —
 CER DECISION REQUIRED`; las decisiones D-1 a D-4 llegaron en la instrucción
 V1.1 y este informe recoge su implementación. Se conserva tal cual como
 evidencia.
 
-### A.1 · AS-BUILT / CONFIRMED
+#### A.1 · AS-BUILT / CONFIRMED
 
 | Pieza | Estado real en `dev` | Referencia |
 |---|---|---|
@@ -384,9 +685,9 @@ en el sistema sin una decisión de capacidades.
 
 ---
 
-### A.2 · Decisiones de CER necesarias
+#### A.2 · Decisiones de CER necesarias
 
-#### D-1 · ¿Con qué rol leen y administran CEO, COO y RM? · **bloquea el desarrollo**
+##### D-1 · ¿Con qué rol leen y administran CEO, COO y RM? · **bloquea el desarrollo**
 
 **Hecho.** Sólo hay dos roles de producto. `supervisor` no lee nada
 administrativo; `route_admin` lo lee y administra todo el tenant.
@@ -409,7 +710,7 @@ como única fuente del nivel.
 **Recomiendo no** en esta etapa: un RM suspende el acceso (`users.update`) y la
 baja la hace el Superadmin.
 
-#### D-2 · ¿Qué puede administrar cada nivel? · **bloquea la administración delegada**
+##### D-2 · ¿Qué puede administrar cada nivel? · **bloquea la administración delegada**
 
 **Hecho.** No hay rango ni noción de «delegable»; además, hoy **ninguna guarda
 impide actuar sobre alguien de rol superior** (por ejemplo, un `route_admin`
@@ -437,7 +738,7 @@ suyo.
 
 **Recomendación:** aprobar esta tabla tal cual.
 
-#### D-3 · Tras un traslado, ¿quién ve la historia? · **no bloquea**; se aplica la opción restrictiva salvo indicación
+##### D-3 · Tras un traslado, ¿quién ve la historia? · **no bloquea**; se aplica la opción restrictiva salvo indicación
 
 **Hecho.** §9 lo deja expresamente sin decidir.
 
@@ -452,7 +753,7 @@ indica otra cosa: cada relación guarda desde/hasta, y Activity, Reports y el
 Excel filtran por `session_date` dentro de ese periodo. Today, que es «ahora»,
 usa la relación vigente.
 
-#### D-4 · Usuarios existentes sin cargo · **confirmación**
+##### D-4 · Usuarios existentes sin cargo · **confirmación**
 
 Tras el despliegue nadie tiene cargo ni superior. Consecuencias:
 
@@ -466,7 +767,7 @@ la pantalla de usuarios.
 
 ---
 
-### A.3 · Hallazgos de seguridad, fuera de esta instrucción
+#### A.3 · Hallazgos de seguridad, fuera de esta instrucción
 
 | # | Hallazgo | Severidad | Acción propuesta |
 |---|---|---|---|
@@ -478,9 +779,9 @@ la pantalla de usuarios.
 
 ---
 
-### A.4 · Diseño técnico, decidido (para Control B)
+#### A.4 · Diseño técnico, decidido (para Control B)
 
-#### 4.1 Modelo, aditivo
+##### 4.1 Modelo, aditivo
 
 Tabla nueva `org_assignment`: el cargo y el superior de una persona en una
 compañía, con su historia.
@@ -513,7 +814,7 @@ queda para D-3. Cada cambio se audita (`record_event`, `entity_type =
 Niveles: CEO 4, COO 3, RM 2, OSM 1, Supervisor 1. **OSM y Supervisor comparten
 nivel**: ni uno manda sobre el otro.
 
-#### 4.2 Política única de alcance
+##### 4.2 Política única de alcance
 
 `app/core/rbac/scope.py` (dominio de acceso de Route):
 
@@ -537,7 +838,7 @@ Superficies a las que se aplica, con la misma función:
 
 Un id fuera de alcance responde **404**, como hoy entre compañías.
 
-#### 4.3 Pantallas
+##### 4.3 Pantallas
 
 Sin páginas nuevas. En el formulario de usuarios de Route, dos campos:
 
@@ -548,7 +849,7 @@ OSM y Supervisor ven exactamente la misma experiencia de ejecución.
 
 ---
 
-### A.5 · Estimación de Control B + C (con D-1 A, D-2 tal cual, D-3 por periodo)
+#### A.5 · Estimación de Control B + C (con D-1 A, D-2 tal cual, D-3 por periodo)
 
 | Bloque | Volumen | Complejidad | Horas-agente |
 |---|---|---|---|
@@ -566,7 +867,7 @@ D-3 «vigente» en vez de «por periodo» ahorraría unas 3 h.
 
 ---
 
-### A.6 · Git
+#### A.6 · Git
 
 | | |
 |---|---|

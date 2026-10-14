@@ -38,18 +38,19 @@ BUENA = "Contrasena10"  # 12 caracteres: por encima del mínimo del servidor.
 
 
 async def _crear(cliente, seeded, *, username: str, rol: str = "supervisor", password=BUENA):
-    return await cliente.post(
-        "/api/route/users",
-        json={
-            "username": username,
-            "email": f"{username}@example.com",
-            "first_name": "Nueva",
-            "last_name": "Persona",
-            "password": password,
-            "gender": True,
-            "role_id": seeded.alpha.roles[rol],
-        },
-    )
+    cuerpo = {
+        "username": username,
+        "email": f"{username}@example.com",
+        "first_name": "Nueva",
+        "last_name": "Persona",
+        "password": password,
+        "gender": True,
+        "role_id": seeded.alpha.roles[rol],
+    }
+    if rol == "supervisor":
+        # Jerarquía (V1.3): por Route, un Supervisor entra con su superior.
+        cuerpo["superior_user_id"] = seeded.alpha.users["ceo_base"].id
+    return await cliente.post("/api/route/users", json=cuerpo)
 
 
 async def _pertenencias(company_id: int, user_id: int) -> list[dict]:
@@ -209,6 +210,7 @@ async def test_an_identity_from_another_tenant_says_only_that_it_is_unavailable(
             "password": BUENA,
             "gender": True,
             "role_id": seeded.beta.roles["supervisor"],
+            "superior_user_id": seeded.beta.users["ceo_base"].id,
         },
     )
     assert ajeno.status_code in (200, 201), ajeno.text
@@ -536,6 +538,7 @@ async def test_re_enrollment_cannot_cross_tenants(seeded, alpha_client, beta_cli
                 "password": BUENA,
                 "gender": True,
                 "role_id": seeded.beta.roles["supervisor"],
+                "superior_user_id": seeded.beta.users["ceo_base"].id,
             },
         )
     ).json()
