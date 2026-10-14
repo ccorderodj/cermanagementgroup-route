@@ -42,6 +42,10 @@ class OrgOptions(BaseModel):
     superiors: list[OrgSuperiorOption]
     #: `True` para un manager: la persona tiene que quedar bajo él o su rama.
     superior_required: bool = False
+    #: V1.3: el cargo de cada rol (por código de rol) y de qué cargos puede
+    #: depender cada cargo. La pantalla filtra con esto; el servidor revalida.
+    role_positions: dict[str, str] = {}
+    allowed_parents: dict[str, list[str]] = {}
     current: Optional[OrgAssignmentRead] = None
 
 

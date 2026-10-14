@@ -48,8 +48,8 @@ RUTA_ROUTE = "/api/route/users"
 RUTA_NUCLEO = "/api/users"
 
 
-def _cuerpo(sufijo: str, role_id: int) -> dict:
-    return {
+def _cuerpo(sufijo: str, role_id: int, superior: int | None = None) -> dict:
+    cuerpo = {
         "username": f"fc1_{sufijo}",
         "email": f"fc1_{sufijo}@alpha.example.com",
         "first_name": "FC1",
@@ -57,6 +57,10 @@ def _cuerpo(sufijo: str, role_id: int) -> dict:
         "password": TEST_PASSWORD,
         "role_id": role_id,
     }
+    if superior is not None:
+        # Jerarquía (V1.3): un cargo que depende de otro entra con su superior.
+        cuerpo["superior_user_id"] = superior
+    return cuerpo
 
 
 async def _existe(email: str) -> bool:
@@ -78,15 +82,15 @@ async def test_the_route_contract_offers_exactly_the_product_roles_to_anyone(
     """Tests 1 y 3 de la resolución: Administrador, Owner y Admin del núcleo.
 
     El mismo endpoint, el mismo tenant, tres autoridades muy distintas, y la
-    misma respuesta: dos opciones.
+    misma respuesta: los roles de producto de Route.
     """
     await alpha_client.login(seeded.alpha.users[actor].email)
     respuesta = await alpha_client.get(f"{RUTA_ROUTE}/assignable-roles")
 
     assert respuesta.status_code == 200, respuesta.text
     assert {o["code"] for o in respuesta.json()} == ROUTE_PRODUCT_ROLES
-    # Los roles de producto de Route; `route_manager` entró con la jerarquía (D-1).
-    assert {o["label"] for o in respuesta.json()} == {"Administrador", "Route Manager", "Supervisor"}
+    # V1.3: un rol por cargo, más el Administrador.
+    assert {o["label"] for o in respuesta.json()} == {"Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales"}
 
 
 async def test_the_route_contract_offers_the_product_roles_to_the_platform_superadmin(
@@ -108,8 +112,8 @@ async def test_the_route_contract_offers_the_product_roles_to_the_platform_super
 
         por_nucleo = await plataforma.get(f"{RUTA_NUCLEO}/assignable-roles")
         assert por_nucleo.status_code == 200
-        # Siete con `route_manager` (jerarquía, D-1).
-        assert len({o["code"] for o in por_nucleo.json()}) == 7, (
+        # Doce: los cuatro del núcleo y los ocho de Route (V1.3).
+        assert len({o["code"] for o in por_nucleo.json()}) == 12, (
             "su autoridad sigue intacta en el contrato del núcleo"
         )
 
@@ -122,7 +126,7 @@ async def test_no_technical_code_leaks_as_a_product_label(seeded, alpha_client):
     etiquetas = " ".join(o["label"] for o in opciones)
     assert "route_admin" not in etiquetas
     assert "supervisor" not in etiquetas.lower().replace("supervisor", "", 1) or True
-    assert sorted(o["label"] for o in opciones) == ["Administrador", "Route Manager", "Supervisor"]
+    assert {o["label"] for o in opciones} == {"Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales"}
 
 
 # ── Test 4-6: la escritura, por el contrato de Route ─────────────────────────
@@ -174,8 +178,9 @@ async def test_the_route_contract_accepts_the_two_product_roles(
 ):
     """Lo que sí tiene que funcionar, que es la mitad que suele olvidarse."""
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    superior = seeded.alpha.users["ceo_base"].id if rol == "supervisor" else None
     respuesta = await alpha_client.post(
-        RUTA_ROUTE, json=_cuerpo(f"ok_{rol}", seeded.alpha.roles[rol])
+        RUTA_ROUTE, json=_cuerpo(f"ok_{rol}", seeded.alpha.roles[rol], superior)
     )
     assert respuesta.status_code == 200, respuesta.text
 

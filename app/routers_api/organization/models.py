@@ -58,6 +58,9 @@ class OrgPosition(BusinessEnum):
     REGIONAL_MANAGER = "regional_manager"
     OSM = "osm"
     SUPERVISOR = "supervisor"
+    #: V1.3: ejecuta su jornada como el Supervisor y depende **directamente** de
+    #: un CEO; fuera del alcance de COO y RM.
+    SALES = "sales"
 
 
 #: El nivel de cada cargo. **OSM y Supervisor comparten nivel**: ninguno manda
@@ -68,7 +71,41 @@ NIVEL: dict[str, int] = {
     OrgPosition.REGIONAL_MANAGER: 2,
     OrgPosition.OSM: 1,
     OrgPosition.SUPERVISOR: 1,
+    OrgPosition.SALES: 1,
 }
+
+#: De qué cargos puede depender cada uno (V1.3, §4). Es la regla
+#: **estructural**: dice qué tipo de persona puede ser superior; no transfiere
+#: permisos. El superior concreto es `superior_user_id`. El CEO es raíz.
+#: Los niveles intermedios son opcionales: un RM puede depender del CEO sin
+#: COO, y un OSM o Supervisor del COO o del CEO sin RM. Sales, **sólo** del CEO.
+PADRES_PERMITIDOS: dict[str, frozenset[str]] = {
+    OrgPosition.CEO: frozenset(),
+    OrgPosition.COO: frozenset({OrgPosition.CEO}),
+    OrgPosition.REGIONAL_MANAGER: frozenset({OrgPosition.COO, OrgPosition.CEO}),
+    OrgPosition.OSM: frozenset(
+        {OrgPosition.REGIONAL_MANAGER, OrgPosition.COO, OrgPosition.CEO}
+    ),
+    OrgPosition.SUPERVISOR: frozenset(
+        {OrgPosition.REGIONAL_MANAGER, OrgPosition.COO, OrgPosition.CEO}
+    ),
+    OrgPosition.SALES: frozenset({OrgPosition.CEO}),
+}
+
+#: El cargo de cada rol de Route (V1.3): el cargo **sale del rol**, así que no
+#: hay dos controles que puedan contradecirse. `route_manager` (legado) no
+#: tiene uno fijo: conserva el que tenía.
+CARGO_DE_ROL: dict[str, str] = {
+    "CEO": OrgPosition.CEO,
+    "COO": OrgPosition.COO,
+    "Regional Manager": OrgPosition.REGIONAL_MANAGER,
+    "OSM": OrgPosition.OSM,
+    "supervisor": OrgPosition.SUPERVISOR,
+    "Sales": OrgPosition.SALES,
+}
+
+#: Y al revés: qué rol lleva cada cargo.
+ROL_DE_CARGO: dict[str, str] = {cargo: rol for rol, cargo in CARGO_DE_ROL.items()}
 
 #: Etiquetas de pantalla.
 ETIQUETA: dict[str, str] = {
@@ -77,6 +114,7 @@ ETIQUETA: dict[str, str] = {
     OrgPosition.REGIONAL_MANAGER: "Regional Manager",
     OrgPosition.OSM: "OSM",
     OrgPosition.SUPERVISOR: "Supervisor",
+    OrgPosition.SALES: "Sales",
 }
 
 

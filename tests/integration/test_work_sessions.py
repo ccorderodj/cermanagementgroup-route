@@ -918,6 +918,8 @@ async def test_a_supervisor_cannot_end_another_supervisors_session(seeded, alpha
                 "gender": False,
                 "password": "UnaClaveSegura123!",
                 "role_id": seeded.alpha.roles["supervisor"],
+                # Jerarquía (V1.3): un Supervisor entra con su superior.
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()

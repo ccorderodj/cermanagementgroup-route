@@ -772,6 +772,8 @@ async def _crear_usuario(cliente, seeded, username: str) -> dict:
             # Route sólo puede conceder los dos roles de producto, y lo que este
             # test necesita es "un usuario cualquiera", no uno del núcleo.
             "role_id": seeded.alpha.roles["supervisor"],
+            # Jerarquía (V1.3): un Supervisor entra con su superior.
+            "superior_user_id": seeded.alpha.users["ceo_base"].id,
         },
     )
     assert respuesta.status_code == 200, respuesta.text

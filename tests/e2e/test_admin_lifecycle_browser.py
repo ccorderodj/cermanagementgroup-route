@@ -424,6 +424,8 @@ async def test_user_delete_is_reachable_and_complete_from_the_admin_ui(
                 # los dos de producto, y aquí hace falta "un usuario", no uno
                 # del núcleo.
                 "role_id": seeded.alpha.roles["supervisor"],
+                # Jerarquía (V1.3): un Supervisor entra con su superior.
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()

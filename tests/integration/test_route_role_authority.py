@@ -42,18 +42,18 @@ from tests.integration.conftest import TEST_PASSWORD, TenantClient
 pytestmark = pytest.mark.integration
 
 
-async def _crear_usuario_con_rol(cliente, *, sufijo: str, role_id: int):
-    return await cliente.post(
-        "/api/users",
-        json={
-            "username": f"asignado_{sufijo}",
-            "email": f"asignado_{sufijo}@alpha.example.com",
-            "first_name": "Asignado",
-            "last_name": sufijo,
-            "password": TEST_PASSWORD,
-            "role_id": role_id,
-        },
-    )
+async def _crear_usuario_con_rol(cliente, *, sufijo: str, role_id: int, superior: int | None = None):
+    cuerpo = {
+        "username": f"asignado_{sufijo}",
+        "email": f"asignado_{sufijo}@alpha.example.com",
+        "first_name": "Asignado",
+        "last_name": sufijo,
+        "password": TEST_PASSWORD,
+        "role_id": role_id,
+    }
+    if superior is not None:
+        cuerpo["superior_user_id"] = superior
+    return await cliente.post("/api/users", json=cuerpo)
 
 
 # ── Lo que un Route Admin debería poder asignar, y puede ─────────────────────
@@ -66,7 +66,9 @@ async def test_a_route_admin_can_assign_the_two_route_roles(
     """Los dos roles operativos de CER Route son suyos, y eso está bien."""
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     respuesta = await _crear_usuario_con_rol(
-        alpha_client, sufijo=rol, role_id=seeded.alpha.roles[rol]
+        alpha_client, sufijo=rol, role_id=seeded.alpha.roles[rol],
+        # Jerarquía (V1.3): un Supervisor entra con su superior.
+        superior=seeded.alpha.users["ceo_base"].id if rol == "supervisor" else None,
     )
     assert respuesta.status_code == 200
 
@@ -201,9 +203,9 @@ async def test_a_route_admin_cannot_create_or_edit_roles(seeded, alpha_client):
 # ── El modelo de roles, tal como CER lo definió ──────────────────────────────
 
 
-def test_exactly_three_role_templates_are_specific_to_cer_route():
-    """`route_admin`, `route_manager` (jerarquía, D-1) y `supervisor`. Los otros
-    cuatro son del núcleo.
+def test_the_route_role_templates_are_the_approved_ones():
+    """`route_admin`, los seis cargos de la jerarquía (V1.3) y el `route_manager`
+    heredado. Los otros cuatro son del núcleo.
 
     Se comprueba por la capacidad, no por el nombre: un rol es de Route si
     concede algo de Route. `owner` y `admin` reciben capacidades de Route por ser
@@ -211,11 +213,14 @@ def test_exactly_three_role_templates_are_specific_to_cer_route():
     """
     from app.core.rbac.catalog import DEFAULT_ROLES, capabilities_for
 
-    DE_ROUTE = {"route_admin", "route_manager", "supervisor"}
+    DE_ROUTE = {
+        "route_admin", "route_manager",
+        "CEO", "COO", "Regional Manager", "OSM", "supervisor", "Sales",
+    }
     DEL_NUCLEO = {"owner", "admin", "manager", "viewer"}
 
     plantillas = {p.name for p in DEFAULT_ROLES}
-    assert plantillas == DE_ROUTE | DEL_NUCLEO, "siete roles por defecto, ni más ni menos"
+    assert plantillas == DE_ROUTE | DEL_NUCLEO, "doce roles por defecto, ni más ni menos"
 
     for plantilla in DEFAULT_ROLES:
         capacidades = capabilities_for(plantilla)

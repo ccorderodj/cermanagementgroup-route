@@ -16,6 +16,8 @@ interface IPutUserManagementPayload {
         gender?: boolean;
         /** Rol en la compañía activa; el backend actualiza user_company. */
         role_id?: number;
+        /** CER Route (V1.3): a quién reporta; se valida junto con el rol. */
+        superior_user_id?: number;
         /**
          * Desde qué producto se administra. No viaja en el cuerpo: decide **a qué
          * ruta** se envía, y con ello qué roles acepta el servidor.

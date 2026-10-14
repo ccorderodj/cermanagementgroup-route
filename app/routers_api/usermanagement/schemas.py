@@ -25,9 +25,9 @@ class UserManagementCreate(BaseModel):
     gender: bool = False
     password: str = Field(min_length=MIN_PASSWORD_LENGTH)
     role_id: int
-    #: Jerarquía de CER Route: cargo y superior, en la misma operación. Un
-    #: `route_manager` está **obligado** a darlos (la persona nueva queda en su
-    #: rama); para el resto son opcionales.
+    #: Jerarquía de CER Route (V1.3): el **cargo sale del rol**; aquí sólo se
+    #: elige a quién reporta. `position` se conserva por compatibilidad y, si
+    #: llega, tiene que coincidir con el del rol.
     position: Optional[str] = None
     superior_user_id: Optional[int] = None
 
@@ -51,6 +51,9 @@ class UserManagementUpdate(BaseModel):
     # El rol vive en `user_company`, pero desde la interfaz es un campo más del
     # usuario. Debe ser un rol de esta compañía; la base lo impone.
     role_id: Optional[int] = None
+    #: A quién reporta (V1.3). Si se envía —también `null`—, se valida junto
+    #: con el rol en la misma transacción.
+    superior_user_id: Optional[int] = None
 
     model_config = ConfigDict(extra="forbid")
 

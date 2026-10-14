@@ -87,7 +87,7 @@ async def test_the_route_user_form_offers_exactly_the_product_roles(
             await selector.click()
 
             opciones = page.get_by_role("option")
-            await expect(opciones).to_have_count(3, timeout=20_000)
+            await expect(opciones).to_have_count(7, timeout=20_000)
 
             textos = sorted(await opciones.all_inner_texts())
             assert textos == sorted(ROUTE_PRODUCT_ROLE_LABELS.values()), (
@@ -329,10 +329,12 @@ async def test_the_route_user_form_shows_the_product_roles_to_every_authority(
             await selector.click()
 
             opciones = page.get_by_role("option")
-            await expect(opciones).to_have_count(3, timeout=20_000)
+            await expect(opciones).to_have_count(7, timeout=20_000)
 
             textos = sorted(await opciones.all_inner_texts())
-            assert textos == ["Administrador", "Route Manager", "Supervisor"], (
+            assert textos == sorted([
+                "Administrador", "CEO", "COO", "Regional Manager", "OSM", "Supervisor", "Sales",
+            ]), (
                 f"{quien} debería ver exactamente los roles de producto: {textos}"
             )
 

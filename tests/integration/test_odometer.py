@@ -527,6 +527,8 @@ async def test_another_supervisor_cannot_read_the_photo(seeded, alpha_client):
                 "first_name": "Otro", "last_name": "Sup",
                 "password": TEST_PASSWORD,
                 "role_id": seeded.alpha.roles["supervisor"],
+                # Jerarquía (V1.3): un Supervisor entra con su superior.
+                "superior_user_id": seeded.alpha.users["ceo_base"].id,
             },
         )
     ).json()

@@ -46,8 +46,10 @@ from app.routers_api.usermanagement.schemas import (
 )
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
+from app.routers_api.organization.models import CARGO_DE_ROL
 from app.routers_api.usermanagement.role_policy import (
     _nombre_del_rol,
+    acota_a_roles_de_route,
     ensure_assignable_role,
 )
 from app.routers_api.users.permissions import require_permissions
@@ -142,18 +144,29 @@ async def create_user(
     await ensure_assignable_role(
         actor_user_id=current_user.id, company_id=company.id, role_id=payload.role_id
     )
-    # Un manager sólo crea en su rama: cargo por debajo del suyo, superior en
-    # su rama y el rol de ese cargo. Se valida **antes** de escribir nada.
+    # El cargo sale del rol (V1.3). Un manager sólo crea en su rama: un cargo
+    # por debajo del suyo y un superior de su rama. Se valida **antes** de
+    # escribir nada.
+    cargo = CARGO_DE_ROL.get(
+        await _nombre_del_rol(role_id=payload.role_id, company_id=company.id)
+    )
+    if payload.position is not None and payload.position != cargo:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="The position follows the CER Route role.",
+        )
     d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
     if not d.tenant:
         delegada.exigir_asignacion(
-            d, position=payload.position, superior_user_id=payload.superior_user_id
+            d, position=cargo, superior_user_id=payload.superior_user_id
         )
-        delegada.exigir_rol(
-            d,
-            role_name=await _nombre_del_rol(role_id=payload.role_id, company_id=company.id),
-            position=payload.position,
-        )
+    # Desde Route —o un actor de Route por cualquier contrato— un rol de la
+    # jerarquía entra con su superior. El contrato del núcleo, para un actor
+    # del núcleo, sigue como estaba salvo que se dé un superior.
+    con_jerarquia = cargo is not None and (
+        payload.superior_user_id is not None
+        or await acota_a_roles_de_route(actor_user_id=current_user.id, company_id=company.id)
+    )
 
     datos = payload.model_dump(exclude={"position", "superior_user_id"})
     # Usuario, pertenencia y cargo en una sola transacción: si el cargo no se
@@ -163,13 +176,13 @@ async def create_user(
             company_id=company.id,
             **datos,
         )
-        if payload.position is not None:
-            await organizacion.asignar(
+        if con_jerarquia:
+            await organizacion.sincronizar_con_rol(
                 company_id=company.id,
                 actor_user_id=current_user.id,
                 user_id=created["id"],
-                position=payload.position,
                 superior_user_id=payload.superior_user_id,
+                superior_dado=True,
             )
 
     # Dar de alta a alguien en un tenant es de las operaciones más sensibles que
@@ -209,25 +222,56 @@ async def update_user(
     )
     d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
     await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
-    if not d.tenant and data.get("role_id") is not None:
-        cargo = (await organizacion.vigentes(company.id)).get(user_id)
-        delegada.exigir_rol(
-            d,
-            role_name=await _nombre_del_rol(role_id=data["role_id"], company_id=company.id),
-            position=cargo.position if cargo else None,
+
+    # Rol y superior van juntos (V1.3): se valida el **conjunto** —rol nuevo,
+    # superior nuevo, rama resultante— y se escribe en una sola transacción.
+    superior_dado = "superior_user_id" in payload.model_fields_set
+    superior = data.pop("superior_user_id", None)
+    toca_jerarquia = data.get("role_id") is not None or superior_dado
+    if toca_jerarquia and not d.tenant:
+        rol_final = (
+            await _nombre_del_rol(role_id=data["role_id"], company_id=company.id)
+            if data.get("role_id") is not None
+            else await organizacion.rol_en_compania(
+                company_id=company.id, user_id=user_id, incluir_suspendidos=True
+            )
         )
+        actual = (await organizacion.vigentes(company.id)).get(user_id)
+        delegada.exigir_asignacion(
+            d,
+            position=CARGO_DE_ROL.get(rol_final),
+            superior_user_id=superior if superior_dado else (actual.superior_user_id if actual else None),
+        )
+    sincroniza = toca_jerarquia and (
+        superior_dado
+        or await acota_a_roles_de_route(actor_user_id=current_user.id, company_id=company.id)
+    )
 
     antes = await UserManagementDAO.find_for_company(
         user_id=user_id, company_id=company.id
     )
 
-    updated = await UserManagementDAO.update_user_in_company(
-        user_id=user_id,
-        company_id=company.id,
-        role_id=data.pop("role_id", None),
-        password=data.pop("password", None),
-        **data,
-    )
+    async with transaction():
+        # Cambiar sólo a quién reporta no toca los datos del usuario. Una
+        # edición vacía sigue llegando al DAO, que responde 400 como siempre.
+        if data or not superior_dado:
+            updated = await UserManagementDAO.update_user_in_company(
+                user_id=user_id,
+                company_id=company.id,
+                role_id=data.pop("role_id", None),
+                password=data.pop("password", None),
+                **data,
+            )
+        else:
+            updated = antes
+        if sincroniza:
+            await organizacion.sincronizar_con_rol(
+                company_id=company.id,
+                actor_user_id=current_user.id,
+                user_id=user_id,
+                superior_user_id=superior,
+                superior_dado=superior_dado,
+            )
 
     delta = diff(_instantanea(antes or {}), _instantanea(updated))
     if cambia_contrasena:

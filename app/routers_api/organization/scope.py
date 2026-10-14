@@ -8,17 +8,18 @@ agregar, contar u ordenar.
 
 Las tres respuestas posibles
 ----------------------------
-* **Tenant** — todo actor que **no** sea `route_manager`. Es el contrato vigente
+* **Tenant** — todo actor sin rol de mando de Route. Es el contrato vigente
   y no se toca: quien tiene hoy `route.live.read` (el Superadmin `route_admin`,
   `owner`, `admin` o un rol propio) sigue viendo la compañía. No se crea ninguna
   equivalencia nueva entre roles: simplemente sólo el rol nuevo se acota.
-* **Rama** — un `route_manager`: sus descendientes.
+* **Rama** — un rol de mando (CEO, COO, Regional Manager, y el `route_manager`
+  heredado): sus descendientes.
   - *Hoy* (Today): los descendientes **vigentes**.
   - *Historia* (Activity, Reports, Excel): cada jornada se atribuye entera a la
     cadena vigente en su `started_at` (D-3). Un supervisor que pasó de RM-A a
     RM-B queda visible para RM-A en el periodo en que dependía de él y para
     RM-B desde que depende de él; nadie hereda el pasado de otro.
-* **Vacío** — un `route_manager` sin cargo o sin subordinados no ve a nadie.
+* **Vacío** — un rol de mando sin cargo o sin subordinados no ve a nadie.
   Una lista vacía **no** es «sin filtro» (B2.3).
 
 Sin caché: se calcula en cada petición desde la base, así que un cambio de
@@ -41,8 +42,9 @@ from app.routers_api.organization.service import (
     rol_en_compania,
 )
 
-#: El único rol cuyo alcance se acota a su rama.
-ROL_ACOTADO = "route_manager"
+#: Los roles cuyo alcance se acota a su rama: los de mando de la jerarquía
+#: (V1.3) y el `route_manager` heredado. Nunca el tenant por ser CEO.
+ROLES_ACOTADOS: frozenset[str] = frozenset({"CEO", "COO", "Regional Manager", "route_manager"})
 
 Ventana = tuple[datetime, datetime | None]
 
@@ -108,7 +110,7 @@ def ramas_por_periodo(filas: list[Asignacion], raiz: int) -> dict[int, list[Vent
 async def alcance_administrativo(*, company_id: int, actor_user_id: int) -> Alcance:
     """El alcance de lectura administrativa de este actor en esta compañía."""
     rol = await rol_en_compania(company_id=company_id, user_id=actor_user_id)
-    if rol != ROL_ACOTADO:
+    if rol not in ROLES_ACOTADOS:
         return Alcance(tenant=True)
     filas = await historial(company_id)
     return Alcance(tenant=False, ventanas=ramas_por_periodo(filas, actor_user_id))
