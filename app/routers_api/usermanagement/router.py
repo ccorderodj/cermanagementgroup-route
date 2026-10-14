@@ -46,6 +46,7 @@ from app.routers_api.usermanagement.schemas import (
 )
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
+from app.routers_api.organization.contract_guard import exigir_contrato_de_route
 from app.routers_api.organization.models import CARGO_DE_ROL
 from app.routers_api.usermanagement.role_policy import (
     _nombre_del_rol,
@@ -160,13 +161,17 @@ async def create_user(
         delegada.exigir_asignacion(
             d, position=cargo, superior_user_id=payload.superior_user_id
         )
-    # Desde Route —o un actor de Route por cualquier contrato— un rol de la
-    # jerarquía entra con su superior. El contrato del núcleo, para un actor
-    # del núcleo, sigue como estaba salvo que se dé un superior.
-    con_jerarquia = cargo is not None and (
-        payload.superior_user_id is not None
-        or await acota_a_roles_de_route(actor_user_id=current_user.id, company_id=company.id)
+    # Por el contrato general no entra nadie en la jerarquía (V1.4, H-1). Va
+    # después de la delegación: una escalada sigue respondiendo 403.
+    await exigir_contrato_de_route(
+        company_id=company.id,
+        user_id=None,
+        role_id=payload.role_id,
+        superior_dado=payload.superior_user_id is not None,
     )
+    # Un rol de la jerarquía sólo llega aquí por CER Route, y entra con su
+    # superior en la misma transacción.
+    con_jerarquia = cargo is not None
 
     datos = payload.model_dump(exclude={"position", "superior_user_id"})
     # Usuario, pertenencia y cargo en una sola transacción: si el cargo no se
@@ -242,6 +247,15 @@ async def update_user(
             position=CARGO_DE_ROL.get(rol_final),
             superior_user_id=superior if superior_dado else (actual.superior_user_id if actual else None),
         )
+    # Por el contrato general, nada que toque la jerarquía (V1.4, H-1): 409
+    # antes de escribir —no hay cambio parcial— y después de la delegación,
+    # así que una escalada sigue respondiendo 403.
+    await exigir_contrato_de_route(
+        company_id=company.id,
+        user_id=user_id,
+        role_id=data.get("role_id"),
+        superior_dado=superior_dado,
+    )
     sincroniza = toca_jerarquia and (
         superior_dado
         or await acota_a_roles_de_route(actor_user_id=current_user.id, company_id=company.id)
@@ -360,10 +374,31 @@ async def reenroll_user(
     # readmite. Lo hace la administración del tenant.
     d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
     await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
-
-    fila, membership_id, rol_previo = await UserManagementDAO.reenroll_membership(
-        user_id=user_id, company_id=company.id, role_id=payload.role_id
+    # Readmitir con un rol de la jerarquía es entrar en ella: sólo por CER
+    # Route, y con su superior (V1.4). Quien vuelve no tiene cargo vigente, así
+    # que se valida como un alta.
+    await exigir_contrato_de_route(
+        company_id=company.id,
+        user_id=None,
+        role_id=payload.role_id,
+        superior_dado=payload.superior_user_id is not None,
     )
+    cargo = CARGO_DE_ROL.get(
+        await _nombre_del_rol(role_id=payload.role_id, company_id=company.id)
+    )
+
+    async with transaction():
+        fila, membership_id, rol_previo = await UserManagementDAO.reenroll_membership(
+            user_id=user_id, company_id=company.id, role_id=payload.role_id
+        )
+        if cargo is not None:
+            await organizacion.sincronizar_con_rol(
+                company_id=company.id,
+                actor_user_id=current_user.id,
+                user_id=user_id,
+                superior_user_id=payload.superior_user_id,
+                superior_dado=True,
+            )
 
     # La auditoría deja el antes y el después de la pertenencia, y **nada** de
     # la credencial: ni la contraseña ni su hash son datos de auditoría.

@@ -34,3 +34,46 @@ export const orgOptionsSchema = z.object({
     current: orgAssignmentSchema.nullable().optional(),
 });
 export type OrgOptions = z.infer<typeof orgOptionsSchema>;
+
+/**
+ * Continuidad (V1.4): retirar o sustituir a un responsable. La vista previa y
+ * la ejecución devuelven la misma forma; `applied` dice cuál es.
+ */
+export const successionPersonSchema = z.object({
+    user_id: z.number(),
+    name: z.string(),
+    position_label: z.string(),
+});
+export type SuccessionPerson = z.infer<typeof successionPersonSchema>;
+
+export const successionPlanSchema = z.object({
+    operation: z.enum(['retire', 'replace']),
+    applied: z.boolean(),
+    operation_id: z.string().nullable().optional(),
+    outgoing: successionPersonSchema,
+    superior: successionPersonSchema.nullable().optional(),
+    successor: successionPersonSchema.nullable().optional(),
+    successor_before: z.string().nullable().optional(),
+    moves: z.array(z.object({
+        user_id: z.number(),
+        name: z.string(),
+        position_label: z.string(),
+        from_user_id: z.number().nullable().optional(),
+        from_name: z.string().nullable().optional(),
+        to_user_id: z.number().nullable().optional(),
+        to_name: z.string().nullable().optional(),
+    })),
+    version: z.number(),
+});
+export type SuccessionPlan = z.infer<typeof successionPlanSchema>;
+
+export const successionInfoSchema = z.object({
+    outgoing: successionPersonSchema,
+    version: z.number(),
+    direct_reports: z.array(successionPersonSchema),
+    can_replace: z.boolean(),
+    retire_preview: successionPlanSchema.nullable().optional(),
+    retire_blocked_reason: z.string().nullable().optional(),
+    successor_candidates: z.array(successionPersonSchema),
+});
+export type SuccessionInfo = z.infer<typeof successionInfoSchema>;

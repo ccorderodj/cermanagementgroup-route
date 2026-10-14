@@ -91,6 +91,11 @@ async def _persona(cliente, seeded, clave, rol, superior=None, *, compania="alph
 
 async def _organigrama(cliente, seeded, *, perfiles: bool = True) -> None:
     for clave, rol, jefe in ORGANIGRAMA:
+        if rol == "CEO":
+            # Un único CEO por compañía (V1.4): el del organigrama es el que
+            # siembra la fixture.
+            seeded.alpha.users[clave] = seeded.alpha.users["ceo_base"]
+            continue
         await _persona(cliente, seeded, clave, rol, jefe)
     if perfiles:
         for clave in (*EJECUTORES, "supervisor"):
@@ -289,18 +294,18 @@ async def test_superiores_no_permitidos_se_rechazan_sin_crear_nada(seeded, alpha
 
 async def test_superior_de_otro_tenant_o_inactivo(seeded, alpha_client, beta_client):
     await _organigrama(alpha_client, seeded, perfiles=False)
-    ajeno = await _persona(beta_client, seeded, "beta_ceo", "CEO", compania="beta")
+    ajeno = seeded.beta.users["ceo_base"]
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     r = await alpha_client.put(
         f"/api/route/users/{seeded.alpha.users['sales_a'].id}", json={"superior_user_id": ajeno.id}
     )
     assert r.status_code == 422
-    # Un CEO suspendido no es elegible.
-    otro = await _persona(alpha_client, seeded, "ceo2", "CEO")
-    await alpha_client.login(seeded.alpha.users["route_admin"].email)
-    await alpha_client.put(f"/api/route/users/{otro.id}/access", json={"is_active": False})
-    r = await _superior(alpha_client, seeded, "sales_a", "ceo2")
+    # Un CEO suspendido no es elegible: nadie nuevo se cuelga de él, y su
+    # estructura sigue intacta (V1.4, FR-05).
+    await alpha_client.put(f"/api/route/users/{seeded.alpha.users['ceo'].id}/access", json={"is_active": False})
+    r = await _superior(alpha_client, seeded, "sup_c", "ceo")
     assert r.status_code == 422
+    assert (await _vigente(seeded, "sup_c")).superior_user_id == seeded.alpha.users["coo"].id
     assert (await _vigente(seeded, "sales_a")).superior_user_id == seeded.alpha.users["ceo"].id
 
 
@@ -362,15 +367,23 @@ async def test_un_manager_con_subordinados_no_baja_ni_se_retira(seeded, alpha_cl
     assert r.status_code in (409, 422)
 
 
-async def test_pasar_a_ceo_deja_sin_superior(seeded, alpha_client):
+async def test_pasar_a_ceo_con_un_ceo_vigente_es_409(seeded, alpha_client):
+    """Un único CEO por compañía (V1.4): ascender a otro a CEO no crea un
+    segundo; se usa la sustitución. Nada cambia."""
     await _organigrama(alpha_client, seeded, perfiles=False)
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     r = await alpha_client.put(
         f"/api/route/users/{seeded.alpha.users['sup_c'].id}", json={"role_id": seeded.alpha.roles["CEO"]}
     )
-    assert r.status_code == 200, r.text
+    assert r.status_code == 409, r.text
+    assert "Replace manager" in r.json()["detail"]
     vigente = await _vigente(seeded, "sup_c")
-    assert (vigente.position, vigente.superior_user_id) == ("ceo", None)
+    assert (vigente.position, vigente.superior_user_id) == ("supervisor", seeded.alpha.users["coo"].id)
+    rol = await _filas(
+        "SELECT r.name FROM user_company uc JOIN role r ON r.id = uc.role_id WHERE uc.user_id = :u",
+        u=seeded.alpha.users["sup_c"].id,
+    )
+    assert rol[0].name == "supervisor", "el rol tampoco cambió"
 
 
 async def test_nadie_se_asigna_a_si_mismo(seeded, alpha_client):

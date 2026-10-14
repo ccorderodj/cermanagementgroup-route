@@ -139,9 +139,7 @@ async def test_un_rol_propio_con_el_mismo_nombre_detiene_la_migracion(seeded) ->
 async def test_la_bajada_conserva_los_roles_con_miembros(seeded, alpha_client) -> None:
     """Bajar no deja a nadie sin rol: el rol con miembros se queda; los vacíos,
     no. Y subir otra vez no duplica nada."""
-    from tests.integration.test_org_hierarchy import _persona
-
-    await _persona(alpha_client, seeded, "ceo_m", "CEO")
+    # El CEO raíz de la fixture es miembro del rol CEO (V1.4: uno por compañía).
     bajada = _alembic("downgrade", ANTES)
     try:
         assert bajada.returncode == 0, bajada.stdout + bajada.stderr
@@ -150,7 +148,7 @@ async def test_la_bajada_conserva_los_roles_con_miembros(seeded, alpha_client) -
         assert "Sales" not in roles and "OSM" not in roles, "sin miembros: se retiran"
         miembro = await _filas(
             "SELECT r.name FROM user_company uc JOIN role r ON r.id = uc.role_id "
-            "WHERE uc.user_id = :u", u=seeded.alpha.users["ceo_m"].id,
+            "WHERE uc.user_id = :u", u=seeded.alpha.users["ceo_base"].id,
         )
         assert miembro[0].name == "CEO"
     finally:

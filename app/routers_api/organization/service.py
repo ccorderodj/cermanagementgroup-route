@@ -146,6 +146,28 @@ async def nombres(company_id: int, user_ids: set[int]) -> dict[int, str]:
     return {f.id: f"{f.first_name} {f.last_name}".strip() for f in filas}
 
 
+@dataclass(frozen=True)
+class Pertenencia:
+    rol: str
+    activa: bool
+
+
+async def pertenencias(company_id: int) -> dict[int, Pertenencia]:
+    """Rol y estado de cada pertenencia **no retirada** de la compañía."""
+    async with db_session() as session:
+        filas = (
+            await session.execute(
+                select(UserCompany.user_id, Role.name, UserCompany.is_active)
+                .join(Role, Role.id == UserCompany.role_id)
+                .where(
+                    UserCompany.company_id == company_id,
+                    UserCompany.deleted_at.is_(None),
+                )
+            )
+        ).all()
+    return {f.user_id: Pertenencia(rol=f.name, activa=bool(f.is_active)) for f in filas}
+
+
 # ── Escrituras ──────────────────────────────────────────────────────────────
 
 
@@ -263,6 +285,18 @@ async def asignar(
                     status.HTTP_422_UNPROCESSABLE_ENTITY,
                     "That superior reports to this person: it would create a cycle.",
                 )
+
+        # Un único CEO vigente por compañía (V1.4). El índice de la 0019 lo
+        # garantiza igualmente; esto da un 409 con algo que hacer en vez de un
+        # error de integridad.
+        if position == OrgPosition.CEO and any(
+            a.position == OrgPosition.CEO and u != user_id for u, a in actuales.items()
+        ):
+            raise _error(
+                status.HTTP_409_CONFLICT,
+                "This company already has a CEO. To change it, use "
+                "“Replace manager” in CER Route → Users.",
+            )
 
         # Quien tiene subordinados no puede pasar a un cargo del que ellos no
         # puedan depender (p. ej. un CEO con Sales directo que pasa a COO).

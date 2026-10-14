@@ -129,11 +129,9 @@ async def test_superadmin_crea_sales_bajo_un_ceo_y_persiste_al_reabrir(
             roles = await _opciones(page, "#security-user-role")
             assert set(ROLES_V13) <= set(roles)
             await _elegir(page, "#security-user-role", "Sales")
-            # Sales sólo admite un CEO como superior.
-            assert sorted(await _opciones(page, "#security-user-superior")) == sorted(
-                [f"{_nombre('ceo')} · CEO", "Ceo_base Tester · CEO"]
-            )
-            await _elegir(page, "#security-user-superior", f"{_nombre('ceo')} · CEO")
+            # Sales sólo admite un CEO como superior, y hay uno (V1.4).
+            assert await _opciones(page, "#security-user-superior") == ["Ceo_base Tester · CEO"]
+            await _elegir(page, "#security-user-superior", "Ceo_base Tester · CEO")
             await page.screenshot(path=str(DESTINO / "escritorio-alta-sales.png"), full_page=True)
             async with page.expect_response(lambda r: r.url.endswith("/api/route/users")) as info:
                 await page.locator('form button[type="submit"]').click()
@@ -155,7 +153,7 @@ async def test_superadmin_crea_sales_bajo_un_ceo_y_persiste_al_reabrir(
             await page.get_by_role("menuitem", name="Edit").click()
             await expect(page.locator("#security-user-role")).to_contain_text("Sales", timeout=20_000)
             await expect(page.locator("#security-user-superior")).to_contain_text(
-                f"{_nombre('ceo')} · CEO", timeout=20_000
+                "Ceo_base Tester · CEO", timeout=20_000
             )
             await page.screenshot(path=str(DESTINO / "escritorio-editar-sales.png"), full_page=True)
             await contexto.close()

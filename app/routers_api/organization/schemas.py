@@ -49,6 +49,60 @@ class OrgOptions(BaseModel):
     current: Optional[OrgAssignmentRead] = None
 
 
+class SuccessionPerson(BaseModel):
+    user_id: int
+    name: str
+    position_label: str
+
+
+class SuccessionMove(BaseModel):
+    user_id: int
+    name: str
+    position_label: str
+    from_user_id: Optional[int] = None
+    from_name: Optional[str] = None
+    to_user_id: Optional[int] = None
+    to_name: Optional[str] = None
+
+
+class SuccessionPlanRead(BaseModel):
+    """Lo que va a pasar (vista previa) o lo que pasó (ejecutada)."""
+
+    operation: str
+    applied: bool
+    operation_id: Optional[str] = None
+    outgoing: SuccessionPerson
+    #: Superior de quien sale: destino de sus directos al retirarlo, y
+    #: superior del sucesor al sustituirlo.
+    superior: Optional[SuccessionPerson] = None
+    successor: Optional[SuccessionPerson] = None
+    successor_before: Optional[str] = None
+    moves: list[SuccessionMove]
+    version: int
+
+
+class SuccessionInfo(BaseModel):
+    """Lo que la pantalla necesita para ofrecer retirar o sustituir a alguien."""
+
+    outgoing: SuccessionPerson
+    version: int
+    direct_reports: list[SuccessionPerson]
+    can_replace: bool
+    retire_preview: Optional[SuccessionPlanRead] = None
+    retire_blocked_reason: Optional[str] = None
+    successor_candidates: list[SuccessionPerson]
+
+
+class SuccessionWrite(BaseModel):
+    successor_user_id: Optional[int] = None
+    version: Optional[int] = None
+    reason: Optional[str] = Field(default=None, max_length=500)
+    #: `True`: calcula y devuelve el plan sin escribir nada.
+    dry_run: bool = False
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class OrgAssignmentWrite(BaseModel):
     position: str
     superior_user_id: Optional[int] = None

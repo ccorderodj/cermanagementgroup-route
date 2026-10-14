@@ -417,7 +417,7 @@ async def test_a_trip_of_another_supervisor_returns_not_found(seeded, alpha_clie
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     otro = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={
                 "username": "otrosup",
                 "email": "otrosup@alpha.example.com",
@@ -999,7 +999,7 @@ async def test_current_does_not_leak_another_supervisors_trip(
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     otro = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={
                 "username": "supdos",
                 "email": "supdos@alpha.example.com",
