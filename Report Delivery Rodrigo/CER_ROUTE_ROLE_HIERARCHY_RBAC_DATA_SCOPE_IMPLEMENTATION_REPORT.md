@@ -256,7 +256,14 @@ Eliminaría este falso negativo.
 
 ## 9 · Git
 
-⟨GIT⟩
+| | |
+|---|---|
+| Rama | `feature/hierarchy-distinct-roles` (desde `dev` `8ce2931`) |
+| Commits | `e5371b6` implementación, pruebas y este informe · el siguiente añade este bloque |
+| Push | sí |
+| MR | **!90** · https://gitlab.com/cermanagementgroup/cermanagementgroup-route/-/merge_requests/90 → `dev` |
+| Relación | MR !88 (Control A, documental) y MR !89 (V1.1, fusionado) son anteriores; éste corrige y amplía V1.1 |
+| Fusionado / desplegado | **No**: pendiente de certificación de CER |
 
 ---
 
