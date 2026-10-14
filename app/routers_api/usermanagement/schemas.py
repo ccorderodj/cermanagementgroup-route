@@ -139,3 +139,7 @@ class UserReenrollment(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     role_id: int
+    #: V1.4: con un rol de la jerarquía, a quién reporta. Se readmite **con** su
+    #: cargo o no se readmite: un rol de mando sin cargo es justo la
+    #: incoherencia que este frente cierra.
+    superior_user_id: Optional[int] = None

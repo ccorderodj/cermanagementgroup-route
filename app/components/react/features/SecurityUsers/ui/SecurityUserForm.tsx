@@ -186,6 +186,8 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
         userId: number;
         nombre: string;
         roleId: number;
+        /** V1.4: con un rol de la jerarquía se readmite con su superior. */
+        superiorUserId?: number;
     } | null>(null);
 
     const rolElegido = form.watch('role_id');
@@ -199,6 +201,24 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
         () => (org ? org.superiors.filter((c) => padresDelRol.includes(c.position)) : []),
         [org, padresDelRol],
     );
+
+    /**
+     * Sin candidatos, el campo sigue visible y dice **qué falta** (V1.4,
+     * FR-06): casi siempre, que todavía no hay CEO.
+     */
+    const sinCandidatos = useMemo(() => {
+        if (padresDelRol.length === 1 && padresDelRol[0] === 'ceo') {
+            return 'No CEO assigned yet — assign a CEO first.';
+        }
+        const cargos = padresDelRol.map((p) => POSICION[p] ?? p).join(', ');
+        return `No active ${cargos} assigned yet — assign one first.`;
+    }, [padresDelRol]);
+
+    /** El superior vigente ya no se ofrece: suspendido o incompatible con el rol elegido. */
+    const superiorNoDisponible = useMemo(() => {
+        const vigente = org?.current?.superior_user_id;
+        return vigente != null && !candidatos.some((c) => c.user_id === vigente);
+    }, [candidatos, org]);
 
     /** El superior a enviar: sólo en Route y sólo si el rol lo lleva. */
     const superiorElegido = useCallback(
@@ -346,6 +366,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                             fallo.data?.display_name ?? values.username.trim(),
                         ),
                         roleId: Number(values.role_id),
+                        superiorUserId: superiorElegido(values),
                     });
                     return;
                 }
@@ -356,6 +377,9 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 same_tenant_inactive: 'username',
                 username_unavailable: 'username',
                 role_not_allowed: 'role_id',
+                // V1.4: la pantalla general no cambia la jerarquía; se dice
+                // en el rol, que es lo que se intentó cambiar.
+                managed_in_cer_route: 'role_id',
             };
             const campo = fallo.code ? campoDelConflicto[fallo.code] : undefined;
             if (campo) {
@@ -380,6 +404,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
             const restaurado = await dispatch(reenrollUserManagement({
                 userId: readmision.userId,
                 roleId: readmision.roleId,
+                superiorUserId: readmision.superiorUserId,
                 contract,
             })).unwrap();
             setReadmision(null);
@@ -648,7 +673,16 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                             render={({ field }) => (
                                 <FormItem className="flex flex-col">
                                     <FormControl>
-                                        <Select value={field.value ?? SIN} onValueChange={field.onChange}>
+                                        {/* Un valor vacío no es una elección: el
+                                            selector lo emite al montarse o al
+                                            cambiar sus opciones, y borraba el
+                                            superior ya cargado (H-2). */}
+                                        <Select
+                                            value={field.value ?? SIN}
+                                            onValueChange={(valor) => {
+                                                if (valor) field.onChange(valor);
+                                            }}
+                                        >
                                             <SelectTrigger id="security-user-superior" className="w-full">
                                                 <SelectValue placeholder="Select who they report to" />
                                             </SelectTrigger>
@@ -664,7 +698,12 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                     <FormLabel>Reports to</FormLabel>
                                     {candidatos.length === 0 && (
                                         <p className="text-xs text-destructive">
-                                            No eligible superior for this role yet.
+                                            {sinCandidatos}
+                                        </p>
+                                    )}
+                                    {candidatos.length > 0 && superiorNoDisponible && (
+                                        <p className="text-xs text-destructive">
+                                            {`${org.current?.superior_name ?? 'Their current superior'} is suspended or cannot be the superior for this role. Choose who they report to.`}
                                         </p>
                                     )}
                                     <FormMessage />

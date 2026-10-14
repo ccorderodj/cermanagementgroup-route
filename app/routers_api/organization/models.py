@@ -17,6 +17,7 @@ jornada).
 Lo que garantiza la base, y por qué ahí
 ---------------------------------------
 * **Una asignación abierta por persona y compañía** (índice único parcial).
+* **Un único CEO vigente por compañía** (índice único parcial, V1.4).
 * **Sin solapes** de vigencia para la misma persona (`EXCLUDE`, como
   `vehicle_assignment`).
 * **Periodos no vacíos**: `valid_to > valid_from`.
@@ -158,6 +159,13 @@ class OrgAssignment(TimeStampedModel, VersionedMixin):
             "user_id",
             unique=True,
             postgresql_where=text("valid_to IS NULL"),
+        ),
+        # V1.4: un único CEO vigente por compañía (0019).
+        Index(
+            "uq_org_assignment_one_ceo",
+            "company_id",
+            unique=True,
+            postgresql_where=text("position = 'ceo' AND valid_to IS NULL"),
         ),
         Index(
             "ix_org_assignment_superior_current",

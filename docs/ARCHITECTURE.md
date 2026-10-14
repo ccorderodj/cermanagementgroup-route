@@ -132,3 +132,8 @@ Both menus are filtered by the same `useVisibleNavigation` hook. The authenticat
 - **No business domain.** The Staffing domains (clients, CIR, OAP, job openings, recruitment, forms, onboarding, binder, I-9, E-Verify, workforce) were removed; see `EXTRACTION_REPORT.md`.
 - **No messaging infrastructure.** There is no event bus, message broker, or generic integration platform. Webhooks plus REST are the integration contract.
 - **No row-level data scope beyond the tenant.** It is not built in; a domain that needs it designs it explicitly ([DOMAIN_EXTENSION_GUIDE.md](DOMAIN_EXTENSION_GUIDE.md)).
+  CER Route does, in `app/routers_api/organization/` (person → person `org_assignment`, history by period):
+  - The hierarchy changes **only** through CER Route → Users (`/api/route/users`, `/api/route/organization`). The general contract (`/api/users`) answers **409** `managed_in_cer_route` to any role change of someone in the hierarchy, to a hierarchy role for anyone, and to `superior_user_id` (`contract_guard.py`).
+  - **One current CEO per tenant**, guaranteed by the partial unique index `uq_org_assignment_one_ceo` (migration 0019).
+  - CER Route role names are a contract (position and scope derive from them): Roles & Permissions answers 409 to renaming or deleting them.
+  - Retire a manager (direct reports move up to their superior) and replace a manager (the successor takes position and team) are single-transaction operations restricted to `route_admin` (`succession.py`); suspension is a temporary absence and keeps the structure.

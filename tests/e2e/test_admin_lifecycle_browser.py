@@ -413,7 +413,7 @@ async def test_user_delete_is_reachable_and_complete_from_the_admin_ui(
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     creado = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={
                 "username": "browserremove",
                 "email": "browserremove@alpha.example.com",

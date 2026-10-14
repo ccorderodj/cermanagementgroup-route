@@ -14,22 +14,24 @@ import type { UserManagementEntity } from '../../types';
  * al detectar la historia sería el restablecimiento silencioso que la
  * instrucción prohíbe.
  *
- * Sólo viaja el rol. La identidad ya existe y no se vuelve a describir: ni
- * nombre, ni correo, ni contraseña — quien vuelve entra con la credencial que
- * ya tenía.
+ * Sólo viajan el rol y, con un rol de la jerarquía, a quién reporta (V1.4).
+ * La identidad ya existe y no se vuelve a describir: ni nombre, ni correo, ni
+ * contraseña — quien vuelve entra con la credencial que ya tenía.
  */
 export const reenrollUserManagement = createAsyncThunk<
     UserManagementEntity,
-    { userId: number; roleId: number; contract?: UserManagementContract },
+    { userId: number; roleId: number; superiorUserId?: number; contract?: UserManagementContract },
     { rejectValue: unknown }
 >(
     'userManagement/reenroll',
-    async ({ userId, roleId, contract }, thunkApi) => {
+    async ({ userId, roleId, superiorUserId, contract }, thunkApi) => {
         const { rejectWithValue } = thunkApi;
         try {
             const response = await $api.post(
                 `${contractBasePath(contract)}/${userId}/reenrollment`,
-                { role_id: roleId },
+                superiorUserId != null
+                    ? { role_id: roleId, superior_user_id: superiorUserId }
+                    : { role_id: roleId },
             );
             return response.data;
         } catch (error) {

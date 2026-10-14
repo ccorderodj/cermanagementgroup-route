@@ -1,7 +1,7 @@
 import * as React from 'react';
 import { DotsHorizontalIcon } from '@radix-ui/react-icons';
 import {
-    Pencil, ShieldOff, ShieldCheck, Trash2, User, X,
+    Pencil, ShieldOff, ShieldCheck, Trash2, User, UserMinus, UserRoundCog, X,
 } from 'lucide-react';
 import type { Row } from '@tanstack/react-table';
 import {
@@ -27,6 +27,14 @@ import {
     type UserManagementEntity,
 } from '@/entities/UserManagement';
 import SecurityUserForm from '../SecurityUserForm';
+import { SuccessionDialog, type SuccessionMode } from './SuccessionDialog';
+
+/**
+ * Roles de mando que se pueden retirar o sustituir (V1.4). Es experiencia: el
+ * servidor decide con el cargo vigente y responde 409 si no procede.
+ */
+const RETIRABLES = new Set(['COO', 'Regional Manager']);
+const SUSTITUIBLES = new Set(['CEO', 'COO', 'Regional Manager']);
 
 interface DataTableRowActionsProps<TData> {
     row: Row<TData>;
@@ -65,6 +73,15 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
     // ofrecer la acción que dejaría al administrador fuera de la pantalla en la
     // que está trabajando.
     const esUnoMismo = userLogged?.user_id === rowData.id;
+
+    // Retirar y sustituir: sólo el Administrador de CER Route, sólo en la
+    // pantalla de CER Route (V1.4, mínimo privilegio). Ocultarlo es
+    // experiencia; la puerta está en el servidor.
+    const [continuidad, setContinuidad] = React.useState<SuccessionMode | null>(null);
+    const administraContinuidad = contract === 'cer-route'
+        && Boolean(userLogged?.groups?.includes('route_admin'))
+        && !esUnoMismo;
+    const rol = rowData.role_name ?? '';
 
     const closeDialog = React.useCallback(() => setOpenPopup(false), []);
 
@@ -175,6 +192,24 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
                         )}
                     </DropdownMenuItem>
 
+                    {administraContinuidad && (RETIRABLES.has(rol) || SUSTITUIBLES.has(rol)) && (
+                        <>
+                            <DropdownMenuSeparator />
+                            {SUSTITUIBLES.has(rol) && (
+                                <DropdownMenuItem disabled={disabled} onClick={() => setContinuidad('replace')}>
+                                    <UserRoundCog className="mr-2 size-4" />
+                                    Replace manager…
+                                </DropdownMenuItem>
+                            )}
+                            {RETIRABLES.has(rol) && (
+                                <DropdownMenuItem disabled={disabled} onClick={() => setContinuidad('retire')}>
+                                    <UserMinus className="mr-2 size-4" />
+                                    Retire manager…
+                                </DropdownMenuItem>
+                            )}
+                        </>
+                    )}
+
                     {/* Borrar es otra cosa que suspender: suspender corta el
                         acceso y deja al usuario aquí; borrar lo saca de esta
                         pantalla. Va separado y al final por eso. */}
@@ -193,6 +228,16 @@ export function DataTableRowActions<TData>(props: DataTableRowActionsProps<TData
                     )}
                 </DropdownMenuContent>
             </DropdownMenu>
+
+            {continuidad && (
+                <SuccessionDialog
+                    open
+                    onOpenChange={(abierto) => { if (!abierto) setContinuidad(null); }}
+                    user={rowData}
+                    mode={continuidad}
+                    onDone={() => onDeleted?.(rowData.id)}
+                />
+            )}
 
             <ConfirmDestructiveDialog
                 open={confirmDelete}

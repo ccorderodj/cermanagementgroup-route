@@ -74,7 +74,7 @@ async def test_route_admin_can_create_a_tenant_user(seeded, alpha_client):
     assert acceso.status_code == 200
 
     respuesta = await alpha_client.post(
-        "/api/users",
+        "/api/route/users",
         json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
                   "superior_user_id": seeded.alpha.users["ceo_base"].id},
     )
@@ -94,7 +94,7 @@ async def test_the_created_user_belongs_only_to_the_acting_tenant(
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     creado = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
                   "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )
@@ -112,7 +112,7 @@ async def test_route_admin_can_update_and_suspend_a_user(seeded, alpha_client):
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     creado = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
                   "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )
@@ -519,7 +519,7 @@ async def test_user_administration_is_audited_by_core(seeded, alpha_client):
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     creado = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={**NUEVO_USUARIO, "role_id": seeded.alpha.roles["supervisor"],
                   "superior_user_id": seeded.alpha.users["ceo_base"].id},
         )

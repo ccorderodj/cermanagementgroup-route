@@ -909,7 +909,7 @@ async def test_a_supervisor_cannot_end_another_supervisors_session(seeded, alpha
     await alpha_client.login(seeded.alpha.users["route_admin"].email)
     otro = (
         await alpha_client.post(
-            "/api/users",
+            "/api/route/users",
             json={
                 "username": "segundo_supervisor",
                 "email": "segundo.supervisor@alpha.example.com",
