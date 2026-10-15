@@ -34,6 +34,8 @@ from __future__ import annotations
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 
+from urllib.parse import urlsplit
+
 from app.config import settings
 
 
@@ -86,14 +88,29 @@ _CONCESIONES_DE_DESARROLLO = {
 }
 
 
+def _origen_de_teselas() -> str | None:
+    """El único origen externo: el de las teselas del visor de ruta.
+
+    Sólo para `img-src`, y sólo el que está configurado. Una plantilla con
+    subdominios (`{s}.`) se abre como `*.`.
+    """
+    url = urlsplit(settings.MAP_TILE_URL.replace("{s}.", "x-sub."))
+    if url.scheme != "https" or not url.netloc:
+        return None
+    return f"https://{url.netloc.replace('x-sub.', '*.')}"
+
+
 def _politica() -> str:
     directivas = []
+    teselas = _origen_de_teselas()
     for directiva in _BASE:
         nombre = directiva.split(" ", 1)[0]
         extra = (
             None if settings.is_production
             else _CONCESIONES_DE_DESARROLLO.get(nombre)
         )
+        if nombre == "img-src" and teselas:
+            directiva = f"{directiva} {teselas}"
         directivas.append(f"{directiva} {extra}" if extra else directiva)
     return "; ".join(directivas)
 

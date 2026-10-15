@@ -104,6 +104,13 @@ CAPABILITIES: tuple[Capability, ...] = (
     # quien estreche el conjunto autorizado.
     _cap("route", "activity.read", "Explore the recorded Route activity history"),
     #
+    # `route.activity.map.read` entra con el visor de ruta de Activity Admin:
+    # ver en un mapa los puntos con los que se calculó el millaje de un viaje.
+    # Son ubicaciones de empleados, así que **ninguna plantilla la concede**
+    # —tampoco owner ni admin—: la da cada tenant, rol a rol, por Roles &
+    # Permissions (ver `CAPACIDADES_A_DEMANDA`). Exige además `activity.read`.
+    _cap("route", "activity.map.read", "View on a map the points used to calculate a trip's mileage"),
+    #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
     # compañía; cuando exista jerarquía organizativa, será el servidor quien
@@ -191,6 +198,11 @@ CAPABILITY_NAMES: frozenset[str] = frozenset(c.name for c in CAPABILITIES)
 
 ALL_CAPABILITIES = "*"
 
+#: Capacidades que **ninguna plantilla** concede, ni siquiera las de «todo»
+#: (owner, admin): las asigna cada tenant a los roles que decida. Una plantilla
+#: que las incluyera daría por omisión acceso a datos sensibles.
+CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset({"route.activity.map.read"})
+
 
 @dataclass(frozen=True)
 class RoleTemplate:
@@ -236,7 +248,9 @@ DEFAULT_ROLES: tuple[RoleTemplate, ...] = (
         # Todo salvo eliminar roles: borrar el rol equivocado es la forma más
         # rápida de dejar una compañía sin nadie que pueda administrarla.
         capabilities=tuple(
-            name for name in sorted(CAPABILITY_NAMES) if name != "roles.delete"
+            name
+            for name in sorted(CAPABILITY_NAMES)
+            if name != "roles.delete" and name not in CAPACIDADES_A_DEMANDA
         ),
     ),
     RoleTemplate(
@@ -419,5 +433,5 @@ ROUTE_PRODUCT_ROLE_LABELS: dict[str, str] = {
 
 def capabilities_for(template: RoleTemplate) -> tuple[str, ...]:
     if template.capabilities == ALL_CAPABILITIES:
-        return tuple(sorted(CAPABILITY_NAMES))
+        return tuple(sorted(CAPABILITY_NAMES - CAPACIDADES_A_DEMANDA))
     return tuple(template.capabilities)

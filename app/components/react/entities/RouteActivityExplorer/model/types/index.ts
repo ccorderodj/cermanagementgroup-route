@@ -57,6 +57,8 @@ export const explorerActivitySchema = z.object({
     ended_at: z.string().nullable().optional(),
     official_miles: decimalSchema,
     mileage_pending: z.boolean(),
+    /** Si hay puntos de cálculo para el visor de ruta. Sólo un sí o un no. */
+    route_points_available: z.boolean().default(false),
     terminal_action: z.string().nullable().optional(),
     outcome_label: z.string().nullable().optional(),
     notes: z.string().nullable().optional(),
@@ -206,3 +208,22 @@ export function spanBetween(from?: string | null, to?: string | null): string {
     if (!Number.isFinite(ms) || ms < 0) return '—';
     return formatDuration(Math.round(ms / 1000));
 }
+
+/**
+ * Los puntos con los que se calculó el millaje de un viaje (visor de ruta).
+ * Salida, cada cambio de plan y llegada, en orden. **No** es el trazado por
+ * carretera: el cálculo sólo pidió la distancia.
+ */
+export const tripMapSchema = z.object({
+    trip_id: z.number(),
+    available: z.boolean(),
+    points: z.array(z.object({
+        sequence: z.number(),
+        kind: z.string(),
+        latitude: z.number().min(-90).max(90),
+        longitude: z.number().min(-180).max(180),
+    })),
+    provider: z.string().nullable().optional(),
+    tiles: z.object({ url: z.string(), attribution: z.string() }),
+});
+export type TripMap = z.infer<typeof tripMapSchema>;

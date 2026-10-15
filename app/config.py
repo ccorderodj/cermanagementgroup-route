@@ -122,6 +122,19 @@ class Settings(BaseSettings):
     #: Adónde va un usuario autenticado que entra a `/` o a `/login`.
     DEFAULT_AUTHENTICATED_PATH: str = "/admin"
 
+    # ── Visor de ruta de Activity Admin ─────────────────────────────────────
+    #
+    # El fondo del mapa son teselas raster de un proveedor externo. Por omisión,
+    # OpenStreetMap público: gratuito pero **best-effort**, sin SLA y con su
+    # política de uso (atribución visible, Referer). Para producción con
+    # garantías se cambia aquí por otro proveedor —también TomTom Map
+    # Display— sin tocar código; la CSP se abre sólo a este origen.
+
+    #: Plantilla `{z}/{x}/{y}` de las teselas.
+    MAP_TILE_URL: str = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+    #: Atribución que exige el proveedor, en texto plano.
+    MAP_TILE_ATTRIBUTION: str = "© OpenStreetMap contributors"
+
     # ── Archivos subidos ────────────────────────────────────────────────────
     #
     # Nada de esto se fija en el código: lista blanca, límite de tamaño y raíz

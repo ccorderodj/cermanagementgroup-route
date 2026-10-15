@@ -1,4 +1,8 @@
-import { Card } from '@/shared/ui/shadcn/new-york';
+import {
+    lazy, Suspense, useEffect, useState,
+} from 'react';
+import { MapPinned } from 'lucide-react';
+import { Button, Card } from '@/shared/ui/shadcn/new-york';
 import { formatClockRange } from '@/shared/lib/utils/utils';
 import {
     formatClock,
@@ -33,11 +37,38 @@ import {
  * propósito sigue en la cabecera: eso es mantenerlos distintos (PR-04), no
  * colapsarlos.
  */
+/**
+ * El visor de ruta y Leaflet se descargan sólo al abrir el primero: mientras
+ * todas las tarjetas están cerradas no hay ni JavaScript de mapas ni teselas.
+ */
+const RouteMapViewer = lazy(() => import('./RouteMapViewer'));
+
 interface ExplorerActivityCardsProps {
     activities: ExplorerActivity[];
+    /**
+     * Si quien mira puede ver el mapa: vista administrativa y permiso
+     * `route.activity.map.read`. Es experiencia; el servidor lo vuelve a
+     * exigir, con el alcance, antes de dar una sola coordenada.
+     */
+    mapEnabled?: boolean;
 }
 
-export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps) {
+export function ExplorerActivityCards({ activities, mapEnabled = false }: ExplorerActivityCardsProps) {
+    /** Los viajes con el visor abierto. */
+    const [abiertos, setAbiertos] = useState<Set<number>>(() => new Set());
+
+    // Otro día, periodo o supervisor: ningún mapa abierto sobrevive al cambio
+    // (FR-07), aunque coincidiera un `trip_id`.
+    useEffect(() => {
+        setAbiertos(new Set());
+    }, [activities]);
+
+    const alternar = (tripId: number) => setAbiertos((previos) => {
+        const siguientes = new Set(previos);
+        if (siguientes.has(tripId)) siguientes.delete(tripId); else siguientes.add(tripId);
+        return siguientes;
+    });
+
     if (activities.length === 0) {
         return (
             <Card className="p-5">
@@ -111,6 +142,22 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                                 <span className="text-xs text-muted-foreground">
                                     activity span · trip miles
                                 </span>
+                                {mapEnabled && a.route_points_available && (
+                                    <div className="mt-1.5 flex justify-end">
+                                        <Button
+                                            type="button"
+                                            variant="outline"
+                                            size="sm"
+                                            className="h-8 px-2.5 text-xs"
+                                            aria-expanded={abiertos.has(a.trip_id)}
+                                            aria-controls={`route-map-${a.trip_id}`}
+                                            onClick={() => alternar(a.trip_id)}
+                                        >
+                                            <MapPinned className="mr-1.5 size-3.5" />
+                                            {abiertos.has(a.trip_id) ? 'Hide Route' : 'View Route'}
+                                        </Button>
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <div className="grid grid-cols-2 gap-3 px-3 py-2.5 xl:grid-cols-3 xl:px-4 xl:py-3.5">
@@ -162,6 +209,17 @@ export function ExplorerActivityCards({ activities }: ExplorerActivityCardsProps
                                 </b>
                             </div>
                         </div>
+                        {mapEnabled && abiertos.has(a.trip_id) && (
+                            <Suspense
+                                fallback={(
+                                    <p className="border-t border-border px-3 py-2.5 text-xs text-muted-foreground xl:px-4">
+                                        Loading map…
+                                    </p>
+                                )}
+                            >
+                                <RouteMapViewer tripId={a.trip_id} />
+                            </Suspense>
+                        )}
                     </Card>
                 );
             })}

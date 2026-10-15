@@ -46,7 +46,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 
+from app.config import settings
 from app.routers_api.activityexplorer import dao
+from app.routers_api.activityexplorer import route_map
 from app.routers_api.mileage.read import millas_oficiales
 from app.routers_api.activityexplorer.schemas import (
     ExplorerActivity,
@@ -55,6 +57,9 @@ from app.routers_api.activityexplorer.schemas import (
     ExplorerSummary,
     ExplorerSupervisor,
     ExplorerView,
+    TripMapPoint,
+    TripMapRead,
+    TripMapTiles,
 )
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
@@ -228,4 +233,33 @@ async def _vista(
         groups=[ExplorerGroup(**g) for g in grupos],
         summary=None,
         activities=[],
+    )
+
+
+@router.get("/trips/{trip_id}/map", response_model=TripMapRead)
+async def mapa_del_viaje(
+    trip_id: int,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(
+        require_permissions(["route.activity.read", "route.activity.map.read"])
+    ),
+    company: TenantContext = Depends(get_company_required),
+) -> TripMapRead:
+    """Los puntos del cálculo de millas de **un** viaje, para el visor de ruta.
+
+    Las dos capacidades a la vez: la de Activity y la del mapa, que ninguna
+    plantilla concede. Después, el viaje tiene que estar en el alcance del
+    actor —rama por periodo; Sales sólo para el CEO—: si no, 404, igual que un
+    id que no existe.
+    """
+    alcance = await alcance_administrativo(company_id=company.id, actor_user_id=current_user.id)
+    if not await route_map.viaje_en_alcance(company_id=company.id, trip_id=trip_id, alcance=alcance):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trip not found")
+    puntos, proveedor = await route_map.puntos_del_calculo(company_id=company.id, trip_id=trip_id)
+    return TripMapRead(
+        trip_id=trip_id,
+        available=bool(puntos),
+        points=[TripMapPoint(**p) for p in puntos],
+        provider=proveedor,
+        tiles=TripMapTiles(url=settings.MAP_TILE_URL, attribution=settings.MAP_TILE_ATTRIBUTION),
     )

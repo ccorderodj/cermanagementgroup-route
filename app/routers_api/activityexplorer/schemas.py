@@ -117,6 +117,10 @@ class ExplorerActivity(BaseModel):
     #: Millas oficiales del viaje de esta parada.
     official_miles: Decimal
     mileage_pending: bool
+    #: Si hay puntos de cálculo que enseñar en el visor de ruta: el millaje está
+    #: calculado. Es un sí o un no; las coordenadas sólo salen por el endpoint
+    #: del mapa, con su propio permiso.
+    route_points_available: bool = False
 
     #: Cómo acabó. `terminal_action` es la acción y `outcome_label` el resultado
     #: configurado, con su etiqueta de entonces.
@@ -191,3 +195,35 @@ class ExplorerView(BaseModel):
     #: Sólo en el día: el resumen y las paradas.
     summary: Optional[ExplorerSummary] = None
     activities: list[ExplorerActivity]
+
+
+class TripMapPoint(BaseModel):
+    """Un punto con el que se calculó el millaje: salida, cambio de plan o llegada."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    sequence: int
+    kind: str
+    latitude: float
+    longitude: float
+
+
+class TripMapTiles(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    url: str
+    attribution: str
+
+
+class TripMapRead(BaseModel):
+    """Lo que necesita el visor de ruta de una tarjeta, y nada más."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    trip_id: int
+    #: `False`: el viaje no tiene puntos de cálculo (millaje no calculado).
+    available: bool
+    points: list[TripMapPoint]
+    #: Quién calculó el millaje con estos puntos.
+    provider: Optional[str] = None
+    tiles: TripMapTiles
