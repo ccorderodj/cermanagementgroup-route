@@ -128,7 +128,15 @@ async def exigir_relevo_para_ceo_y_coo(
     )
     if actual in ROLES_DE_RELEVO and (cambia_rol or cambia_superior):
         raise _relevo()
-    if cambia_rol and nuevo in ROLES_DE_RELEVO:
+    # Regularizar no es ascender: si el cargo vigente **ya es** el del rol
+    # (p. ej. rol Supervisor con cargo COO, de antes de V1.4), dar ese rol sólo
+    # pone en orden lo que ya es, sin tocar el superior.
+    regulariza = (
+        previa is not None
+        and previa.position == CARGO_DE_ROL.get(nuevo)
+        and not cambia_superior
+    )
+    if cambia_rol and nuevo in ROLES_DE_RELEVO and not regulariza:
         raise _relevo()
 
 
