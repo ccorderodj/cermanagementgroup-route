@@ -14,12 +14,20 @@ Reglas:
   5. **Todo está acotado a una compañía.** `role_id` sin `company_id` permitía
      que un revisor de la compañía A resolviera por id una solicitud de la B
      (AUD-SEC-007). Las firmas ya no dejan hacer esa llamada.
+  6. **El superadministrador de plataforma está por encima del flujo**
+     (`Users.is_superuser`, decisión de CER del 15-10-2026). Su cambio se
+     aplica al momento (`apply_direct`): queda como solicitud **aprobada por
+     él mismo** —la traza de Permission Requests no pierde nada—, con un
+     `audit_event`, y una solicitud pendiente de otro sobre el mismo rol se
+     cierra como sustituida. El rol `owner` y el resto siguen con la
+     aprobación de dos personas.
 """
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException, status
 
+from app.core.audit.service import record_event
 from app.core.db.session import db_session, transaction
 from app.routers_api.companies.models import UserCompany
 from app.routers_api.permissions.models import Permission
@@ -147,6 +155,54 @@ class RolePermissionApprovalService:
 
     # ── Comandos ────────────────────────────────────────────────────────────
 
+    @staticmethod
+    async def _validar(session, *, role_id: int, company_id: int, normalized: list[int]) -> None:
+        """El rol es de esta compañía y las capacidades existen."""
+        role = await session.scalar(
+            select(Role).where(Role.id == role_id, Role.company_id == company_id)
+        )
+        if not role:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Role not found",
+            )
+
+        if normalized:
+            found = set(
+                (
+                    await session.execute(
+                        select(Permission.id).where(Permission.id.in_(normalized))
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            missing = [pid for pid in normalized if pid not in found]
+            if missing:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"Permissions not found: {missing}",
+                )
+
+    @staticmethod
+    async def _aplicar(session, *, role_id: int, wanted: list[int]) -> None:
+        """Deja el rol exactamente con `wanted`.
+
+        Se reescribe el conjunto entero: borrar todo y volver a insertar lo
+        aprobado no depende de filas heredadas.
+        """
+        await session.execute(
+            RolePermission.__table__.delete().where(RolePermission.role_id == role_id)
+        )
+        for permission_id in wanted:
+            await session.execute(
+                RolePermission.__table__.insert().values(
+                    role_id=role_id,
+                    permission_id=permission_id,
+                    is_active=True,
+                )
+            )
+
     @classmethod
     async def submit(
         cls,
@@ -159,31 +215,7 @@ class RolePermissionApprovalService:
         normalized = sorted(dict.fromkeys(permission_ids))
 
         async with transaction() as session:
-            role = await session.scalar(
-                select(Role).where(Role.id == role_id, Role.company_id == company_id)
-            )
-            if not role:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Role not found",
-                )
-
-            if normalized:
-                found = set(
-                    (
-                        await session.execute(
-                            select(Permission.id).where(Permission.id.in_(normalized))
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-                missing = [pid for pid in normalized if pid not in found]
-                if missing:
-                    raise HTTPException(
-                        status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Permissions not found: {missing}",
-                    )
+            await cls._validar(session, role_id=role_id, company_id=company_id, normalized=normalized)
 
             current = await cls._granted_permission_ids(session, role_id)
             if current == set(normalized):
@@ -214,6 +246,94 @@ class RolePermissionApprovalService:
                     ),
                 ) from exc
 
+            await session.refresh(request)
+            return request
+
+    @classmethod
+    async def apply_direct(
+        cls,
+        *,
+        role_id: int,
+        company_id: int,
+        permission_ids: list[int],
+        actor_user_id: int,
+    ) -> RolePermissionChangeRequest:
+        """El cambio del superadministrador de plataforma: se aplica ya (regla 6).
+
+        Quién llama ya está comprobado (`is_superuser`); aquí no se vuelve a
+        decidir. Deja la misma traza que una aprobación —una solicitud
+        `approved` con él como solicitante y revisor— y un `audit_event` con lo
+        concedido y lo revocado.
+        """
+        normalized = sorted(dict.fromkeys(permission_ids))
+        async with transaction() as session:
+            await cls._validar(session, role_id=role_id, company_id=company_id, normalized=normalized)
+            current = await cls._granted_permission_ids(session, role_id)
+            if current == set(normalized):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No changes to apply",
+                )
+
+            # Una solicitud pendiente de otra persona sobre este rol queda
+            # sustituida: aprobarla después pisaría este cambio sin saberlo.
+            pendiente = await session.scalar(
+                select(RolePermissionChangeRequest).where(
+                    RolePermissionChangeRequest.role_id == role_id,
+                    RolePermissionChangeRequest.company_id == company_id,
+                    RolePermissionChangeRequest.status == ChangeRequestStatus.PENDING,
+                )
+            )
+            if pendiente is not None:
+                pendiente.status = ChangeRequestStatus.REJECTED
+                pendiente.reviewed_by_user_id = actor_user_id
+                pendiente.review_note = "Superseded by a direct change of the platform superadmin"
+                pendiente.is_active = False
+                session.add(pendiente)
+                await session.flush()
+
+            nombres = dict(
+                (
+                    await session.execute(
+                        select(Permission.id, Permission.name).where(
+                            Permission.id.in_(current | set(normalized))
+                        )
+                    )
+                ).all()
+            )
+            await cls._aplicar(session, role_id=role_id, wanted=normalized)
+
+            request = RolePermissionChangeRequest(
+                role_id=role_id,
+                company_id=company_id,
+                requested_by_user_id=actor_user_id,
+                reviewed_by_user_id=actor_user_id,
+                requested_permission_ids=normalized,
+                status=ChangeRequestStatus.APPROVED,
+                review_note="Applied directly by the platform superadmin",
+                is_active=False,
+            )
+            session.add(request)
+            await session.flush()
+
+            concedidas = sorted(nombres.get(p, str(p)) for p in set(normalized) - current)
+            revocadas = sorted(nombres.get(p, str(p)) for p in current - set(normalized))
+            await record_event(
+                company_id=company_id,
+                entity_type="role_permission",
+                entity_id=role_id,
+                action="apply_direct",
+                actor_user_id=actor_user_id,
+                summary="Role capabilities changed directly by the platform superadmin",
+                changes={
+                    "granted": {"old": None, "new": concedidas},
+                    "revoked": {"old": revocadas, "new": None},
+                    "superseded_request_id": {
+                        "old": None,
+                        "new": pendiente.id if pendiente is not None else None,
+                    },
+                },
+            )
             await session.refresh(request)
             return request
 
@@ -249,23 +369,7 @@ class RolePermissionApprovalService:
                 )
 
             wanted = sorted(set(request.requested_permission_ids or []))
-
-            # Se reescribe el conjunto entero: borrar todo y volver a insertar
-            # lo aprobado deja el rol exactamente como pedía la solicitud, sin
-            # depender de filas heredadas.
-            await session.execute(
-                RolePermission.__table__.delete().where(
-                    RolePermission.role_id == request.role_id
-                )
-            )
-            for permission_id in wanted:
-                await session.execute(
-                    RolePermission.__table__.insert().values(
-                        role_id=request.role_id,
-                        permission_id=permission_id,
-                        is_active=True,
-                    )
-                )
+            await cls._aplicar(session, role_id=request.role_id, wanted=wanted)
 
             request.status = ChangeRequestStatus.APPROVED
             request.reviewed_by_user_id = reviewer_user_id

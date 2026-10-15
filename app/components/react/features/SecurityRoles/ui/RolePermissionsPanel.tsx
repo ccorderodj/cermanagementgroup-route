@@ -36,7 +36,14 @@ interface RolePermissionsPanelProps {
  */
 export function RolePermissionsPanel({ role, onSaved }: RolePermissionsPanelProps) {
     const dispatch = useAppDispatch();
-    const { hasUserPermission } = useUser();
+    const { hasUserPermission, userLogged } = useUser();
+    /**
+     * El superadministrador de plataforma está por encima del flujo de
+     * aprobación: su cambio se aplica al momento (el servidor lo decide; esto
+     * sólo ajusta los textos y deja guardar aunque haya una solicitud
+     * pendiente, que su cambio sustituye).
+     */
+    const directo = Boolean(userLogged?.is_superuser);
 
     const [catalog, setCatalog] = useState<RolePermissionCatalogItem[]>([]);
     const [pending, setPending] = useState<RolePermissionPendingRequest | null>(null);
@@ -285,7 +292,9 @@ export function RolePermissionsPanel({ role, onSaved }: RolePermissionsPanelProp
 
                     <div className="flex items-center justify-end gap-2 pt-3">
                         <span className="mr-auto text-xs text-muted-foreground">
-                            {isDirty ? 'Submitted for approval, not applied directly.' : ''}
+                            {isDirty && (directo
+                                ? 'Applied immediately (platform superadmin).'
+                                : 'Submitted for approval, not applied directly.')}
                         </span>
                         <Button
                             type="button"
@@ -297,11 +306,11 @@ export function RolePermissionsPanel({ role, onSaved }: RolePermissionsPanelProp
                         </Button>
                         <Button
                             type="button"
-                            disabled={!isDirty || isSaving || Boolean(pending)}
+                            disabled={!isDirty || isSaving || (Boolean(pending) && !directo)}
                             onClick={save}
                         >
                             {isSaving && <Loader2 className="mr-2 size-4 animate-spin" />}
-                            Submit for approval
+                            {directo ? 'Apply changes' : 'Submit for approval'}
                         </Button>
                     </div>
                 </>
