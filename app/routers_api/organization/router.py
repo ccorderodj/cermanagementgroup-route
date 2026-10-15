@@ -19,7 +19,10 @@ from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.organization import delegation as delegada
 from app.routers_api.organization import service
 from app.routers_api.organization import succession as sucesion
-from app.routers_api.organization.contract_guard import exigir_relevo_en_cargo
+from app.routers_api.organization.contract_guard import (
+    exigir_que_el_mando_conserve_equipo,
+    exigir_relevo_en_cargo,
+)
 from app.routers_api.organization.models import (
     CARGO_DE_ROL,
     ETIQUETA,
@@ -36,8 +39,10 @@ from app.routers_api.organization.schemas import (
     SuccessionMove,
     SuccessionPerson,
     SuccessionPlanRead,
+    SuccessionRoleOption,
     SuccessionWrite,
 )
+from app.routers_api.usermanagement.role_policy import _nombre_del_rol
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
 from app.routers_api.users.permissions import require_permissions
@@ -151,6 +156,13 @@ async def asignar(
             cambia_superior=previa is not None
             and previa.superior_user_id != payload.superior_user_id,
         )
+        await exigir_que_el_mando_conserve_equipo(
+            company_id=company.id,
+            user_id=user_id,
+            cambia_superior=True,
+            nuevo_superior=payload.superior_user_id,
+            sale_del_arbol=False,
+        )
     await service.asignar(
         company_id=company.id,
         actor_user_id=current_user.id,
@@ -178,6 +190,13 @@ async def retirar(
     previa = (await service.vigentes(company.id)).get(user_id)
     if previa is not None:
         exigir_relevo_en_cargo(previo=previa.position, nuevo=None)
+        await exigir_que_el_mando_conserve_equipo(
+            company_id=company.id,
+            user_id=user_id,
+            cambia_superior=False,
+            nuevo_superior=None,
+            sale_del_arbol=True,
+        )
     await service.retirar(
         company_id=company.id,
         actor_user_id=current_user.id,
@@ -212,6 +231,10 @@ def _lectura_del_plan(
         else None,
         successor=_persona(gente, plan.sucesor, plan.cargo) if plan.sucesor is not None else None,
         successor_before=ETIQUETA[plan.sucesor_antes[0]] if plan.sucesor_antes else None,
+        outgoing_after=ETIQUETA[plan.degradado[0]] if plan.degradado else None,
+        outgoing_superior=_persona(gente, plan.degradado[1], None)
+        if plan.degradado and plan.degradado[1] is not None
+        else None,
         moves=[
             SuccessionMove(
                 user_id=m.user_id,
@@ -268,19 +291,48 @@ async def continuidad(
         successor_candidates=[
             _persona(gente, u, actuales[u].position if u in actuales else None) for u in candidatos
         ],
+        demotion_roles=await _roles_inferiores(company.id, previa.position)
+        if previa.position in sucesion.SUSTITUIBLES
+        else [],
     )
+
+
+async def _roles_inferiores(company_id: int, cargo: str) -> list[SuccessionRoleOption]:
+    """Los roles de la jerarquía por debajo de `cargo`, con su id en esta compañía."""
+    ids = await service.roles_por_nombre(company_id)
+    return [
+        SuccessionRoleOption(role_id=ids[rol], label=ETIQUETA[c], position=c)
+        for rol, c in CARGO_DE_ROL.items()
+        if NIVEL[c] < NIVEL[cargo] and rol in ids
+    ]
+
+
+async def _degradacion(company_id: int, payload: SuccessionWrite) -> tuple[str, int | None] | None:
+    """El cargo y el superior con los que quien sale se queda (V1.6), si se pidió."""
+    if payload.outgoing_role_id is None:
+        return None
+    nombre = await _nombre_del_rol(role_id=payload.outgoing_role_id, company_id=company_id)
+    cargo = CARGO_DE_ROL.get(nombre) if nombre else None
+    if cargo is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Choose a CER Route role for the outgoing person.",
+        )
+    return cargo, payload.outgoing_superior_user_id
 
 
 async def _operar(
     operacion: str, user_id: int, payload: SuccessionWrite, current_user: Users, company: TenantContext
 ) -> SuccessionPlanRead:
     await _succession_guard(company, current_user, user_id)
+    degradar = await _degradacion(company.id, payload) if operacion == "replace" else None
     if payload.dry_run:
         plan, gente = await sucesion.calcular(
             company_id=company.id,
             operacion=operacion,
             saliente=user_id,
             sucesor=payload.successor_user_id,
+            degradar=degradar,
         )
         return _lectura_del_plan(plan, gente, applied=False)
     plan, operacion_id = await sucesion.ejecutar(
@@ -291,12 +343,14 @@ async def _operar(
         sucesor=payload.successor_user_id,
         expected_version=payload.version,
         reason=payload.reason,
+        degradar=degradar,
     )
     gente = await service.nombres(
         company.id,
         {user_id, *(m.user_id for m in plan.movimientos), *(
             u for m in plan.movimientos for u in (m.superior_antes, m.superior_despues) if u
-        ), *((plan.sucesor,) if plan.sucesor else ()), *((plan.superior_saliente,) if plan.superior_saliente else ())},
+        ), *((plan.sucesor,) if plan.sucesor else ()), *((plan.superior_saliente,) if plan.superior_saliente else ()),
+         *((plan.degradado[1],) if plan.degradado and plan.degradado[1] else ())},
     )
     return _lectura_del_plan(plan, gente, applied=True, operation_id=operacion_id)
 

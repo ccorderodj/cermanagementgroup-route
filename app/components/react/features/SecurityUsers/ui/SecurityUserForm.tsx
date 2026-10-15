@@ -399,6 +399,8 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 managed_in_cer_route: 'role_id',
                 // V1.5: CEO y COO se relevan, no se editan.
                 use_replace_manager: 'role_id',
+                // V1.6: un mando no se vacía a mano.
+                manager_left_without_team: 'superior',
             };
             const campo = fallo.code ? campoDelConflicto[fallo.code] : undefined;
             if (campo) {

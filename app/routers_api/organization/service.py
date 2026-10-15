@@ -171,6 +171,19 @@ async def pertenencias(company_id: int) -> dict[int, Pertenencia]:
     return {f.user_id: Pertenencia(rol=f.name, activa=bool(f.is_active)) for f in filas}
 
 
+async def roles_por_nombre(company_id: int) -> dict[str, int]:
+    """Id de cada rol activo de la compañía, por nombre."""
+    async with db_session() as session:
+        filas = (
+            await session.execute(
+                select(Role.name, Role.id).where(
+                    Role.company_id == company_id, Role.is_active.is_(True)
+                )
+            )
+        ).all()
+    return {f.name: f.id for f in filas}
+
+
 # ── Escrituras ──────────────────────────────────────────────────────────────
 
 

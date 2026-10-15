@@ -77,8 +77,17 @@ class SuccessionPlanRead(BaseModel):
     superior: Optional[SuccessionPerson] = None
     successor: Optional[SuccessionPerson] = None
     successor_before: Optional[str] = None
+    #: V1.6: si quien sale se queda con un cargo inferior, cuál y bajo quién.
+    outgoing_after: Optional[str] = None
+    outgoing_superior: Optional[SuccessionPerson] = None
     moves: list[SuccessionMove]
     version: int
+
+
+class SuccessionRoleOption(BaseModel):
+    role_id: int
+    label: str
+    position: str
 
 
 class SuccessionInfo(BaseModel):
@@ -91,6 +100,8 @@ class SuccessionInfo(BaseModel):
     retire_preview: Optional[SuccessionPlanRead] = None
     retire_blocked_reason: Optional[str] = None
     successor_candidates: list[SuccessionPerson]
+    #: V1.6: los roles inferiores con los que quien sale puede quedarse.
+    demotion_roles: list[SuccessionRoleOption] = []
 
 
 class SuccessionWrite(BaseModel):
@@ -99,6 +110,10 @@ class SuccessionWrite(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=500)
     #: `True`: calcula y devuelve el plan sin escribir nada.
     dry_run: bool = False
+    #: V1.6, sólo al sustituir: quien sale se queda con este rol (inferior) y
+    #: bajo este superior. Sin rol, deja la compañía.
+    outgoing_role_id: Optional[int] = None
+    outgoing_superior_user_id: Optional[int] = None
 
     model_config = ConfigDict(extra="forbid")
 

@@ -50,18 +50,26 @@ export interface SuccessionRequest {
     reason?: string;
     /** `true`: sólo la vista previa, sin escribir nada. */
     dryRun: boolean;
+    /** V1.6, sólo al sustituir: quien sale se queda con este rol inferior… */
+    outgoingRoleId?: number;
+    /** …y bajo esta persona. */
+    outgoingSuperiorUserId?: number;
 }
 
 /** Retira o sustituye a un responsable; con `dryRun`, sólo calcula el plan. */
 export const runSuccession = createAsyncThunk<SuccessionPlan, SuccessionRequest, ThunkConfig<string>>(
     'routeOrganization/runSuccession',
-    async ({ operation, userId, successorUserId, version, reason, dryRun }, { extra, rejectWithValue }) => {
+    async ({
+        operation, userId, successorUserId, version, reason, dryRun, outgoingRoleId, outgoingSuperiorUserId,
+    }, { extra, rejectWithValue }) => {
         try {
             const response = await extra.api.post(`${BASE}/${userId}/${operation}`, {
                 successor_user_id: successorUserId,
                 version,
                 reason: reason || undefined,
                 dry_run: dryRun,
+                outgoing_role_id: outgoingRoleId,
+                outgoing_superior_user_id: outgoingSuperiorUserId,
             });
             return parseApi(successionPlanSchema, response.data, 'runSuccession');
         } catch (error) {
