@@ -41,7 +41,7 @@ Mount order matters: `/api` is mounted before `/`, because `Mount("")` captures 
 | Page authorization | `require_page_permissions([...])` on the page route |
 | API authorization | `require_permissions([...])` / `has_permissions` — grants re-read from the database on every request |
 | Platform boundary | `require_platform_admin` (`is_superuser`); never grantable by a tenant |
-| Permission change control | Maker-checker in `rolepermissionsapprovals` (requester cannot approve their own request) |
+| Permission change control | Maker-checker in `rolepermissionsapprovals` (requester cannot approve their own request). The platform superadmin (`is_superuser`) is above it: their change applies immediately, recorded as an approved request plus an `audit_event` (`apply_direct`) |
 
 Some rules are enforced by tests:
 

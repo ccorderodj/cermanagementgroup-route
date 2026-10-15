@@ -127,13 +127,25 @@ async def replace_role_permissions(
     No aplica el cambio: por segregación de deberes, las capacidades quedan como
     están hasta que **otro** administrador revise la solicitud desde Permission
     Requests. Quien la envía no puede aprobarla.
+
+    Salvo el superadministrador de plataforma, que está por encima del flujo
+    (decisión de CER, 15-10-2026): su cambio se aplica al momento y queda
+    registrado como aprobado por él y en la auditoría.
     """
-    await RolePermissionApprovalService.submit(
-        role_id=role_id,
-        company_id=company.id,
-        permission_ids=payload.permission_ids,
-        requested_by_user_id=current_user.id,
-    )
+    if current_user.is_superuser:
+        await RolePermissionApprovalService.apply_direct(
+            role_id=role_id,
+            company_id=company.id,
+            permission_ids=payload.permission_ids,
+            actor_user_id=current_user.id,
+        )
+    else:
+        await RolePermissionApprovalService.submit(
+            role_id=role_id,
+            company_id=company.id,
+            permission_ids=payload.permission_ids,
+            requested_by_user_id=current_user.id,
+        )
     return await _permissions_view(role_id=role_id, company_id=company.id)
 
 
