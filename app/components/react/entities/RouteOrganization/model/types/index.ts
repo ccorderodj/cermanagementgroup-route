@@ -54,6 +54,9 @@ export const successionPlanSchema = z.object({
     superior: successionPersonSchema.nullable().optional(),
     successor: successionPersonSchema.nullable().optional(),
     successor_before: z.string().nullable().optional(),
+    /** V1.6: quien sale se queda con este cargo inferior, bajo esta persona. */
+    outgoing_after: z.string().nullable().optional(),
+    outgoing_superior: successionPersonSchema.nullable().optional(),
     moves: z.array(z.object({
         user_id: z.number(),
         name: z.string(),
@@ -75,5 +78,11 @@ export const successionInfoSchema = z.object({
     retire_preview: successionPlanSchema.nullable().optional(),
     retire_blocked_reason: z.string().nullable().optional(),
     successor_candidates: z.array(successionPersonSchema),
+    /** V1.6: roles inferiores con los que quien sale puede quedarse. */
+    demotion_roles: z.array(z.object({
+        role_id: z.number(),
+        label: z.string(),
+        position: z.string(),
+    })).default([]),
 });
 export type SuccessionInfo = z.infer<typeof successionInfoSchema>;

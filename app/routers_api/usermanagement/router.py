@@ -48,6 +48,7 @@ from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
 from app.routers_api.organization.contract_guard import (
     exigir_contrato_de_route,
+    exigir_que_el_mando_conserve_equipo,
     exigir_relevo_para_ceo_y_coo,
 )
 from app.routers_api.organization.models import CARGO_DE_ROL
@@ -267,6 +268,23 @@ async def update_user(
         superior_dado=superior_dado,
         superior_user_id=superior,
     )
+    # Un mando no se vacía a mano (V1.6): el último de su equipo no se lleva a
+    # otro jefe ni fuera del árbol por esta vía.
+    if toca_jerarquia:
+        rol_destino = (
+            await _nombre_del_rol(role_id=data["role_id"], company_id=company.id)
+            if data.get("role_id") is not None
+            else await organizacion.rol_en_compania(
+                company_id=company.id, user_id=user_id, incluir_suspendidos=True
+            )
+        )
+        await exigir_que_el_mando_conserve_equipo(
+            company_id=company.id,
+            user_id=user_id,
+            cambia_superior=superior_dado,
+            nuevo_superior=superior,
+            sale_del_arbol=CARGO_DE_ROL.get(rol_destino) is None and rol_destino != "route_manager",
+        )
     sincroniza = toca_jerarquia and (
         superior_dado
         or await acota_a_roles_de_route(actor_user_id=current_user.id, company_id=company.id)

@@ -141,3 +141,50 @@ def exigir_relevo_en_cargo(
         raise _relevo()
     if nuevo in CARGOS_DE_RELEVO and nuevo != previo:
         raise _relevo()
+
+
+# ── Un mando no se vacía a mano (V1.6) ──────────────────────────────────────
+
+#: Puestos que tienen equipo. Su titular cambia con «Replace manager» y su
+#: puesto se cierra con «Retire manager»; ninguno se vacía moviendo a la gente
+#: una a una, que es como se suplantaba una sustitución sin heredar nada.
+CARGOS_DE_MANDO = frozenset(
+    {OrgPosition.CEO, OrgPosition.COO, OrgPosition.REGIONAL_MANAGER}
+)
+
+CODIGO_SIN_EQUIPO = "manager_left_without_team"
+MENSAJE_SIN_EQUIPO = (
+    "This would leave their manager without a team. To change who leads the "
+    "team use “Replace manager”; to close the position use “Retire manager”."
+)
+
+
+async def exigir_que_el_mando_conserve_equipo(
+    *,
+    company_id: int,
+    user_id: int,
+    cambia_superior: bool,
+    nuevo_superior: int | None,
+    sale_del_arbol: bool,
+) -> None:
+    """409 si este movimiento deja a su jefe actual (CEO, COO o RM) sin
+    ningún subordinado directo.
+
+    Trasladar a **parte** del equipo sigue permitido, y también que alguien
+    deje la compañía o se suspenda: eso no pasa por aquí.
+    """
+    actuales = await vigentes(company_id)
+    previa = actuales.get(user_id)
+    if previa is None or previa.superior_user_id is None:
+        return
+    jefe = previa.superior_user_id
+    if not sale_del_arbol and (not cambia_superior or nuevo_superior == jefe):
+        return
+    fila_del_jefe = actuales.get(jefe)
+    if fila_del_jefe is None or fila_del_jefe.position not in CARGOS_DE_MANDO:
+        return
+    if not any(a.superior_user_id == jefe and u != user_id for u, a in actuales.items()):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"code": CODIGO_SIN_EQUIPO, "message": MENSAJE_SIN_EQUIPO},
+        )

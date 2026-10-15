@@ -11,9 +11,12 @@ Dos operaciones sobre un responsable, distintas a propósito
   bajo su mismo superior y recibe a todos sus directos. En un CEO, también a
   Sales: Sales sólo depende de un CEO.
 
-En las dos, quien sale deja la compañía con la baja que ya existe (retirar la
-pertenencia). No se le inventa otro rol ni otro cargo. **Suspender** es otra
-cosa —ausencia temporal— y no pasa por aquí: conserva la estructura intacta.
+Quien sale deja la compañía con la baja que ya existe (retirar la
+pertenencia), salvo en una sustitución en la que se elija **bajarlo de rango**
+(V1.6): entonces se queda con el cargo inferior y el superior que se indiquen,
+validados como cualquier asignación, y su equipo pasa entero al sucesor. No se
+le inventa nada que no se haya elegido. **Suspender** es otra cosa —ausencia
+temporal— y no pasa por aquí: conserva la estructura intacta.
 
 Cómo se garantiza que no queda nada a medias
 --------------------------------------------
@@ -56,6 +59,7 @@ from app.routers_api.organization import service
 from app.routers_api.organization.models import (
     CARGO_DE_ROL,
     ETIQUETA,
+    NIVEL,
     PADRES_PERMITIDOS,
     ROL_DE_CARGO,
     OrgAssignment,
@@ -96,6 +100,9 @@ class Plan:
     #: Estado final de cada persona tocada: `(cargo, superior)` o `None` si su
     #: cargo se cierra.
     final: dict[int, tuple[str, int | None] | None] = field(default_factory=dict)
+    #: V1.6: si quien sale se queda en la compañía con un cargo inferior,
+    #: `(cargo, superior)`. `None`: deja la compañía.
+    degradado: tuple[str, int | None] | None = None
 
 
 def _conflicto(detalle: str) -> HTTPException:
@@ -208,6 +215,7 @@ def planificar_sustitucion(
     nombres: dict[int, str],
     saliente: int,
     sucesor: int,
+    degradar: tuple[str, int | None] | None = None,
 ) -> Plan:
     previa = actuales.get(saliente)
     if previa is None:
@@ -243,6 +251,13 @@ def planificar_sustitucion(
         sucesor_antes=(antes.position, antes.superior_user_id) if antes else None,
     )
     plan.final[saliente] = None
+    if degradar is not None:
+        # Baja de rango (V1.6): quien sale se queda, siempre por debajo de lo
+        # que era; su equipo pasa entero al sucesor.
+        if NIVEL[degradar[0]] >= NIVEL[previa.position]:
+            raise _conflicto("The outgoing person can only stay with a lower position.")
+        plan.final[saliente] = degradar
+        plan.degradado = degradar
     plan.final[sucesor] = (previa.position, previa.superior_user_id)
     for d in directos:
         if d == sucesor:
@@ -262,7 +277,12 @@ async def _estado(company_id: int) -> tuple[dict, dict, dict]:
 
 
 async def calcular(
-    *, company_id: int, operacion: str, saliente: int, sucesor: int | None = None
+    *,
+    company_id: int,
+    operacion: str,
+    saliente: int,
+    sucesor: int | None = None,
+    degradar: tuple[str, int | None] | None = None,
 ) -> tuple[Plan, dict[int, str]]:
     """La vista previa: el plan, sin escribir nada."""
     actuales, miembros, gente = await _estado(company_id)
@@ -274,7 +294,12 @@ async def calcular(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Choose the successor."
             )
         plan = planificar_sustitucion(
-            actuales=actuales, miembros=miembros, nombres=gente, saliente=saliente, sucesor=sucesor
+            actuales=actuales,
+            miembros=miembros,
+            nombres=gente,
+            saliente=saliente,
+            sucesor=sucesor,
+            degradar=degradar,
         )
     return plan, gente
 
@@ -312,6 +337,7 @@ async def ejecutar(
     sucesor: int | None,
     expected_version: int | None,
     reason: str | None,
+    degradar: tuple[str, int | None] | None = None,
 ) -> tuple[Plan, str]:
     """Aplica el plan en una sola transacción. Devuelve el plan y su id de operación."""
     from app.routers_api.usermanagement.dao import UserManagementDAO
@@ -326,7 +352,11 @@ async def ejecutar(
         # Con el candado tomado, se recalcula sobre lo que hay **ahora**: nada
         # de la vista previa se da por bueno.
         plan, gente = await calcular(
-            company_id=company_id, operacion=operacion, saliente=saliente, sucesor=sucesor
+            company_id=company_id,
+            operacion=operacion,
+            saliente=saliente,
+            sucesor=sucesor,
+            degradar=degradar,
         )
         if expected_version is not None:
             ensure_version(current=plan.version, expected=expected_version)
@@ -362,44 +392,52 @@ async def ejecutar(
                 )
             )
 
-        # El rol del sucesor sigue a su nuevo cargo (un rol por cargo).
-        rol_previo_sucesor = None
-        if plan.sucesor is not None:
-            nuevo_rol = ROL_DE_CARGO[plan.cargo]
-            rol_previo_sucesor = await session.scalar(
+        async def _rol_del_cargo(user_id: int, cargo: str) -> None:
+            """Un rol por cargo: el rol de `user_id` pasa a ser el de `cargo`."""
+            nuevo_rol = ROL_DE_CARGO[cargo]
+            rol_previo = await session.scalar(
                 select(Role.id)
                 .join(UserCompany, UserCompany.role_id == Role.id)
-                .where(UserCompany.user_id == plan.sucesor, UserCompany.company_id == company_id)
+                .where(UserCompany.user_id == user_id, UserCompany.company_id == company_id)
             )
             rol_id = await session.scalar(
                 select(Role.id).where(Role.company_id == company_id, Role.name == nuevo_rol)
             )
             if rol_id is None:
                 raise _conflicto(f"The role {nuevo_rol} does not exist in this company.")
-            if rol_id != rol_previo_sucesor:
-                await session.execute(
-                    update(UserCompany)
-                    .where(
-                        UserCompany.user_id == plan.sucesor,
-                        UserCompany.company_id == company_id,
-                        UserCompany.deleted_at.is_(None),
-                    )
-                    .values(role_id=rol_id)
+            if rol_id == rol_previo:
+                return
+            await session.execute(
+                update(UserCompany)
+                .where(
+                    UserCompany.user_id == user_id,
+                    UserCompany.company_id == company_id,
+                    UserCompany.deleted_at.is_(None),
                 )
-                await record_event(
-                    company_id=company_id,
-                    entity_type="user",
-                    entity_id=plan.sucesor,
-                    action="update",
-                    actor_user_id=actor_user_id,
-                    summary=f"Role changed by replacement {operacion_id}",
-                    changes={"role_id": {"old": rol_previo_sucesor, "new": rol_id},
-                             "operation_id": {"old": None, "new": operacion_id}},
-                    reason=reason,
-                )
+                .values(role_id=rol_id)
+            )
+            await record_event(
+                company_id=company_id,
+                entity_type="user",
+                entity_id=user_id,
+                action="update",
+                actor_user_id=actor_user_id,
+                summary=f"Role changed by replacement {operacion_id}",
+                changes={"role_id": {"old": rol_previo, "new": rol_id},
+                         "operation_id": {"old": None, "new": operacion_id}},
+                reason=reason,
+            )
 
-        # Quien sale deja la compañía con la baja que ya existe.
-        retirado = await UserManagementDAO.delete_membership(user_id=saliente, company_id=company_id)
+        if plan.sucesor is not None:
+            await _rol_del_cargo(plan.sucesor, plan.cargo)
+
+        retirado = None
+        if plan.degradado is not None:
+            # Se queda, con el rol de su cargo nuevo.
+            await _rol_del_cargo(saliente, plan.degradado[0])
+        else:
+            # Quien sale deja la compañía con la baja que ya existe.
+            retirado = await UserManagementDAO.delete_membership(user_id=saliente, company_id=company_id)
 
         for u, valor in plan.final.items():
             previa = actuales.get(u)
@@ -419,20 +457,21 @@ async def ejecutar(
                 },
                 reason=reason,
             )
-        await record_event(
-            company_id=company_id,
-            entity_type="user",
-            entity_id=saliente,
-            action="delete",
-            actor_user_id=actor_user_id,
-            summary=f"Removed from this company by {operacion} {operacion_id}",
-            changes={
-                "membership": {"old": "active", "new": None},
-                "role_id": {"old": retirado.get("role_id"), "new": None},
-                "operation_id": {"old": None, "new": operacion_id},
-            },
-            reason=reason,
-        )
+        if retirado is not None:
+            await record_event(
+                company_id=company_id,
+                entity_type="user",
+                entity_id=saliente,
+                action="delete",
+                actor_user_id=actor_user_id,
+                summary=f"Removed from this company by {operacion} {operacion_id}",
+                changes={
+                    "membership": {"old": "active", "new": None},
+                    "role_id": {"old": retirado.get("role_id"), "new": None},
+                    "operation_id": {"old": None, "new": operacion_id},
+                },
+                reason=reason,
+            )
         await record_event(
             company_id=company_id,
             entity_type="org_succession",
@@ -451,6 +490,8 @@ async def ejecutar(
                 "successor_user_id": {"old": None, "new": plan.sucesor},
                 "successor_before": {"old": list(plan.sucesor_antes) if plan.sucesor_antes else None,
                                      "new": [plan.cargo, plan.superior_saliente] if plan.sucesor else None},
+                "outgoing_after": {"old": [plan.cargo, plan.superior_saliente],
+                                   "new": list(plan.degradado) if plan.degradado else None},
                 "moved": {"old": None, "new": [
                     {"user_id": m.user_id, "from": m.superior_antes, "to": m.superior_despues}
                     for m in plan.movimientos

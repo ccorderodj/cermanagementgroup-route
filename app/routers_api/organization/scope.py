@@ -15,7 +15,9 @@ Las tres respuestas posibles
 * **Rama** — un rol de mando (CEO, COO, Regional Manager, y el `route_manager`
   heredado): sus descendientes.
   - *Hoy* (Today): los descendientes **vigentes**.
-  - *Historia* (Activity, Reports, Excel): **la historia sigue al puesto**
+  - *Historia del CEO*: **todo, sin tiempo** (V1.6). Hay un solo CEO y toda
+    la jerarquía es suya; incluye a quien ya salió, hasta su última asignación.
+  - *Historia* de COO y RM (Activity, Reports, Excel): **la historia sigue al puesto**
     (V1.5, sustituye a D-3 en dos casos). Cada jornada se atribuye a la cadena
     vigente en su `started_at`, con dos excepciones:
       * **Carga inicial.** La primera asignación de cada persona cubre todo su
@@ -45,6 +47,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy import and_, false, or_
 
+from app.routers_api.organization.models import OrgPosition
 from app.routers_api.organization.service import (
     Asignacion,
     historial,
@@ -185,12 +188,40 @@ def ventanas_del_puesto(filas: list[Asignacion], raiz: int) -> dict[int, list[Ve
     return ventanas
 
 
+def ventanas_del_ceo(filas: list[Asignacion], ceo: int) -> dict[int, list[Ventana]]:
+    """El CEO ve **todo**, sin tiempo (V1.6): hay uno solo, y toda la
+    jerarquía es su árbol.
+
+    * Quien cuelga hoy de él: todo su historial, ventana abierta.
+    * Quien ya no tiene cargo (salió de la compañía o del árbol): todo su
+      historial hasta su última asignación, ventana cerrada. Así no queda
+      ningún punto ciego y Today —que mira las ventanas abiertas— sigue
+      mostrando sólo a quien está.
+    """
+    abiertas = {f.user_id for f in filas if f.valid_to is None}
+    actuales = {u for u, vs in ramas_por_periodo(filas, ceo).items() if vs and vs[-1][1] is None}
+    ultima: dict[int, datetime] = {}
+    for f in filas:
+        if f.user_id == ceo or f.user_id in abiertas or f.valid_to is None:
+            continue
+        if f.user_id not in ultima or f.valid_to > ultima[f.user_id]:
+            ultima[f.user_id] = f.valid_to
+    ventanas: dict[int, list[Ventana]] = {u: [(ORIGEN, None)] for u in actuales}
+    ventanas.update({u: [(ORIGEN, hasta)] for u, hasta in ultima.items()})
+    return ventanas
+
+
 async def alcance_administrativo(*, company_id: int, actor_user_id: int) -> Alcance:
     """El alcance de lectura administrativa de este actor en esta compañía."""
     rol = await rol_en_compania(company_id=company_id, user_id=actor_user_id)
     if rol not in ROLES_ACOTADOS:
         return Alcance(tenant=True)
     filas = await historial(company_id)
+    propia = next(
+        (f for f in filas if f.user_id == actor_user_id and f.valid_to is None), None
+    )
+    if propia is not None and propia.position == OrgPosition.CEO:
+        return Alcance(tenant=False, ventanas=ventanas_del_ceo(filas, actor_user_id))
     return Alcance(tenant=False, ventanas=ventanas_del_puesto(filas, actor_user_id))
 
 

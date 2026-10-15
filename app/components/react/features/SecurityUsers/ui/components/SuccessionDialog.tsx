@@ -1,7 +1,10 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+    useCallback, useEffect, useMemo, useState,
+} from 'react';
 import { ArrowRight, UserMinus, UserRoundCog } from 'lucide-react';
 import {
     Button,
+    Checkbox,
     Dialog,
     DialogContent,
     DialogDescription,
@@ -57,6 +60,9 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
     const [successor, setSuccessor] = useState<string>('');
     const [reason, setReason] = useState('');
     const [busy, setBusy] = useState(false);
+    const [quedarse, setQuedarse] = useState(false);
+    const [rolInferior, setRolInferior] = useState('');
+    const [jefeInferior, setJefeInferior] = useState('');
 
     useEffect(() => {
         if (!open) return;
@@ -65,6 +71,9 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
         setError(null);
         setSuccessor('');
         setReason('');
+        setQuedarse(false);
+        setRolInferior('');
+        setJefeInferior('');
         dispatch(fetchSuccession(user.id)).unwrap()
             .then((datos) => {
                 setInfo(datos);
@@ -76,23 +85,62 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
             .catch((e) => setError(normalizeRejectedPayload(e).message));
     }, [dispatch, mode, open, user.id]);
 
-    /** Elegido el sucesor, el servidor calcula el plan sin escribir. */
-    const elegirSucesor = useCallback(async (valor: string) => {
-        if (!valor) return;
-        setSuccessor(valor);
+    /**
+     * Cada cambio de sucesor —o de cómo se queda quien sale— recalcula el plan
+     * en el servidor, sin escribir. Lo que se confirma es lo que se ve.
+     */
+    const recalcular = useCallback(async (s: string, queda: boolean, rol: string, jefe: string) => {
         setPlan(null);
         setError(null);
+        if (!s || (queda && (!rol || !jefe))) return;
         try {
             setPlan(await dispatch(runSuccession({
                 operation: 'replace',
                 userId: user.id,
-                successorUserId: Number(valor),
+                successorUserId: Number(s),
+                outgoingRoleId: queda ? Number(rol) : undefined,
+                outgoingSuperiorUserId: queda ? Number(jefe) : undefined,
                 dryRun: true,
             })).unwrap());
         } catch (e) {
             setError(normalizeRejectedPayload(e).message);
         }
     }, [dispatch, user.id]);
+
+    const elegirSucesor = useCallback((valor: string) => {
+        if (!valor) return;
+        setSuccessor(valor);
+        recalcular(valor, quedarse, rolInferior, jefeInferior);
+    }, [jefeInferior, quedarse, recalcular, rolInferior]);
+
+    /** Quien sale se queda en la compañía, por debajo de lo que era (V1.6). */
+    const cambiarQuedarse = useCallback((valor: boolean) => {
+        setQuedarse(valor);
+        recalcular(successor, valor, rolInferior, jefeInferior);
+    }, [jefeInferior, recalcular, rolInferior, successor]);
+
+    const elegirRolInferior = useCallback((valor: string) => {
+        if (!valor) return;
+        setRolInferior(valor);
+        recalcular(successor, quedarse, valor, jefeInferior);
+    }, [jefeInferior, quedarse, recalcular, successor]);
+
+    const elegirJefeInferior = useCallback((valor: string) => {
+        if (!valor) return;
+        setJefeInferior(valor);
+        recalcular(successor, quedarse, rolInferior, valor);
+    }, [quedarse, recalcular, rolInferior, successor]);
+
+    /** Bajo quién puede quedarse: el sucesor (en su nuevo cargo) o alguien con cargo. */
+    const jefesPosibles = useMemo(() => {
+        if (!info || !successor) return [];
+        const elegido = info.successor_candidates.find((c) => String(c.user_id) === successor);
+        const resto = info.successor_candidates.filter((c) => String(c.user_id) !== successor);
+        return [
+            ...(elegido ? [{ ...elegido, position_label: info.outgoing.position_label }] : []),
+            ...resto,
+        ];
+    }, [info, successor]);
 
     const confirmar = useCallback(async () => {
         if (!plan || !info) return;
@@ -102,13 +150,17 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
                 operation: mode,
                 userId: user.id,
                 successorUserId: mode === 'replace' ? Number(successor) : undefined,
+                outgoingRoleId: mode === 'replace' && quedarse ? Number(rolInferior) : undefined,
+                outgoingSuperiorUserId: mode === 'replace' && quedarse ? Number(jefeInferior) : undefined,
                 version: info.version,
                 reason: reason.trim(),
                 dryRun: false,
             })).unwrap();
             toast({
                 title: mode === 'retire' ? 'Manager retired' : 'Manager replaced',
-                description: `${plan.outgoing.name} left the company; their team was reassigned.`,
+                description: plan.outgoing_after
+                    ? `${plan.outgoing.name} is now ${plan.outgoing_after}; their team was reassigned.`
+                    : `${plan.outgoing.name} left the company; their team was reassigned.`,
             });
             onOpenChange(false);
             onDone();
@@ -117,7 +169,10 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
         } finally {
             setBusy(false);
         }
-    }, [dispatch, info, mode, onDone, onOpenChange, plan, reason, successor, toast, user.id]);
+    }, [
+        dispatch, info, jefeInferior, mode, onDone, onOpenChange, plan, quedarse, reason, rolInferior,
+        successor, toast, user.id,
+    ]);
 
     const nombre = info?.outgoing.name || user.username;
     const titulo = mode === 'retire' ? `Retire ${nombre}` : `Replace ${nombre}`;
@@ -135,7 +190,7 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
                     <DialogDescription>
                         {mode === 'retire'
                             ? 'Permanent exit without a successor: their direct reports move to their own superior, and they leave this company.'
-                            : 'The successor takes this position under the same superior and receives the whole team. The outgoing person leaves this company.'}
+                            : 'The successor takes this position under the same superior and receives the whole team. The outgoing person leaves this company, or stays with a lower role if you choose so.'}
                     </DialogDescription>
                 </DialogHeader>
 
@@ -169,6 +224,55 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
                         </div>
                     )}
 
+                    {mode === 'replace' && info && info.demotion_roles.length > 0 && successor && (
+                        <div className="flex flex-col gap-3 rounded-md border border-border p-3">
+                            <div className="flex items-center gap-2">
+                                <Checkbox
+                                    id="succession-keep"
+                                    checked={quedarse}
+                                    onCheckedChange={(c) => cambiarQuedarse(c === true)}
+                                />
+                                <Label htmlFor="succession-keep">
+                                    {`Keep ${info.outgoing.name} in the company with a lower role`}
+                                </Label>
+                            </div>
+                            {quedarse && (
+                                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                                    <div className="flex flex-col gap-2">
+                                        <Label htmlFor="succession-keep-role">New role</Label>
+                                        <Select value={rolInferior} onValueChange={elegirRolInferior}>
+                                            <SelectTrigger id="succession-keep-role" className="w-full">
+                                                <SelectValue placeholder="Choose the role" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {info.demotion_roles.map((r) => (
+                                                    <SelectItem key={r.role_id} value={String(r.role_id)}>
+                                                        {r.label}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                    <div className="flex flex-col gap-2">
+                                        <Label htmlFor="succession-keep-superior">Reports to</Label>
+                                        <Select value={jefeInferior} onValueChange={elegirJefeInferior}>
+                                            <SelectTrigger id="succession-keep-superior" className="w-full">
+                                                <SelectValue placeholder="Choose who they report to" />
+                                            </SelectTrigger>
+                                            <SelectContent>
+                                                {jefesPosibles.map((c) => (
+                                                    <SelectItem key={c.user_id} value={String(c.user_id)}>
+                                                        {c.position_label ? `${c.name} · ${c.position_label}` : c.name}
+                                                    </SelectItem>
+                                                ))}
+                                            </SelectContent>
+                                        </Select>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {plan && (
                         <div className="flex flex-col gap-2 rounded-md border border-border p-3" id="succession-preview">
                             <p className="text-sm font-medium">What will happen</p>
@@ -195,7 +299,9 @@ export function SuccessionDialog(props: SuccessionDialogProps) {
                                 </ul>
                             )}
                             <p className="text-sm text-muted-foreground">
-                                {`${plan.outgoing.name} will be removed from this company.`}
+                                {plan.outgoing_after
+                                    ? `${plan.outgoing.name} stays as ${plan.outgoing_after}${plan.outgoing_superior ? ` under ${plan.outgoing_superior.name}` : ''}.`
+                                    : `${plan.outgoing.name} will be removed from this company.`}
                             </p>
                         </div>
                     )}
