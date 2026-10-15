@@ -19,6 +19,7 @@ from app.routers_api.companies.dependencies import get_company_required
 from app.routers_api.organization import delegation as delegada
 from app.routers_api.organization import service
 from app.routers_api.organization import succession as sucesion
+from app.routers_api.organization.contract_guard import exigir_relevo_en_cargo
 from app.routers_api.organization.models import (
     CARGO_DE_ROL,
     ETIQUETA,
@@ -140,6 +141,16 @@ async def asignar(
     delegada.exigir_asignacion(
         d, position=payload.position, superior_user_id=payload.superior_user_id
     )
+    previa = (await service.vigentes(company.id)).get(user_id)
+    # CEO y COO se relevan, no se reasignan (V1.5). Sobre uno mismo decide el
+    # servicio con su 403: nadie cambia su propio cargo.
+    if user_id != current_user.id:
+        exigir_relevo_en_cargo(
+            previo=previa.position if previa else None,
+            nuevo=payload.position,
+            cambia_superior=previa is not None
+            and previa.superior_user_id != payload.superior_user_id,
+        )
     await service.asignar(
         company_id=company.id,
         actor_user_id=current_user.id,
@@ -160,9 +171,13 @@ async def retirar(
     _authz: None = Depends(require_permissions(["users.update"])),
     company: TenantContext = Depends(get_company_required),
 ) -> None:
-    """Quita el cargo vigente. Con subordinados directos, 409."""
+    """Quita el cargo vigente. Con subordinados directos, 409. CEO y COO, por
+    «Retire / Replace manager» (V1.5)."""
     d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
     await delegada.exigir_objetivo(d, company_id=company.id, user_id=user_id)
+    previa = (await service.vigentes(company.id)).get(user_id)
+    if previa is not None:
+        exigir_relevo_en_cargo(previo=previa.position, nuevo=None)
     await service.retirar(
         company_id=company.id,
         actor_user_id=current_user.id,

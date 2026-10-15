@@ -15,10 +15,19 @@ Las tres respuestas posibles
 * **Rama** — un rol de mando (CEO, COO, Regional Manager, y el `route_manager`
   heredado): sus descendientes.
   - *Hoy* (Today): los descendientes **vigentes**.
-  - *Historia* (Activity, Reports, Excel): cada jornada se atribuye entera a la
-    cadena vigente en su `started_at` (D-3). Un supervisor que pasó de RM-A a
-    RM-B queda visible para RM-A en el periodo en que dependía de él y para
-    RM-B desde que depende de él; nadie hereda el pasado de otro.
+  - *Historia* (Activity, Reports, Excel): **la historia sigue al puesto**
+    (V1.5, sustituye a D-3 en dos casos). Cada jornada se atribuye a la cadena
+    vigente en su `started_at`, con dos excepciones:
+      * **Carga inicial.** La primera asignación de cada persona cubre todo su
+        pasado: antes de existir la jerarquía nadie era su jefe, así que esas
+        jornadas son de quien la recibe primero (no hay a quién quitárselas).
+      * **Sustitución.** Quien entra por «Replace manager» hereda lo que veía
+        su antecesor hasta el instante del relevo: un CEO o un RM nuevo ve el
+        histórico de su puesto, no sólo desde que llegó.
+    Los **traslados laterales** siguen por periodo: un supervisor que pasa de
+    RM-A (Texas) a RM-B (Georgia) queda para RM-A en su tramo y para RM-B desde
+    el traslado; ninguno ve la zona del otro y el histórico de cada zona no se
+    reescribe. COO y CEO lo siguen viendo entero, porque no salió de su rama.
 * **Vacío** — un rol de mando sin cargo o sin subordinados no ve a nadie.
   Una lista vacía **no** es «sin filtro» (B2.3).
 
@@ -31,8 +40,8 @@ siempre el usuario de la sesión.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 
 from sqlalchemy import and_, false, or_
 
@@ -107,13 +116,82 @@ def ramas_por_periodo(filas: list[Asignacion], raiz: int) -> dict[int, list[Vent
     return ventanas
 
 
+#: Desde cuándo cuenta la primera asignación de cada persona (carga inicial).
+ORIGEN = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def con_carga_inicial(filas: list[Asignacion]) -> list[Asignacion]:
+    """La primera asignación de cada persona, extendida hasta `ORIGEN`.
+
+    Sólo para calcular el alcance: la fila guardada no cambia.
+    """
+    primera: dict[int, Asignacion] = {}
+    for f in filas:
+        if f.user_id not in primera or f.valid_from < primera[f.user_id].valid_from:
+            primera[f.user_id] = f
+    return [replace(f, valid_from=ORIGEN) if primera[f.user_id] is f else f for f in filas]
+
+
+def antecesores(filas: list[Asignacion], raiz: int) -> list[tuple[int, datetime]]:
+    """A quiénes sustituyó `raiz` —y a quiénes sustituyeron ellos—, con el
+    instante de cada relevo."""
+    resultado: list[tuple[int, datetime]] = []
+    vistos = {raiz}
+    pendientes = [raiz]
+    while pendientes:
+        u = pendientes.pop()
+        for f in filas:
+            if f.user_id == u and f.replaces_user_id and f.replaces_user_id not in vistos:
+                vistos.add(f.replaces_user_id)
+                resultado.append((f.replaces_user_id, f.valid_from))
+                pendientes.append(f.replaces_user_id)
+    return resultado
+
+
+def _recortar(ventanas: list[Ventana], hasta: datetime) -> list[Ventana]:
+    return [
+        (d, h if h is not None and h < hasta else hasta)
+        for d, h in ventanas
+        if d < hasta
+    ]
+
+
+def _unir(a: list[Ventana], b: list[Ventana]) -> list[Ventana]:
+    unidas: list[Ventana] = []
+    for d, h in sorted(a + b, key=lambda v: v[0]):
+        if unidas and (unidas[-1][1] is None or unidas[-1][1] >= d):
+            previo_d, previo_h = unidas[-1]
+            unidas[-1] = (previo_d, None if previo_h is None or h is None else max(previo_h, h))
+        else:
+            unidas.append((d, h))
+    return unidas
+
+
+def ventanas_del_puesto(filas: list[Asignacion], raiz: int) -> dict[int, list[Ventana]]:
+    """La rama de `raiz` por periodo, con la carga inicial y lo heredado de sus
+    antecesores hasta cada relevo (V1.5)."""
+    # Los relevos, de las filas tal como se guardaron: la fila de un sucesor
+    # nuevo es también su primera, y extendida perdería el instante del relevo.
+    relevos = antecesores(filas, raiz)
+    filas = con_carga_inicial(filas)
+    ventanas = ramas_por_periodo(filas, raiz)
+    for antecesor, relevo in relevos:
+        for u, vs in ramas_por_periodo(filas, antecesor).items():
+            if u == raiz:
+                continue
+            heredadas = _recortar(vs, relevo)
+            if heredadas:
+                ventanas[u] = _unir(ventanas.get(u, []), heredadas)
+    return ventanas
+
+
 async def alcance_administrativo(*, company_id: int, actor_user_id: int) -> Alcance:
     """El alcance de lectura administrativa de este actor en esta compañía."""
     rol = await rol_en_compania(company_id=company_id, user_id=actor_user_id)
     if rol not in ROLES_ACOTADOS:
         return Alcance(tenant=True)
     filas = await historial(company_id)
-    return Alcance(tenant=False, ventanas=ramas_por_periodo(filas, actor_user_id))
+    return Alcance(tenant=False, ventanas=ventanas_del_puesto(filas, actor_user_id))
 
 
 def condicion_de_jornadas(alcance: Alcance, columna_usuario, columna_inicio, user_ids=None):

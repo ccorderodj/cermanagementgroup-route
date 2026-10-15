@@ -376,7 +376,7 @@ async def test_pasar_a_ceo_con_un_ceo_vigente_es_409(seeded, alpha_client):
         f"/api/route/users/{seeded.alpha.users['sup_c'].id}", json={"role_id": seeded.alpha.roles["CEO"]}
     )
     assert r.status_code == 409, r.text
-    assert "Replace manager" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "use_replace_manager"
     vigente = await _vigente(seeded, "sup_c")
     assert (vigente.position, vigente.superior_user_id) == ("supervisor", seeded.alpha.users["coo"].id)
     rol = await _filas(

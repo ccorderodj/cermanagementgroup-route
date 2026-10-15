@@ -121,6 +121,35 @@ async def test_edit_precarga_el_superior_y_la_pantalla_general_no_cambia_la_jera
     assert rol[0].name == "COO"
 
 
+async def test_ceo_y_coo_solo_por_replace_manager(seeded, alpha_client, live_server):
+    """V1.5: en Edit, el rol y el superior de un COO están fijos y lo dicen; a
+    un RM la lista ya no le ofrece CEO ni COO."""
+    from playwright.async_api import async_playwright
+
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto, page = await _entrar(navegador, live_server, seeded, "route_admin")
+            await _editar(page, "/admin/route/users", "alpha_coo")
+            await expect(page.locator("#security-user-replace-only")).to_be_visible(timeout=20_000)
+            await expect(page.locator("#security-user-role")).to_be_disabled()
+            await expect(page.locator("#security-user-superior")).to_be_disabled()
+            await page.screenshot(path=str(DESTINO / "escritorio-coo-solo-replace.png"), full_page=True)
+
+            await page.reload()
+            await _editar(page, "/admin/route/users", "alpha_rm_b")
+            await page.locator("#security-user-role").click()
+            opciones = [t.strip() for t in await page.get_by_role("option").all_inner_texts()]
+            await page.keyboard.press("Escape")
+            assert "CEO" not in opciones and "COO" not in opciones, opciones
+            assert "Regional Manager" in opciones and "Supervisor" in opciones
+            await contexto.close()
+        finally:
+            await navegador.close()
+
+
 async def test_sin_ceo_el_campo_sigue_visible_y_lo_explica(seeded, alpha_client, live_server):
     from playwright.async_api import async_playwright
 

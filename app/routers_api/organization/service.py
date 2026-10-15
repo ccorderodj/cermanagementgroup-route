@@ -47,6 +47,8 @@ class Asignacion:
     valid_from: datetime
     valid_to: datetime | None
     version: int
+    #: V1.5: a quién sustituyó con esta fila («Replace manager»).
+    replaces_user_id: int | None = None
 
 
 def _fila(a: OrgAssignment) -> Asignacion:
@@ -57,6 +59,7 @@ def _fila(a: OrgAssignment) -> Asignacion:
         valid_from=a.valid_from,
         valid_to=a.valid_to,
         version=a.version,
+        replaces_user_id=a.replaces_user_id,
     )
 
 

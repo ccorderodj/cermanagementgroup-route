@@ -137,3 +137,5 @@ Both menus are filtered by the same `useVisibleNavigation` hook. The authenticat
   - **One current CEO per tenant**, guaranteed by the partial unique index `uq_org_assignment_one_ceo` (migration 0019).
   - CER Route role names are a contract (position and scope derive from them): Roles & Permissions answers 409 to renaming or deleting them.
   - Retire a manager (direct reports move up to their superior) and replace a manager (the successor takes position and team) are single-transaction operations restricted to `route_admin` (`succession.py`); suspension is a temporary absence and keeps the structure.
+  - **CEO and COO change only through “Replace manager”**: editing their role or superior, or making someone CEO/COO from the role list, answers 409 `use_replace_manager`. Creating the first CEO or a new COO stays in the create form.
+  - **History follows the position** (`scope.py`): a successor inherits what the predecessor saw (`org_assignment.replaces_user_id`, migration 0020); each person's first assignment covers their past (initial load); lateral moves (e.g. a supervisor between Regional Managers) stay by period, so no zone sees another's history.

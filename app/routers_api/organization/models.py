@@ -36,6 +36,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
+    ForeignKey,
     ForeignKeyConstraint,
     Index,
     Integer,
@@ -131,6 +132,10 @@ class OrgAssignment(TimeStampedModel, VersionedMixin):
             name="ck_org_assignment_not_self",
         ),
         CheckConstraint(
+            "replaces_user_id IS NULL OR replaces_user_id <> user_id",
+            name="ck_org_assignment_replaces_not_self",
+        ),
+        CheckConstraint(
             "valid_to IS NULL OR valid_to > valid_from",
             name="ck_org_assignment_period",
         ),
@@ -186,3 +191,10 @@ class OrgAssignment(TimeStampedModel, VersionedMixin):
     #: Quién la abrió. La traza completa está en `audit_event`.
     created_by = Column(Integer, nullable=True)
     reason = Column(Text, nullable=True)
+    #: V1.5: en la fila que abre «Replace manager», a quién sustituye esta
+    #: persona. Con él, el sucesor hereda lo que veía su antecesor.
+    replaces_user_id = Column(
+        Integer,
+        ForeignKey("user.id", ondelete="SET NULL", name="fk_org_assignment_replaces_user"),
+        nullable=True,
+    )

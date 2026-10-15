@@ -481,10 +481,12 @@ async def test_version_obsoleta_responde_409(seeded, alpha_client):
     assert await _foto(seeded) == antes
 
 
-# ── D-3: la historia no se transfiere ───────────────────────────────────────
+# ── V1.5: la historia sigue al puesto ───────────────────────────────────────
 
 
-async def test_el_sucesor_no_hereda_jornadas_anteriores_a_t(seeded, alpha_client):
+async def test_el_sucesor_hereda_el_historial_de_su_puesto(seeded, alpha_client):
+    """«Replace manager»: el COO nuevo ve lo que veía su antecesor, también lo
+    anterior al relevo. Las jornadas no se mueven ni se recrean."""
     await _organigrama(alpha_client, seeded)
     await _retrofechar(seeded.alpha.id, datetime(2026, 1, 1, tzinfo=timezone.utc))
     antes = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="10.0", usuario="sup_c")
@@ -499,12 +501,93 @@ async def test_el_sucesor_no_hereda_jornadas_anteriores_a_t(seeded, alpha_client
     await _iniciada(despues["jornada"]["id"], datetime(2026, 9, 17, 13, tzinfo=timezone.utc))
 
     informe = await _informe(alpha_client, seeded, "rm_b", supervisor_user_id=_id(seeded, "sup_c"))
-    assert informe["summary"]["official_miles"] == "5.0", "sólo lo posterior a T"
-    # El CEO, que ya la tenía en su árbol, ve las dos.
-    informe = await _informe(alpha_client, seeded, "ceo", supervisor_user_id=_id(seeded, "sup_c"))
-    assert informe["summary"]["official_miles"] == "15.0"
+    assert informe["summary"]["official_miles"] == "15.0", "lo de antes y lo de después del relevo"
+    relevo = await _filas(
+        "SELECT replaces_user_id FROM org_assignment WHERE user_id = :u AND valid_to IS NULL",
+        u=_id(seeded, "rm_b"),
+    )
+    assert relevo[0].replaces_user_id == _id(seeded, "coo")
     sesiones = await _filas("SELECT count(*) AS n FROM work_session WHERE user_id = :u", u=_id(seeded, "sup_c"))
     assert sesiones[0].n == 2, "las jornadas no se recrean ni se mueven"
+
+
+async def test_carga_inicial_el_primer_jefe_ve_el_pasado(seeded, alpha_client):
+    """Quien entra por primera vez en la jerarquía trae su historia: antes no
+    era de nadie. Sin retrofechar ninguna asignación."""
+    await _organigrama(alpha_client, seeded)
+    previa = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="8.0", usuario="sup_b")
+    await _iniciada(previa["jornada"]["id"], datetime(2026, 9, 14, 13, tzinfo=timezone.utc))
+    informe = await _informe(alpha_client, seeded, "rm_b", supervisor_user_id=_id(seeded, "sup_b"))
+    assert informe["summary"]["official_miles"] == "8.0"
+
+
+async def test_el_traslado_lateral_sigue_por_periodo(seeded, alpha_client):
+    """Un supervisor de RM-A (Texas) a RM-B (Georgia): cada RM ve su tramo y
+    RM-B no ve la zona de RM-A. El CEO, encima de los dos, lo ve entero."""
+    await _organigrama(alpha_client, seeded)
+    await _retrofechar(seeded.alpha.id, datetime(2026, 1, 1, tzinfo=timezone.utc))
+    antes = await _jornada(alpha_client, seeded, dia=date(2026, 9, 14), millas="10.0", usuario="sup_a")
+    despues = await _jornada(alpha_client, seeded, dia=date(2026, 9, 17), millas="5.0", usuario="sup_a")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    r = await alpha_client.put(
+        f"/api/route/users/{_id(seeded, 'sup_a')}", json={"superior_user_id": _id(seeded, "rm_b")}
+    )
+    assert r.status_code == 200, r.text
+    await _trasladar_en(_id(seeded, "sup_a"), datetime(2026, 9, 16, 3, tzinfo=timezone.utc))
+    await _iniciada(antes["jornada"]["id"], datetime(2026, 9, 14, 13, tzinfo=timezone.utc))
+    await _iniciada(despues["jornada"]["id"], datetime(2026, 9, 17, 13, tzinfo=timezone.utc))
+    u = _id(seeded, "sup_a")
+    assert (await _informe(alpha_client, seeded, "rm_a", supervisor_user_id=u))["summary"]["official_miles"] == "10.0"
+    assert (await _informe(alpha_client, seeded, "rm_b", supervisor_user_id=u))["summary"]["official_miles"] == "5.0"
+    assert (await _informe(alpha_client, seeded, "ceo", supervisor_user_id=u))["summary"]["official_miles"] == "15.0"
+
+
+# ── V1.5: CEO y COO sólo por «Replace manager» ──────────────────────────────
+
+
+async def test_ceo_y_coo_no_se_editan_con_la_lista_de_roles(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    antes = await _foto(seeded)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    casos = [
+        # El COO baja a RM, o cambia de superior.
+        (_id(seeded, "coo"), {"role_id": seeded.alpha.roles["Regional Manager"],
+                              "superior_user_id": _id(seeded, "ceo")}),
+        (_id(seeded, "coo"), {"superior_user_id": _id(seeded, "rm_b")}),
+        # El CEO baja a COO.
+        (_id(seeded, "ceo"), {"role_id": seeded.alpha.roles["COO"]}),
+        # Un RM sube a COO por la lista.
+        (_id(seeded, "rm_b"), {"role_id": seeded.alpha.roles["COO"],
+                               "superior_user_id": _id(seeded, "ceo")}),
+    ]
+    for user_id, cuerpo in casos:
+        r = await alpha_client.put(f"/api/route/users/{user_id}", json=cuerpo)
+        assert r.status_code == 409, (cuerpo, r.text)
+        assert r.json()["detail"]["code"] == "use_replace_manager"
+    # Por la API de organización, igual.
+    r = await alpha_client.put(f"{ORG}/{_id(seeded, 'coo')}", json={
+        "position": "regional_manager", "superior_user_id": _id(seeded, "ceo")})
+    assert r.status_code == 409
+    assert (await alpha_client.delete(f"{ORG}/{_id(seeded, 'coo')}")).status_code == 409
+    assert await _foto(seeded) == antes
+
+
+async def test_lo_demas_de_un_coo_se_sigue_editando_y_se_crean_coo_nuevos(seeded, alpha_client):
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    # Mismo rol y mismo superior, con otro nombre: no es un cambio de puesto.
+    r = await alpha_client.put(f"/api/route/users/{_id(seeded, 'coo')}", json={
+        "first_name": "Renamed", "role_id": seeded.alpha.roles["COO"],
+        "superior_user_id": _id(seeded, "ceo")})
+    assert r.status_code == 200, r.text
+    # Un COO nuevo (otro puesto, no un relevo) se crea en el alta.
+    await _persona(alpha_client, seeded, "coo_2", "COO", "ceo")
+    assert (await _vigente(seeded, "coo_2")).position == "coo"
+    # RM, Supervisor, OSM y Sales siguen con la lista, como antes.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    r = await alpha_client.put(f"/api/route/users/{_id(seeded, 'sup_c')}", json={
+        "role_id": seeded.alpha.roles["OSM"], "superior_user_id": _id(seeded, "coo")})
+    assert r.status_code == 200, r.text
 
 
 # ── Suspensión: ausencia temporal, sin efectos en la estructura ─────────────
