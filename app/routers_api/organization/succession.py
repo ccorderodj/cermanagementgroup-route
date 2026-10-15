@@ -356,6 +356,9 @@ async def ejecutar(
                     created_by=actor_user_id,
                     reason=reason,
                     version=(previa.version + 1) if previa else 1,
+                    # La fila del sucesor recuerda a quién sustituye: con eso
+                    # hereda lo que veía su antecesor (V1.5).
+                    replaces_user_id=saliente if u == plan.sucesor else None,
                 )
             )
 

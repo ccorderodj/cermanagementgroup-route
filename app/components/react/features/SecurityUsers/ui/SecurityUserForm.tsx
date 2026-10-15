@@ -85,6 +85,9 @@ type SecurityUserFormValues = z.infer<typeof SecurityUserFormSchema>;
 /** Valor de «sin superior» en el selector. */
 const SIN = 'none';
 
+/** Roles que sólo cambian por «Replace manager» (V1.5). */
+const RELEVO = new Set(['CEO', 'COO']);
+
 /** Etiquetas de cargo de los candidatos a superior. */
 const POSICION: Record<string, string> = {
     ceo: 'CEO',
@@ -189,6 +192,20 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
         /** V1.4: con un rol de la jerarquía se readmite con su superior. */
         superiorUserId?: number;
     } | null>(null);
+
+    /**
+     * CEO y COO se relevan con «Replace manager», no con la lista (V1.5): en
+     * Edit, su rol y su superior quedan fijos, y nadie pasa a CEO o COO desde
+     * aquí. En el alta siguen: el primer CEO y un COO nuevo se crean así. El
+     * servidor lo impone igualmente (409 `use_replace_manager`).
+     */
+    const codigoInicial = roles.find((r) => String(r.id) === String(initialData?.role_id))?.code
+        ?? initialData?.role_name ?? '';
+    const titular = esRoute && isEditMode && RELEVO.has(codigoInicial);
+    const rolesOfrecidos = useMemo(
+        () => (esRoute && isEditMode && !titular ? roles.filter((r) => !RELEVO.has(r.code)) : roles),
+        [esRoute, isEditMode, roles, titular],
+    );
 
     const rolElegido = form.watch('role_id');
     const codigoDelRol = roles.find((rol) => String(rol.id) === rolElegido)?.code;
@@ -380,6 +397,8 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                 // V1.4: la pantalla general no cambia la jerarquía; se dice
                 // en el rol, que es lo que se intentó cambiar.
                 managed_in_cer_route: 'role_id',
+                // V1.5: CEO y COO se relevan, no se editan.
+                use_replace_manager: 'role_id',
             };
             const campo = fallo.code ? campoDelConflicto[fallo.code] : undefined;
             if (campo) {
@@ -645,12 +664,12 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                         render={({ field }) => (
                             <FormItem className="flex flex-col">
                                 <FormControl>
-                                    <Select value={field.value} onValueChange={field.onChange}>
+                                    <Select value={field.value} onValueChange={field.onChange} disabled={titular}>
                                         <SelectTrigger id="security-user-role" className="w-full">
                                             <SelectValue placeholder="Select role" />
                                         </SelectTrigger>
                                         <SelectContent>
-                                            {roles.map((role) => (
+                                            {rolesOfrecidos.map((role) => (
                                                 <SelectItem key={role.id} value={String(role.id)}>
                                                     {/* La etiqueta de producto. El código
                                                         técnico —`route_admin`— no se muestra. */}
@@ -661,6 +680,11 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                     </Select>
                                 </FormControl>
                                 <FormLabel>Role in this company</FormLabel>
+                                {titular && (
+                                    <p className="text-xs text-muted-foreground" id="security-user-replace-only">
+                                        CEO and COO change only through “Replace manager” in the user list.
+                                    </p>
+                                )}
                                 <FormMessage />
                             </FormItem>
                         )}
@@ -679,6 +703,7 @@ export default function SecurityUserForm(props: SecurityUserFormProps) {
                                             superior ya cargado (H-2). */}
                                         <Select
                                             value={field.value ?? SIN}
+                                            disabled={titular}
                                             onValueChange={(valor) => {
                                                 if (valor) field.onChange(valor);
                                             }}

@@ -46,7 +46,10 @@ from app.routers_api.usermanagement.schemas import (
 )
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
-from app.routers_api.organization.contract_guard import exigir_contrato_de_route
+from app.routers_api.organization.contract_guard import (
+    exigir_contrato_de_route,
+    exigir_relevo_para_ceo_y_coo,
+)
 from app.routers_api.organization.models import CARGO_DE_ROL
 from app.routers_api.usermanagement.role_policy import (
     _nombre_del_rol,
@@ -255,6 +258,14 @@ async def update_user(
         user_id=user_id,
         role_id=data.get("role_id"),
         superior_dado=superior_dado,
+    )
+    # CEO y COO no se editan: se relevan con «Replace manager» (V1.5).
+    await exigir_relevo_para_ceo_y_coo(
+        company_id=company.id,
+        user_id=user_id,
+        role_id=data.get("role_id"),
+        superior_dado=superior_dado,
+        superior_user_id=superior,
     )
     sincroniza = toca_jerarquia and (
         superior_dado

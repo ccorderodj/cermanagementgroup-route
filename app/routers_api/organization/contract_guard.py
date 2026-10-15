@@ -32,7 +32,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-from app.routers_api.organization.models import CARGO_DE_ROL
+from app.routers_api.organization.models import CARGO_DE_ROL, OrgPosition
 from app.routers_api.organization.service import rol_en_compania, vigentes
 from app.routers_api.usermanagement.product_context import es_contexto_de_route
 from app.routers_api.usermanagement.role_policy import _nombre_del_rol
@@ -81,3 +81,63 @@ async def exigir_contrato_de_route(
             raise _rechazo()
     if nuevo in CARGO_DE_ROL:
         raise _rechazo()
+
+
+# ── CEO y COO sólo cambian por «Replace manager» (V1.5) ─────────────────────
+
+#: Los puestos de un solo titular en su nivel: cambiarlos con la lista de roles
+#: generaba datos sin sentido (un CEO convertido en Supervisor con su árbol
+#: colgando, un segundo CEO). Se relevan; no se editan.
+ROLES_DE_RELEVO = frozenset({"CEO", "COO"})
+CARGOS_DE_RELEVO = frozenset({OrgPosition.CEO, OrgPosition.COO})
+
+CODIGO_RELEVO = "use_replace_manager"
+MENSAJE_RELEVO = (
+    "CEO and COO positions change only through “Replace manager” in "
+    "CER Route → Users (available to the CER Route administrator)."
+)
+
+
+def _relevo() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={"code": CODIGO_RELEVO, "message": MENSAJE_RELEVO},
+    )
+
+
+async def exigir_relevo_para_ceo_y_coo(
+    *,
+    company_id: int,
+    user_id: int,
+    role_id: int | None,
+    superior_dado: bool,
+    superior_user_id: int | None,
+) -> None:
+    """409 si una **edición** cambiaría un CEO o un COO, o haría a alguien CEO
+    o COO. Enviar el mismo rol y el mismo superior no es un cambio.
+
+    El alta no pasa por aquí: el primer CEO de una compañía y un COO nuevo
+    (otro puesto, no un relevo) se siguen creando en el alta.
+    """
+    actual = await rol_en_compania(company_id=company_id, user_id=user_id, incluir_suspendidos=True)
+    nuevo = await _nombre_del_rol(role_id=role_id, company_id=company_id) if role_id is not None else actual
+    previa = (await vigentes(company_id)).get(user_id)
+    cambia_rol = nuevo != actual
+    cambia_superior = superior_dado and (
+        previa is None or previa.superior_user_id != superior_user_id
+    )
+    if actual in ROLES_DE_RELEVO and (cambia_rol or cambia_superior):
+        raise _relevo()
+    if cambia_rol and nuevo in ROLES_DE_RELEVO:
+        raise _relevo()
+
+
+def exigir_relevo_en_cargo(
+    *, previo: str | None, nuevo: str | None, cambia_superior: bool = False
+) -> None:
+    """Lo mismo para la API de organización, que trabaja con cargos. `nuevo`
+    nulo: se quita el cargo."""
+    if previo in CARGOS_DE_RELEVO and (nuevo != previo or cambia_superior):
+        raise _relevo()
+    if nuevo in CARGOS_DE_RELEVO and nuevo != previo:
+        raise _relevo()
