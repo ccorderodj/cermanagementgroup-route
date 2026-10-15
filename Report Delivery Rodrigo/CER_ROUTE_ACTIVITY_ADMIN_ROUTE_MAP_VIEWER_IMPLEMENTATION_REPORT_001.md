@@ -2,7 +2,11 @@
 
 **Reporte 001 — respuesta a** `CER_ROUTE_ACTIVITY_ADMIN_ROUTE_MAP_VIEWER_SINGLE_DEVELOPMENT_INSTRUCTION_V1_0.md`
 **Fecha:** 15 de octubre de 2026
-**Status: BLOCKED at Checkpoint A — DECISION REQUIRED.** Se activa el gate de §4 y §11: **la geometría de la ruta no existe**, y cualquier forma de dibujar la ruta por carretera exige cambiar la petición a TomTom y guardar un dato nuevo, o hacer llamadas nuevas a TomTom. **No se modificó código, esquema, datos ni dependencias.** Checkpoints B y C: **NOT STARTED**.
+**Status: COMPLETED WITH PENDING VALIDATION** (local, base de tests).
+- **Checkpoint A** (15-10, MR !96): bloqueado en el gate, porque la geometría por carretera no existe.
+- **Decisión de CER el mismo día:** enseñar los **puntos del cálculo de TomTom sobre un mapa base de OpenStreetMap** (la «Opción 3», marcadores sin línea).
+- **Checkpoints B y C:** ejecutados con esa decisión.
+- **Pendiente:** certificación de CER, concesión del permiso por rol en cada tenant y despliegue.
 
 ---
 
@@ -78,39 +82,103 @@ Medidas de npm (`npm view`, 15-10-2026). El tamaño desempaquetado incluye fuent
 | **2. Recalcular al abrir el mapa** | Una llamada a TomTom por apertura | **No es la original**: la red de calles y la versión pueden cambiar; tendría que rotularse «Recalculated estimate» | Todos los viajes con puntos de paso (48 %) | 2.500 llamadas al día gratis y después ~0,75 USD por 1.000 (no teselas); **no se presupone gratis** | **Sí:** coste nuevo y procedencia de datos distinta |
 | **3. Solo marcadores** (origen, cambios de plan, destino) | Ninguna llamada; sin línea | No es una ruta | 48 % | 0 | No, pero **no cumple el objetivo** (FR-04 pide la ruta por carretera) |
 
+## Decisión adoptada por CER (15-10-2026)
+
+> «Usar OSM para mostrar los puntos calculados utilizados por TomTom» y «ejecuta y muestra el mapa usando la combinación de OSM y TomTom».
+
+**Qué se implementó con esa decisión:**
+- **Mapa base:** OpenStreetMap.
+- **Encima:** los **puntos con los que TomTom calculó las millas** de cada viaje (salida, cambios de plan, llegada), en **marcadores numerados sin línea**. FR-04 prohíbe una recta que finja la ruta.
+- **Sin tocar TomTom** (ni petición, ni cálculo, ni millas), **sin migraciones** y **sin coste**.
+
+**Lo que sigue siendo cierto:**
+- **No es la ruta por carretera.** Para tenerla hay que aprobar la Opción 1 (§A.5); el visor admitiría la línea sin rehacerse.
+- **No hay problema de mezclar TomTom con OSM:** los puntos son **ubicaciones capturadas por el teléfono** (`location_fix` copiadas a los tramos) y TomTom solo devolvió la distancia. No se dibuja ningún contenido de TomTom sobre OSM.
+- **OSM público no tiene SLA.** La URL de teselas es **configurable** (`MAP_TILE_URL`, `MAP_TILE_ATTRIBUTION`); para producción con garantías se cambia por otro proveedor sin tocar código.
+
 ## Checkpoint B — Controlled implementation
-**NOT STARTED** (gate). No hay ficheros cambiados, migraciones ni dependencias.
+
+### B.1 Ficheros
+
+| Fichero | Cambio |
+|---|---|
+| `app/core/rbac/catalog.py` | Capacidad `route.activity.map.read`. Nueva lista `CAPACIDADES_A_DEMANDA`: **ninguna plantilla** la concede, tampoco owner y admin, que reciben «todo» |
+| `app/config.py` | `MAP_TILE_URL` (OSM por omisión) y `MAP_TILE_ATTRIBUTION` |
+| `app/core/middleware/security_headers_middleware.py` | La CSP añade **solo** el origen de las teselas, y **solo** en `img-src` |
+| `app/routers_api/activityexplorer/route_map.py` (nuevo) | Comprobación del viaje **con el alcance aplicado** antes de leer coordenadas; puntos en orden, sin repetir el de enlace entre tramos, con rango validado |
+| `app/routers_api/activityexplorer/router.py` | `GET /api/activity-explorer/trips/{trip_id}/map`: exige `route.activity.read` **y** `route.activity.map.read`; fuera de alcance, 404 igual que un id inventado |
+| `app/routers_api/activityexplorer/schemas.py`, `dao.py` | `TripMapRead`. En la tarjeta, **solo** el booleano `route_points_available` (millaje calculado), sin coordenadas |
+| `app/components/react/entities/RouteActivityExplorer/*` | Zod `tripMapSchema` y `fetchTripMap` |
+| `.../features/RouteActivityExplorer/ui/RouteMapViewer.tsx` + `.scss` (nuevos) | Visor: Leaflet, teselas con `referrerPolicy` (OSM exige Referer), marcadores numerados con los colores del tema, sin arrastre con un dedo en móvil, `map.remove()` al cerrar, estados de carga, sin puntos y error con «Retry» |
+| `.../ExplorerActivityCards.tsx` | `View Route` / `Hide Route` bajo el resumen de la cabecera (`aria-expanded`, `aria-controls`); el visor, con `lazy`, **después** de los detalles; se cierra al cambiar el día, el periodo o el supervisor |
+| `.../widgets/RouteActivityExplorer/ui/ActivityExplorerPanel.tsx` | `mapEnabled` solo en la vista **administrativa** y con el permiso. La Activity personal no cambia |
+| `app/configwebpack/build/loaders/buildCssLoader.ts` | No resuelve las 3 imágenes de Leaflet que el visor no usa (control de capas y marcador por defecto) |
+| `app/package.json` | `leaflet` 1.9.4 (BSD-2) y `@types/leaflet` 1.9.12 (dev) |
+| `docs/ARCHITECTURE.md` | Origen externo de teselas, visor y capacidad a demanda |
+| `tests/integration/test_activity_route_map.py`, `tests/e2e/test_activity_route_map_browser.py` (nuevos) | §C |
+
+**Sin migraciones.** El permiso se crea en la tabla `permission` con `converge` (job PRE_DEPLOY de DigitalOcean, o `bootstrap` en local) y **no se concede a ningún rol**.
+
+### B.2 Peso medido (build de producción)
+
+| Recurso | Antes | Después | Se descarga |
+|---|---|---|---|
+| `main.js` | 811.225 B | 812.294 B (+1,1 KB, +0,13 %) | Siempre |
+| `main.css` | 107.395 B | 107.497 B | Siempre |
+| Leaflet (trozo aparte) | — | 148,9 KB · **42,7 KB gzip** | Solo al abrir un mapa |
+| Visor + CSS de Leaflet | — | 14,3 KB · 4,3 KB gzip | Solo al abrir un mapa |
+
+### B.3 Seguridad y auditoría
+- **Orden de comprobaciones:** permisos (403) → alcance de jerarquía por periodo, con Sales solo para el CEO (404, idéntico a un id inexistente) → y solo entonces se leen las coordenadas.
+- **Sin rastros de coordenadas:** no se registran en logs ni en analítica, y el listado de Activity no las incluye.
+- **Proveedor de teselas:** ve qué **zona** del mapa se mira (las teselas), no las coordenadas exactas ni la identidad. La atribución es visible.
+- **Auditoría:** **abrir un mapa no se audita**, porque las lecturas no se auditan en el producto. **Conceder el permiso** pasa por Roles & Permissions, con la aprobación de dos personas.
+
+### B.4 Capturas
+En `Report Delivery Rodrigo/CER_ROUTE_ACTIVITY_ADMIN_ROUTE_MAP_assets/`, con datos de prueba y coordenadas sintéticas:
+- `escritorio-cerrado.png`, `escritorio-abierto.png` y `movil-abierto.png`, con **teselas reales de OSM**;
+- `movil-sin-permiso-linea-base.png`, la tarjeta original.
+
+**Observación previa (`CONFIRMED` por esa captura):** a 390 px, la tarjeta **original** ya parte «activity span · trip / miles» en dos líneas. No lo introduce este cambio.
 
 ## Checkpoint C — Validation
-**NOT STARTED.**
 
-| AC | Estado |
+| AC | Esperado | Implementado | Evidencia | Estado |
+|---|---|---|---|---|
+| AC-01 | La página no cambia salvo el botón y el visor | Cabecera, detalles, resumen y selectores intactos | Capturas antes y después; línea base sin permiso | COMPLETED |
+| AC-02 | Un solo control, `View Route` ↔ `Hide Route`, mapa bajo los detalles | Sí | E2E | COMPLETED |
+| AC-03 | 390 px sin desborde ni scroll atrapado | Sin arrastre con un dedo; altura acotada | E2E móvil: `scrollWidth <= innerWidth` | COMPLETED |
+| AC-04 | Nada se carga hasta pulsar | `lazy` + trozo aparte; 0 teselas cerrado | E2E: lista de peticiones de teselas vacía antes de pulsar | COMPLETED |
+| AC-05 | Ruta por carretera; nunca una recta falsa | **Puntos sin línea** (decisión de CER); millas sin cambios | E2E: 0 `path` en la capa vectorial | **DEVIATION aprobada**: no hay geometría (§A.5) |
+| AC-06 | Sin permiso, ni botón ni API; COO/Sales, no; CEO/Sales, sí | Sí | Integración: 403 para route_admin, owner, admin y CEO sin permiso; COO→Sales 404; CEO→Sales 200 | COMPLETED |
+| AC-07 | Tenant, id directo, revocación, historial por periodo | Sí | Integración: otro tenant 404; id inventado 404; revocar → 403; traslado por periodo | COMPLETED |
+| AC-08 | Concesión por el flujo existente, sin concesiones globales | Capacidad a demanda | Ninguna plantilla la concede | COMPLETED (concesión por rol: **PENDING**, la decide cada tenant) |
+| AC-09 | Comparación de 3 renderizadores, teselas, costes, condiciones | §A.3–A.4 + medida real §B.2 | — | COMPLETED |
+| AC-10 | Nada más cambia | Diff acotado | Integración 1341 PASS; E2E 206 PASS; solo los fallos preexistentes | COMPLETED |
+| AC-11 | Fallos sin romper la tarjeta | Estados de carga, sin puntos y error con Retry | Integración (millaje sin calcular → `available=false`) | COMPLETED |
+
+**Tests:**
+
+| Lote | Resultado |
 |---|---|
-| AC-09 (comparación de renderizadores, teselas, costes y condiciones) | **COMPLETED** (§A.3–A.5); la medición del *bundle* queda **PENDING** para la prueba de concepto de B |
-| AC-01 a AC-08, AC-10, AC-11 | **BLOCKED** por la decisión de §A.5 |
+| `test_activity_route_map` (integración) | **10/10 PASS** |
+| `test_activity_route_map_browser` (escritorio + móvil + sin permiso) | **3/3 PASS** |
+| Catálogo, superficie pública, cableado | PASS |
+| `npm run check` | 0 errores |
+| Regresión: integración + contratos | **1341 PASS, 15 skipped, 1 FAIL** preexistente (`test_provisioning_alignment`: 12 frente a 16 capacidades de `route_admin`, desde RTE09), 1633 s |
+| Regresión: E2E completos | **206 PASS, 5 FAIL** preexistentes (ubicación sin conexión de RTE06, los mismos nombres que en V1.4–V1.6), 3950 s |
 
-## Decisión que necesita CER (una sola, concreta)
+**Despliegue:**
+1. Fusionar (PRE_DEPLOY ejecuta `converge`, que crea el permiso sin concederlo).
+2. En **Roles & Permissions**, conceder «route.activity.map.read» a los roles que CER decida (por ejemplo Administrador, CEO y COO).
+3. Que recarguen la aplicación.
 
-> **¿Autoriza CER la Opción 1?** Cambiar la petición de TomTom de `summaryOnly` a `polyline` y guardar la geometría de cada viaje **a partir de la activación**, siempre que se verifique que las millas no cambian y que los términos de TomTom permiten almacenarla. Con ella, el mapa mostraría la **misma** ruta que dio las millas. Los viajes anteriores mostrarían «Route not available» y nunca una línea inventada.
+**Rollback:** revertir el código. La capacidad queda inactiva en la tabla `permission` (convención de `converge`).
 
-**Condiciones asociadas, a confirmar a la vez:**
-1. **Teselas:** TomTom Map Display, con una clave **pública restringida por dominio** (o proxy en el servidor) y apertura de la CSP a ese dominio.
-2. **Permiso:** `route.activity.map.read` en el catálogo, **sin concederlo por defecto a ningún rol**; se concede por Roles & Permissions.
-3. **Plan de TomTom contratado:** confirmar si es Freemium o *Pay as you grow*.
-
-**Alternativas si CER no aprueba la Opción 1:**
-- **Opción 2:** recalcular, rotulado como recálculo y con un coste por uso.
-- **Opción 3:** solo marcadores, que no es una ruta.
-
-**Estimación si se aprueba la Opción 1** (horas-agente):
-
-| Tarea | Complejidad | Horas |
-|---|---|---|
-| Captura de la geometría en la petición existente + columna + migración + test de que las millas no cambian | media | 3 |
-| Endpoint por viaje (permiso + alcance antes de serializar) + capacidad + tests de seguridad (CEO/COO/Sales, tenant, id directo, revocación) | media | 4 |
-| `View Route` / `Hide Route` + Leaflet bajo demanda + estados + accesibilidad + CSP | media-alta | 5 |
-| E2E escritorio/móvil, regresión, informe | — | 4 |
-| **Total** | | **16 h**; +30 % por integración de terceros (teselas y TomTom) ≈ **21 h** |
+**Limitaciones abiertas:**
+- No es la ruta por carretera (Opción 1 pendiente).
+- Solo los viajes con millaje calculado tienen puntos (48 % en la copia local).
+- OSM público no tiene SLA.
 
 ## Fuentes externas consultadas
 - [OSM Foundation — Tile Usage Policy](https://operations.osmfoundation.org/policies/tiles/)

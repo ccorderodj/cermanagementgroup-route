@@ -491,6 +491,9 @@ async def paradas_del_dia(
                 "official_miles": millas_oficiales(metros),
                 "mileage_pending": f.millaje_estado
                 == MileageState.PENDING_CALCULATION.value,
+                # Los tramos (con sus puntos) se escriben sólo al calcular.
+                "route_points_available": f.millaje_estado
+                == MileageState.CALCULATED.value,
                 "terminal_action": f.terminal_action,
                 "outcome_label": f.outcome_label,
                 "notes": f.notes,

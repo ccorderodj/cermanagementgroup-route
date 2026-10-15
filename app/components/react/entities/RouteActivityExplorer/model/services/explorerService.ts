@@ -1,5 +1,11 @@
 import { $api, parseApi } from '@/shared/api';
-import { explorerViewSchema, type ExplorerRange, type ExplorerView } from '../types';
+import {
+    explorerViewSchema,
+    tripMapSchema,
+    type ExplorerRange,
+    type ExplorerView,
+    type TripMap,
+} from '../types';
 
 /**
  * Un nivel del explorador por petición.
@@ -50,4 +56,13 @@ export async function fetchMyActivity(params: {
     }
     const response = await $api.get('/activity-explorer/me', { params: query });
     return parseApi(explorerViewSchema, response.data, 'fetchMyActivity');
+}
+
+/**
+ * Los puntos del cálculo de millas de **un** viaje, sólo al abrir su visor.
+ * El servidor exige el permiso del mapa y que el viaje esté en el alcance.
+ */
+export async function fetchTripMap(tripId: number): Promise<TripMap> {
+    const response = await $api.get(`/activity-explorer/trips/${tripId}/map`);
+    return parseApi(tripMapSchema, response.data, 'fetchTripMap');
 }

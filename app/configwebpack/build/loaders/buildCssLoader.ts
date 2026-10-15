@@ -27,6 +27,13 @@ export function buildCssLoader(options: BuildOptions) {
             {
                 loader: 'css-loader',
                 options: {
+                    // El CSS de Leaflet (visor de ruta) apunta a sus imágenes
+                    // del control de capas y del marcador por defecto. El visor
+                    // no usa ninguno —sus marcadores son propios—, así que esas
+                    // URLs no se resuelven ni se empaquetan.
+                    url: {
+                        filter: (url: string) => !/^images\/(layers|marker-icon|marker-shadow)/.test(url),
+                    },
                     modules: {
                         auto: (resPath: string) => Boolean(resPath.includes('.module.')),
                         localIdentName: isDev

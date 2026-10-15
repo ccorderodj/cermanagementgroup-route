@@ -1,5 +1,6 @@
 import { ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { useIsMobile } from '@/shared/lib/hooks/useMobile/useMobile';
+import { useUser } from '@/app/providers/StoreProvider';
 import {
     ExplorerActivityCards,
     ExplorerDaySummary,
@@ -61,6 +62,7 @@ interface ActivityExplorerPanelProps {
 export function ActivityExplorerPanel({ scope, header = null }: ActivityExplorerPanelProps) {
     const esMovil = useIsMobile();
     const propia = scope === 'self';
+    const { hasUserPermission } = useUser();
 
     const [rango, setRango] = useState<ExplorerRange>('day');
     /**
@@ -209,7 +211,10 @@ export function ActivityExplorerPanel({ scope, header = null }: ActivityExplorer
             {vigentes && vigentes.range === 'day' && (
                 <>
                     {vigentes.summary && <ExplorerDaySummary summary={vigentes.summary} />}
-                    <ExplorerActivityCards activities={vigentes.activities} />
+                    <ExplorerActivityCards
+                        activities={vigentes.activities}
+                        mapEnabled={!propia && hasUserPermission('route.activity.map.read')}
+                    />
                 </>
             )}
 

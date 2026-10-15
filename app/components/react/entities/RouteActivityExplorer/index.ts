@@ -6,6 +6,7 @@ export {
     explorerSummarySchema,
     explorerSupervisorSchema,
     explorerViewSchema,
+    tripMapSchema,
     EXPLORER_RANGES,
     TRIP_PURPOSE_LABEL,
     parseDay,
@@ -16,4 +17,4 @@ export {
     formatClock,
     spanBetween,
 } from './model/types';
-export { fetchExplorer, fetchMyActivity } from './model/services/explorerService';
+export { fetchExplorer, fetchMyActivity, fetchTripMap } from './model/services/explorerService';
