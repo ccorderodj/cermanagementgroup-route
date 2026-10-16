@@ -55,6 +55,7 @@ async def test_templates_y_recipients_en_escritorio(seeded, alpha_client, live_s
 
             midday = page.get_by_role("region", name="Midday Motivation")
             await expect(midday.get_by_label("Subject")).to_have_value("¡Buen trabajo! Sigamos adelante 💪")
+            await expect(midday.get_by_text("No activities, no email.")).to_be_visible()
             await page.screenshot(path=str(DESTINO / "escritorio-templates.png"), full_page=True)
 
             await midday.get_by_label("Subject").fill("¡Gran mañana, {{user_first_name}}! 💪")

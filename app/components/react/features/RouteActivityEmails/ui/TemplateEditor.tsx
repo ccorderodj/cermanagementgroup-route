@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Eye, Loader2, RotateCcw, Save } from 'lucide-react';
+import {
+    Eye, Loader2, MailX, RotateCcw, Save,
+} from 'lucide-react';
 import {
     Badge,
     Button,
@@ -146,6 +148,10 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                         ? `Last modified by ${template.updated_by_name} on ${editado}.`
                         : 'Using the approved default text.'}
                 </CardDescription>
+                <p className="flex items-start gap-1.5 text-sm">
+                    <MailX className="mt-0.5 size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    {template.send_condition}
+                </p>
             </CardHeader>
             <CardContent className="space-y-4">
                 <div className="space-y-1.5">

@@ -16,6 +16,8 @@ class ActivityEmailTemplateRead(BaseModel):
     template_type: str
     label: str
     schedule_label: str
+    #: Cuándo se envía; sin actividades completadas, no hay correo.
+    send_condition: str
     subject: str
     body: str
     #: `True` mientras la compañía usa el texto aprobado sin cambios.

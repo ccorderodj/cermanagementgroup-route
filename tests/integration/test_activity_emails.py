@@ -116,6 +116,7 @@ async def test_nacen_con_el_texto_aprobado(seeded, alpha_client):
         assert t[tipo]["body"] == s.default_body
         assert t[tipo]["is_default"] is True and t[tipo]["version"] == 0
     assert t[MEDIODIA]["schedule_label"] == "12:00 p.m."
+    assert all("No activities, no email." in t[tipo]["send_condition"] for tipo in (MEDIODIA, FIN))
     assert {x["token"] for x in t[FIN]["tokens"] if x["required"]} == {"day_activity_block", "week_activity_block"}
     # Nada se escribió para leerlas.
     assert await _filas("SELECT 1 FROM activity_email_template") == []

@@ -18,6 +18,7 @@ export const activityEmailTemplateSchema = z.object({
     template_type: activityEmailTypeSchema,
     label: z.string(),
     schedule_label: z.string(),
+    send_condition: z.string(),
     subject: z.string(),
     body: z.string(),
     is_default: z.boolean(),

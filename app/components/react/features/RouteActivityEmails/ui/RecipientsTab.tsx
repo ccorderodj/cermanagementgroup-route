@@ -130,7 +130,8 @@ export function RecipientsTab() {
         <div className="space-y-4">
             <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
                 This page sets who will be eligible for each email once automatic sending is enabled.
-                It does not send anything now. Everyone starts with both emails off.
+                It does not send anything now. Everyone starts with both emails off,
+                and no email is sent on a day without completed activities.
             </p>
 
             <div className="relative max-w-sm">

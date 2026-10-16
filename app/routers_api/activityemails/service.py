@@ -88,6 +88,7 @@ class ActivityEmailService:
             "template_type": template_type,
             "label": s.label,
             "schedule_label": s.schedule_label,
+            "send_condition": s.send_condition,
             "subject": subject,
             "body": body,
             "is_default": subject == s.default_subject and body == s.default_body,
