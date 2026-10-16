@@ -117,5 +117,8 @@ class ActivityEmailTestResult(BaseModel):
     outcome: str
     to: str
     subject: str
+    #: El tipo de backend que de verdad lo tomó (`m365_oauth`, `smtp_basic`,
+    #: `console`, `memory`). Sin host ni cuenta.
+    backend: str | None
     #: Siempre `False`: la entrega sólo la confirma la bandeja de destino.
     delivered_confirmed: bool

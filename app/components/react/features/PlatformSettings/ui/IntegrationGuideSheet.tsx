@@ -25,7 +25,10 @@ import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import {
     clearIntegrationSecret,
     saveIntegration,
+    fetchEmailTestTargets,
     sendTestEmail,
+    type EmailTestResult,
+    type EmailTestTargets,
     setIntegrationSecret,
     verifyIntegration,
     type CheckRun,
@@ -152,6 +155,8 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
     const [serverError, setServerError] = useState('');
     const [lastCheck, setLastCheck] = useState<CheckRun | null>(null);
     const [testTo, setTestTo] = useState('');
+    const [testTargets, setTestTargets] = useState<EmailTestTargets | null>(null);
+    const [testResult, setTestResult] = useState<EmailTestResult | null>(null);
 
     // Al abrir otra integración, la guía empieza de cero con lo guardado.
     const abierta = integration?.key;
@@ -172,6 +177,19 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
         () => integration?.providers.find((p) => p.key === providerKey),
         [integration, providerKey],
     );
+
+    // T0: los buzones de prueba los da el servidor; nunca un destino libre.
+    const esCorreo = abierta === 'email' || abierta === 'email_fallback';
+    useEffect(() => {
+        if (!esCorreo || step !== 3 || !abierta) return;
+        setTestResult(null);
+        dispatch(fetchEmailTestTargets(abierta)).then((accion) => {
+            if (fetchEmailTestTargets.fulfilled.match(accion)) {
+                setTestTargets(accion.payload);
+                setTestTo((actual) => actual || accion.payload.recipients[0] || '');
+            }
+        });
+    }, [abierta, dispatch, esCorreo, step]);
 
     if (!integration) return null;
 
@@ -268,10 +286,11 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
     const sendTest = async () => {
         setBusy('test');
         setServerError('');
-        const accion = await dispatch(sendTestEmail({ key: integration.key, to: testTo.trim() }));
+        setTestResult(null);
+        const accion = await dispatch(sendTestEmail({ key: integration.key, to: testTo }));
         setBusy(null);
         if (sendTestEmail.fulfilled.match(accion)) {
-            toast({ title: 'Test message sent', description: `Check the inbox of ${accion.payload.to}.` });
+            setTestResult(accion.payload);
         } else {
             setServerError(accion.payload ?? 'The test message was not sent.');
         }
@@ -622,26 +641,56 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
                                 <section className="flex flex-col gap-2 rounded-md border border-border p-3" aria-labelledby="guide-test-title">
                                     <h3 id="guide-test-title" className="text-sm font-semibold">Send a test message</h3>
                                     <p className="text-xs text-muted-foreground">
-                                        Verify signs in without sending. This sends one real message to the address you choose.
+                                        Verify signs in without sending. Send Test Email sends one real message, marked [TEST],
+                                        through this provider only (never the fallback), to an approved test mailbox.
                                     </p>
-                                    <div className="flex flex-col gap-2 sm:flex-row">
-                                        <Input
-                                            type="email"
-                                            aria-label="Test recipient"
-                                            placeholder="you@cermanagementgroup.com"
-                                            value={testTo}
-                                            onChange={(e) => setTestTo(e.target.value)}
-                                        />
+                                    {testTargets && testTargets.recipients.length === 0 && (
+                                        <p className="text-sm text-muted-foreground">
+                                            No approved test mailbox: your account has no valid email and MAIL_TEST_RECIPIENTS is empty.
+                                        </p>
+                                    )}
+                                    {testTargets && testTargets.recipients.length > 0 && (
+                                        <fieldset className="flex flex-col gap-1.5">
+                                            <legend className="mb-1 text-sm font-medium">Test mailbox</legend>
+                                            {testTargets.recipients.map((r, i) => (
+                                                <label key={r} htmlFor={`t0-${integration.key}-${i}`} className="flex items-center gap-2 text-sm">
+                                                    <input
+                                                        id={`t0-${integration.key}-${i}`}
+                                                        type="radio"
+                                                        name={`t0-${integration.key}`}
+                                                        value={r}
+                                                        checked={testTo === r}
+                                                        onChange={() => setTestTo(r)}
+                                                        className="size-4 accent-primary"
+                                                    />
+                                                    <span className="break-all">{r}</span>
+                                                </label>
+                                            ))}
+                                            <p className="text-xs text-muted-foreground">
+                                                {`Up to ${testTargets.limit} tests every ${testTargets.window_minutes} minutes, `
+                                                    + 'shared with the Activity Emails tests.'}
+                                            </p>
+                                        </fieldset>
+                                    )}
+                                    <div>
                                         <Button
                                             type="button"
                                             variant="outline"
-                                            disabled={!testTo.trim() || !guardadoEsEste || busy !== null}
+                                            disabled={!testTo || !guardadoEsEste || busy !== null}
                                             onClick={sendTest}
                                         >
                                             {busy === 'test' && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden="true" />}
-                                            Send
+                                            Send Test Email
                                         </Button>
                                     </div>
+                                    {testResult && (
+                                        <p role="status" className="rounded-md border border-border bg-muted/40 p-2 text-sm">
+                                            {testResult.outcome === 'accepted_by_provider'
+                                                ? `Accepted by ${testResult.backend}. Delivery is not confirmed: `
+                                                    + `check the inbox of ${testResult.to} (and spam).`
+                                                : `Not sent outside the server (${testResult.backend}).`}
+                                        </p>
+                                    )}
                                 </section>
                             )}
                         </div>

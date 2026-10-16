@@ -123,13 +123,18 @@ async def test_a_test_message_goes_through_the_configured_backend(
     await _correo_configurado(alpha_client)
     memoria = backends.MemoryEmailBackend()
     monkeypatch.setattr(backends, "backend_from_platform_config", lambda key="email": memoria)
+    # RTE-MAIL-UNIFIED-01: sólo a un buzón de prueba aprobado.
+    monkeypatch.setattr(settings, "MAIL_TEST_RECIPIENTS", "ops@example.com")
 
     respuesta = await alpha_client.post(
         "/api/platform/integrations/email/test-message", json={"to": "ops@example.com"}
     )
 
     assert respuesta.status_code == 200, respuesta.text
-    assert memoria.last_for("ops@example.com") is not None
+    assert respuesta.json()["outcome"] == "captured_by_test_backend"
+    mensaje = memoria.last_for("ops@example.com")
+    assert mensaje is not None
+    assert mensaje.subject == "[TEST] CER Route — Email integration"
 
 
 async def test_integrity_checks_pass_against_the_real_test_database(seeded, alpha_client, master_key):

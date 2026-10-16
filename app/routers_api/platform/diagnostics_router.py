@@ -8,6 +8,7 @@ Diagnostics y preparación para producción.
 * `POST /platform/diagnostics/{key}/run`        comprobar una
 * `GET  /platform/diagnostics/{key}/history`    su historial
 * `POST /platform/integrations/{key}/verify`    comprobar y, si pasa, cerrar el gate
+* `GET  /platform/integrations/{key}/test-targets`  buzones de prueba permitidos
 * `POST /platform/integrations/{key}/test-message`  sólo "email" o "email_fallback"
 * `POST /platform/diagnostics/rescan-quarantine`
 
@@ -24,6 +25,8 @@ from sqlalchemy import select
 from app.config import settings
 from app.core.db.session import transaction
 from app.core.email import backends as email_backends
+from app.core.email import politica_de_prueba as politica
+from app.core.email.models import MailTestChannel, MailTestOutcome
 from app.core.platform import diagnostics, readiness
 from app.core.platform import providers as provider_defs
 from app.core.platform.audit import record_platform_event
@@ -189,6 +192,35 @@ async def verify_integration(
 _EMAIL_KEYS = ("email", "email_fallback")
 
 
+def _clave_de_correo(key: str) -> str:
+    if key not in _EMAIL_KEYS:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not an email integration.")
+    return key
+
+
+@router.get("/integrations/{key}/test-targets")
+async def test_targets(
+    key: str = Path(..., min_length=1, max_length=60),
+    admin: Users = Depends(require_platform_admin),
+) -> dict:
+    """Los buzones a los que este administrador puede mandar la prueba (T0)."""
+    _clave_de_correo(key)
+    return {
+        "recipients": politica.destinos_permitidos(admin.email),
+        "limit": politica.LIMITE,
+        "window_minutes": int(politica.VENTANA.total_seconds() // 60),
+    }
+
+
+#: T0 (RTE-MAIL-UNIFIED-01): texto fijo, sin datos operativos.
+_ASUNTO_T0 = "CER Route — Email integration"
+_CUERPO_T0 = (
+    "This is a test message sent from Platform › Integrations & Settings to confirm that this "
+    "email integration can send.\n"
+    "No action is needed. It does not subscribe anyone to anything.\n"
+)
+
+
 @router.post("/integrations/{key}/test-message")
 async def send_test_message(
     payload: TestMessageWrite,
@@ -196,37 +228,57 @@ async def send_test_message(
     key: str = Path(..., min_length=1, max_length=60),
     admin: Users = Depends(require_platform_admin),
 ):
+    """T0: una prueba **del proveedor elegido**, sin pasar al de respaldo.
+
+    Sólo a un buzón permitido (el propio o `MAIL_TEST_RECIPIENTS`) y dentro del
+    presupuesto compartido de pruebas. El resultado dice qué backend lo tomó y
+    nunca «entregado».
+    """
     import asyncio
 
-    if key not in _EMAIL_KEYS:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not an email integration.")
+    _clave_de_correo(key)
+    destino = politica.exigir_destino(str(payload.to), politica.destinos_permitidos(admin.email))
 
     await platform_config.refresh()
     backend = email_backends.backend_from_platform_config(key)
     if backend is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="Configure and save this email provider first."
+        await record_platform_event(
+            request=request, actor=admin, action="email.test_not_configured", target=f"integration:{key}",
+            changes={"to": destino, "outcome": "not_configured"},
         )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"outcome": "not_configured", "message": "Configure and save this email provider first."},
+        )
+
+    fila = await politica.reservar(
+        actor_user_id=admin.id, company_id=None, channel=MailTestChannel.PROVIDER.value,
+        target=key, destination=destino,
+    )
     mensaje = email_backends.OutgoingEmail(
-        to=str(payload.to),
-        subject=f"{settings.APP_NAME} — test message",
-        body=(
-            "This is a test message sent from Settings to confirm that outbound email works.\n"
-            "No action is needed.\n"
-        ),
+        to=destino,
+        subject=politica.asunto(_ASUNTO_T0),
+        body=politica.BANNER + _CUERPO_T0,
         sender=backend.sender or "",
+        headers={politica.CABECERA: f"provider; {key}"},
     )
     try:
         await asyncio.to_thread(backend.send, mensaje)
-    except (email_backends.EmailAuthFailed, email_backends.EmailUnreachable) as exc:
-        await record_platform_event(
-            request=request, actor=admin, action="email.test_failed", target=f"integration:{key}",
-            changes={"to": str(payload.to), "error": str(exc)},
-        )
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(exc)) from exc
+        resultado = politica.resultado_de(backend.name)
+        error = None
+    except email_backends.EmailAuthFailed:
+        resultado, error = MailTestOutcome.FAILED_AUTH.value, "The mail provider rejected the configured credentials."
+    except email_backends.EmailUnreachable:
+        resultado, error = MailTestOutcome.FAILED_UNREACHABLE.value, "The mail provider could not be reached."
+    await politica.cerrar(fila, outcome=resultado, backend=backend.name)
+    # Metadatos sin el texto del proveedor: puede repetir identificadores.
     await record_platform_event(
-        request=request, actor=admin, action="email.test_sent", target=f"integration:{key}",
-        changes={"to": str(payload.to)},
+        request=request, actor=admin,
+        action="email.test_failed" if error else "email.test_sent",
+        target=f"integration:{key}",
+        changes={"to": destino, "outcome": resultado, "backend": backend.name},
     )
-    return {"sent": True, "to": str(payload.to)}
+    if error:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"outcome": resultado, "message": error})
+    return {"outcome": resultado, "to": destino, "backend": backend.name, "delivered_confirmed": False}
 

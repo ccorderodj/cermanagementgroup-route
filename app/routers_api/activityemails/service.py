@@ -23,7 +23,6 @@ Todo cambio queda en `audit_event`.
 
 from __future__ import annotations
 
-from email_validator import EmailNotValidError, validate_email
 from fastapi import HTTPException, status
 from sqlalchemy import and_, exists, false, func, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -31,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from app.core.audit.service import diff, record_event
 from app.core.dao.concurrency import VersionConflict, ensure_version
 from app.core.db.session import db_session, transaction
+from app.core.email.politica_de_prueba import correo_valido
 from app.routers_api.activityemails import content
 from app.routers_api.activityemails.models import ActivityEmailPreference, ActivityEmailTemplate
 from app.routers_api.companies.models import UserCompany
@@ -64,16 +64,6 @@ def _tipo(template_type: str) -> str:
     if template_type not in content.ActivityEmailType.values():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown activity email")
     return template_type
-
-
-def correo_valido(email: str | None) -> bool:
-    if not email:
-        return False
-    try:
-        validate_email(email, check_deliverability=False)
-    except EmailNotValidError:
-        return False
-    return True
 
 
 class ActivityEmailService:
