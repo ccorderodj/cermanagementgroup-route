@@ -129,6 +129,15 @@ export const businessNavigation: INavMainItem[] = [
                 // ver la flota no autoriza a decidir sobre su evidencia.
                 requiredPermission: 'route.records.adjust',
             },
+            {
+                // RTE-NOT-01: plantillas y destinatarios de los correos de
+                // actividad. No hay un «Settings > Notifications» en la
+                // aplicación, y crearlo sólo para esto sería una navegación
+                // paralela: es configuración de Route y vive con ella.
+                title: 'Activity Emails',
+                url: '/admin/route/activity-emails',
+                requiredPermission: 'route.activityemails.manage',
+            },
         ],
     },
 ];

@@ -37,6 +37,7 @@ import { RouteActivityExplorerPage } from '@/pages/RouteActivityExplorerPage';
 import { RouteReportsPage } from '@/pages/RouteReportsPage';
 import { RouteTodayLivePage } from '@/pages/RouteTodayLivePage';
 import { RouteOdometerExceptionsPage } from '@/pages/RouteOdometerExceptionsPage';
+import { RouteActivityEmailsPage } from '@/pages/RouteActivityEmailsPage';
 
 /**
  * Mapa clave de página -> componente.
@@ -76,4 +77,5 @@ export const RootComponents: Record<string, ReactNode> = {
     [ComponentRoot.ROUTEACTIVITYEXPLORER]: <RouteActivityExplorerPage />,
     [ComponentRoot.ROUTEREPORTS]: <RouteReportsPage />,
     [ComponentRoot.ROUTEODOMETEREXCEPTIONS]: <RouteOdometerExceptionsPage />,
+    [ComponentRoot.ROUTEACTIVITYEMAILS]: <RouteActivityEmailsPage />,
 };
