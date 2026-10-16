@@ -203,7 +203,11 @@ async def test_targets(
     key: str = Path(..., min_length=1, max_length=60),
     admin: Users = Depends(require_platform_admin),
 ) -> dict:
-    """Los buzones a los que este administrador puede mandar la prueba (T0)."""
+    """Sugerencias de destino para T0: el propio correo y `MAIL_TEST_RECIPIENTS`.
+
+    Son sólo sugerencias: el administrador de plataforma puede escribir otra
+    dirección válida (V1.2).
+    """
     _clave_de_correo(key)
     return {
         "recipients": politica.destinos_permitidos(admin.email),
@@ -230,14 +234,15 @@ async def send_test_message(
 ):
     """T0: una prueba **del proveedor elegido**, sin pasar al de respaldo.
 
-    Sólo a un buzón permitido (el propio o `MAIL_TEST_RECIPIENTS`) y dentro del
+    A la dirección que escribe el administrador de plataforma (V1.2), validada
+    (formato, longitud, una sola línea, sin campos extra) y dentro del
     presupuesto compartido de pruebas. El resultado dice qué backend lo tomó y
     nunca «entregado».
     """
     import asyncio
 
     _clave_de_correo(key)
-    destino = politica.exigir_destino(str(payload.to), politica.destinos_permitidos(admin.email))
+    destino = politica.exigir_formato(payload.to)
 
     await platform_config.refresh()
     backend = email_backends.backend_from_platform_config(key)

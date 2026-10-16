@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.routers_api.platform.settings_schemas import IntegrationRead
 
@@ -67,4 +67,6 @@ class TestMessageWrite(BaseModel):
     # Sin campos extra: un `cc` o `bcc` se rechaza (422), no se ignora.
     model_config = ConfigDict(extra="forbid")
 
-    to: EmailStr
+    # Se valida en `politica_de_prueba.exigir_formato` (formato, longitud, una
+    # línea), para que un error responda igual que el resto de la política.
+    to: str = Field(min_length=3, max_length=320)

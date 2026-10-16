@@ -4,8 +4,10 @@ Reglas comunes de los envíos de **prueba** (RTE-MAIL-UNIFIED-01, CP1).
 Las comparten la prueba del proveedor (T0, plataforma) y las de las plantillas
 (T1-T4, Activity Emails), para que no haya dos políticas distintas:
 
-* **Destinos cerrados:** el propio correo de quien prueba y
-  `MAIL_TEST_RECIPIENTS`. Ningún destino libre.
+* **Destinos cerrados** en las pruebas de plantillas (T1-T4): el propio correo
+  de quien prueba y `MAIL_TEST_RECIPIENTS`. La única excepción es la prueba del
+  proveedor (T0), que un **administrador de plataforma** puede mandar a una
+  dirección que escribe (decisión del PO, V1.2): `exigir_formato`.
 * **Presupuesto compartido:** `LIMITE` pruebas por persona cada `VENTANA`,
   sumando todos los caminos. Se **reserva antes de mandar**, dentro de un
   candado consultivo de PostgreSQL por persona: dos réplicas o dos clics a la
@@ -73,6 +75,21 @@ def exigir_destino(destino: str, permitidos: list[str]) -> str:
             detail="Test emails can only go to your own address or an approved test recipient.",
         )
     return limpio
+
+
+def exigir_formato(destino: str) -> str:
+    """T0: una dirección escrita, válida y de una sola línea, o 422."""
+    limpio = destino.strip()
+    if (
+        len(limpio) > 254
+        or any(c in limpio for c in "\r\n,;<>")
+        or not correo_valido(limpio)
+    ):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Enter a single valid email address.",
+        )
+    return limpio.lower()
 
 
 def asunto(texto: str) -> str:

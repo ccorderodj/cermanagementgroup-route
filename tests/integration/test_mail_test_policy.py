@@ -2,7 +2,8 @@
 
 T0 (proveedor, Platform) y T1/T2 (plantillas, Activity Emails) comparten:
 
-* destinos cerrados: el propio correo o `MAIL_TEST_RECIPIENTS`;
+* destinos cerrados en las plantillas: el propio correo o `MAIL_TEST_RECIPIENTS`
+  (en T0 el administrador de plataforma escribe la dirección, V1.2);
 * **un solo presupuesto** de 5 pruebas cada 15 minutos por persona, sumando
   los dos caminos, correcto con peticiones simultáneas;
 * «[TEST]» una sola vez, banner y cabecera `X-CER-Route-Test`;
@@ -70,16 +71,28 @@ async def test_t0_solo_administracion_de_plataforma(seeded, alpha_client, buzon,
     assert proveedor.outbox == []
 
 
-async def test_t0_destinos_cerrados(seeded, alpha_client, buzon, proveedor):
+async def test_t0_destino_escrito_por_el_administrador(seeded, alpha_client, buzon, proveedor):
+    """V1.2: en T0 el administrador de plataforma escribe la dirección; las
+    sugerencias siguen siendo el propio correo y `MAIL_TEST_RECIPIENTS`."""
     await _como_plataforma(seeded, alpha_client)
     destinos = (await alpha_client.get(T0_DESTINOS.format("email"))).json()
     assert destinos["recipients"] == [seeded.platform_admin.email.lower(), BUZON]
-    for malo in ("cualquiera@gmail.com", seeded.alpha.users["supervisor"].email):
-        assert (await alpha_client.post(T0.format("email"), json={"to": malo})).status_code == 403
+
+    r = await alpha_client.post(T0.format("email"), json={"to": "  Externo.QA@Otro-Dominio.com "})
+    assert r.status_code == 200, r.text
+    assert r.json()["to"] == "externo.qa@otro-dominio.com"
+    assert proveedor.last_for("externo.qa@otro-dominio.com") is not None
+
+    for malo in (
+        "no-es-correo", "a@b", "x@y.com\nBcc: z@w.com", "a@b.com, c@d.com", "<a@b.com>",
+        "a@b.com;c@d.com", "x" * 250 + "@b.com",
+    ):
+        assert (await alpha_client.post(T0.format("email"), json={"to": malo})).status_code == 422, malo
     assert (await alpha_client.post(T0.format("email"), json={"to": BUZON, "cc": "x@y.com"})).status_code == 422
+    assert (await alpha_client.post(T0.format("email"), json={"to": BUZON, "bcc": "x@y.com"})).status_code == 422
     assert (await alpha_client.post(T0.format("storage"), json={"to": BUZON})).status_code == 404
-    assert proveedor.outbox == []
-    assert await _filas("SELECT 1 FROM mail_test_send") == []
+    assert len(proveedor.outbox) == 1
+    assert len(await _filas("SELECT 1 FROM mail_test_send")) == 1, "los rechazos no consumen presupuesto"
 
 
 async def test_t0_marcado_y_resultado_honesto(seeded, alpha_client, buzon, proveedor):
