@@ -28,7 +28,7 @@ from app.core.audit.service import record_event
 from app.core.db.session import db_session
 from app.core.email import backends
 from app.core.email import politica_de_prueba as politica
-from app.core.email.models import MailTestChannel, MailTestOutcome
+from app.core.email.models import MailTestChannel
 from app.routers_api.activityemails import content
 from app.routers_api.activityemails.service import ActivityEmailService
 from app.routers_api.users.models import Users
@@ -67,6 +67,7 @@ async def enviar_prueba(*, company_id: int, actor_user_id: int, template_type: s
     asunto = politica.asunto(content.render(plantilla["subject"], content.sample_values(template_type)))
     cuerpo = politica.BANNER + content.render(plantilla["body"], content.sample_values(template_type))
     error = None
+    paso = None
     backend = None
     try:
         backend = await asyncio.to_thread(
@@ -77,10 +78,8 @@ async def enviar_prueba(*, company_id: int, actor_user_id: int, template_type: s
             headers={politica.CABECERA: f"activity-email; {template_type}"},
         )
         resultado = politica.resultado_de(backend)
-    except backends.EmailAuthFailed:
-        resultado, error = MailTestOutcome.FAILED_AUTH.value, "The mail provider rejected the configured credentials."
-    except backends.EmailUnreachable:
-        resultado, error = MailTestOutcome.FAILED_UNREACHABLE.value, "The mail provider could not be reached."
+    except backends.EmailFailure as exc:
+        resultado, paso, error = politica.fallo(exc)
     await politica.cerrar(fila, outcome=resultado, backend=backend)
 
     # Sólo metadatos: ni el cuerpo ni el texto del proveedor (puede repetir
@@ -97,10 +96,14 @@ async def enviar_prueba(*, company_id: int, actor_user_id: int, template_type: s
             "to": {"old": None, "new": destino},
             "outcome": {"old": None, "new": resultado},
             "backend": {"old": None, "new": backend},
+            "step": {"old": None, "new": paso},
         },
     )
     if error:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"outcome": resultado, "message": error})
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"outcome": resultado, "step": paso, "message": error},
+        )
     return {
         "outcome": resultado,
         "to": destino,

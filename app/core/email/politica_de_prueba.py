@@ -100,6 +100,18 @@ def asunto(texto: str) -> str:
     return PREFIJO + limpio
 
 
+def fallo(exc) -> tuple[str, str, str]:
+    """`(outcome, step, mensaje)` de un fallo del proveedor, sin su texto."""
+    from app.core.email import backends
+
+    outcome = (
+        MailTestOutcome.FAILED_AUTH.value
+        if isinstance(exc, backends.EmailAuthFailed)
+        else MailTestOutcome.FAILED_UNREACHABLE.value
+    )
+    return outcome, exc.step, backends.describir(exc)
+
+
 def resultado_de(backend: str) -> str:
     return _SIN_SALIDA.get(backend, MailTestOutcome.ACCEPTED_BY_PROVIDER).value
 

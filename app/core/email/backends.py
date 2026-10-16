@@ -23,7 +23,10 @@ describe para aplicaciones sin usuario interactivo.
 
 from __future__ import annotations
 
+import re
 import smtplib
+import socket
+import time
 from dataclasses import dataclass, field
 from email.message import EmailMessage
 
@@ -32,13 +35,73 @@ from app.logger import logger
 
 SMTP_TIMEOUT_SECONDS = 15
 
+#: Cuánto puede durar, **en total**, una conversación con el proveedor
+#: (token + conexión + TLS + autenticación + envío). Por debajo del corte del
+#: servidor web: si no, Verify y las pruebas acaban en un 504 que no dice nada.
+TOTAL_DEADLINE_SECONDS = 25
 
-class EmailAuthFailed(RuntimeError):
+#: Cuánto se espera a Microsoft Entra ID por el token. `msal` no pone límite
+#: por su cuenta: sin esto, un Entra que no contesta colgaba la petición.
+TOKEN_TIMEOUT_SECONDS = 10
+
+#: Cuánto se espera a cada dirección del servidor al conectar. Un nombre puede
+#: resolver a varias (`smtp.office365.com` da ocho): sin tope por intento, la
+#: espera se multiplicaba por el número de direcciones.
+CONNECT_ATTEMPT_SECONDS = 5
+
+
+class EmailFailure(RuntimeError):
+    """Un fallo del proveedor, con el **paso** en que ocurrió.
+
+    `step` es un código estable para la pantalla y la auditoría:
+    `token_timeout`, `token_unreachable`, `token_refused`, `smtp_unreachable`,
+    `smtp_timeout`, `smtp_auth_rejected`, `smtp_send_rejected`. El mensaje nunca lleva secretos ni el
+    texto del proveedor (sólo, como mucho, el código de error de Entra).
+    """
+
+    default_step = "smtp_unreachable"
+
+    def __init__(self, message: str, *, step: str | None = None, code: str | int | None = None) -> None:
+        super().__init__(message)
+        self.step = step or self.default_step
+        #: Un código corto del proveedor (`invalid_client`, `554`), si lo hay.
+        self.code = code
+
+
+#: Lo que se enseña en pantalla y en la API por cada paso. **Fijo**: el texto
+#: de una excepción puede traer lo que el proveedor contestó, y eso no sale.
+_MENSAJES: dict[str, str] = {
+    "token_timeout": "Microsoft Entra ID did not answer the token request in time.",
+    "token_unreachable": "Microsoft Entra ID did not answer the token request. Check the Tenant ID.",
+    "token_refused": "Microsoft Entra ID refused the token request. Check the Client ID, the client secret and its expiry.",
+    "smtp_unreachable": "The mail server did not answer or closed the connection.",
+    "smtp_timeout": "The mail server did not answer in time.",
+    "smtp_auth_rejected": (
+        "The mail server rejected the sign-in. For Microsoft 365, check SMTP.SendAsApp with admin consent, "
+        "the Exchange service principal, the mailbox permission and that Authenticated SMTP is on."
+    ),
+    "smtp_send_rejected": "The mail server refused the message. Check that the app may send as the sender mailbox.",
+}
+_CODIGO_SEGURO = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
+
+
+def describir(exc: EmailFailure) -> str:
+    """El mensaje para la pantalla: el del paso y, si es seguro, el código."""
+    texto = _MENSAJES.get(exc.step, _MENSAJES["smtp_unreachable"])
+    codigo = str(exc.code) if exc.code is not None else ""
+    return f"{texto} ({codigo})" if _CODIGO_SEGURO.match(codigo) else texto
+
+
+class EmailAuthFailed(EmailFailure):
     """El servidor o el proveedor de identidad rechazó las credenciales."""
 
+    default_step = "smtp_auth_rejected"
 
-class EmailUnreachable(RuntimeError):
-    """No se llegó al servidor, o cortó la conversación."""
+
+class EmailUnreachable(EmailFailure):
+    """No se llegó al servidor, o cortó la conversación, o no contestó a tiempo."""
+
+    default_step = "smtp_unreachable"
 
 
 @dataclass
@@ -115,6 +178,94 @@ def _mensaje(message: OutgoingEmail, sender: str) -> EmailMessage:
 IMPLICIT_TLS_PORT = 465
 
 
+class _Plazo:
+    """El tiempo que le queda a una conversación con el proveedor."""
+
+    def __init__(self, segundos: float | None = None) -> None:
+        # Se lee al crear el plazo, no al definir la clase: así un cambio de
+        # configuración (o un test) se aplica a la siguiente conversación.
+        self._fin = time.monotonic() + (TOTAL_DEADLINE_SECONDS if segundos is None else segundos)
+
+    def restante(self) -> float:
+        quedan = self._fin - time.monotonic()
+        if quedan <= 0:
+            raise TimeoutError("deadline")
+        return quedan
+
+    def ajustar(self, smtp: smtplib.SMTP) -> None:
+        """Lo que queda de plazo, como timeout del siguiente paso."""
+        if smtp.sock is not None:
+            smtp.sock.settimeout(min(SMTP_TIMEOUT_SECONDS, self.restante()))
+
+
+def _conectar(host: str, port: int, plazo: _Plazo, source_address=None) -> socket.socket:
+    """Prueba cada dirección del nombre con un tope por intento y el plazo total."""
+    ultimo: OSError | None = None
+    for familia, tipo, proto, _, direccion in socket.getaddrinfo(host, port, type=socket.SOCK_STREAM):
+        sock = socket.socket(familia, tipo, proto)
+        sock.settimeout(min(CONNECT_ATTEMPT_SECONDS, plazo.restante()))
+        try:
+            if source_address:
+                sock.bind(source_address)
+            sock.connect(direccion)
+            sock.settimeout(min(SMTP_TIMEOUT_SECONDS, plazo.restante()))
+            return sock
+        except OSError as exc:
+            ultimo = exc
+            sock.close()
+    raise ultimo or OSError(f"No address for {host}")
+
+
+class _SMTP(smtplib.SMTP):
+    """`smtplib.SMTP` que conecta respetando un `_Plazo`."""
+
+    plazo: _Plazo
+
+    def _get_socket(self, host, port, timeout):
+        return _conectar(host, port, self.plazo, self.source_address)
+
+
+class _SMTP_SSL(smtplib.SMTP_SSL):
+    """Ídem con TLS desde el primer byte (puerto 465)."""
+
+    plazo: _Plazo
+
+    def _get_socket(self, host, port, timeout):
+        sock = _conectar(host, port, self.plazo, self.source_address)
+        return self.context.wrap_socket(sock, server_hostname=self._host)
+
+
+def _abrir(clase, host: str, port: int, plazo: _Plazo) -> smtplib.SMTP:
+    smtp = clase(timeout=SMTP_TIMEOUT_SECONDS)
+    smtp.plazo = plazo
+    smtp.connect(host, port)
+    return smtp
+
+
+def _es_tiempo(exc: BaseException) -> bool:
+    """Si el fallo es, en el fondo, un tiempo agotado.
+
+    `smtplib` convierte un `TimeoutError` al leer la respuesta del servidor en
+    `SMTPServerDisconnected`; la causa original queda en `__context__`.
+    """
+    return isinstance(exc, TimeoutError) or isinstance(exc.__context__, TimeoutError)
+
+
+def _sin_tiempo(servidor: str) -> EmailUnreachable:
+    return EmailUnreachable(f"{servidor} did not answer in time.", step="smtp_timeout")
+
+
+def _rechazado(servidor: str, codigo: int | None) -> EmailAuthFailed:
+    """Autenticó pero no aceptó el mensaje: casi siempre el remitente no está
+    autorizado a enviar como ese buzón. Sólo el código SMTP, nunca el texto."""
+    detalle = f" (SMTP {codigo})" if codigo else ""
+    return EmailAuthFailed(
+        f"{servidor} refused the message{detalle}. Check that the app may send as the sender mailbox.",
+        step="smtp_send_rejected",
+        code=codigo,
+    )
+
+
 class SmtpEmailBackend(EmailBackend):
     """SMTP con usuario y contraseña: SendGrid, Amazon SES, Mailgun, hosting compartido..."""
 
@@ -133,32 +284,61 @@ class SmtpEmailBackend(EmailBackend):
         self.host, self.port, self.use_tls = host, int(port), use_tls
         self.username, self._password, self.sender = username, password, sender
 
-    def _open(self) -> smtplib.SMTP:
+    def _open(self, plazo: _Plazo) -> smtplib.SMTP:
         try:
             if self.use_tls and self.port == IMPLICIT_TLS_PORT:
-                smtp = smtplib.SMTP_SSL(self.host, self.port, timeout=SMTP_TIMEOUT_SECONDS)
+                smtp = _abrir(_SMTP_SSL, self.host, self.port, plazo)
+                plazo.ajustar(smtp)
                 smtp.ehlo()
             else:
-                smtp = smtplib.SMTP(self.host, self.port, timeout=SMTP_TIMEOUT_SECONDS)
+                smtp = _abrir(_SMTP, self.host, self.port, plazo)
+                plazo.ajustar(smtp)
                 smtp.ehlo()
                 if self.use_tls:
+                    plazo.ajustar(smtp)
                     smtp.starttls()
+                    plazo.ajustar(smtp)
                     smtp.ehlo()
             if self.username:
+                plazo.ajustar(smtp)
                 smtp.login(self.username, self._password)
             return smtp
         except smtplib.SMTPAuthenticationError as exc:
             raise EmailAuthFailed("The mail server rejected the configured credentials.") from exc
         except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("The mail server") from exc
             raise EmailUnreachable("The mail server did not answer or closed the connection.") from exc
 
     def check(self) -> None:
-        with self._open() as smtp:
-            smtp.noop()
+        plazo = _Plazo()
+        try:
+            with self._open(plazo) as smtp:
+                plazo.ajustar(smtp)
+                smtp.noop()
+        except TimeoutError as exc:
+            raise _sin_tiempo("The mail server") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("The mail server") from exc
+            raise EmailUnreachable("The mail server closed the connection.") from exc
 
     def send(self, message: OutgoingEmail) -> None:
-        with self._open() as smtp:
-            smtp.send_message(_mensaje(message, self.sender))
+        plazo = _Plazo()
+        try:
+            with self._open(plazo) as smtp:
+                plazo.ajustar(smtp)
+                smtp.send_message(_mensaje(message, self.sender))
+        except TimeoutError as exc:
+            raise _sin_tiempo("The mail server") from exc
+        except smtplib.SMTPResponseException as exc:
+            raise _rechazado("The mail server", exc.smtp_code) from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise _rechazado("The mail server", None) from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("The mail server") from exc
+            raise EmailUnreachable("The mail server closed the connection.") from exc
         logger.info("EMAIL | to=%s subject=%s backend=%s", message.to, message.subject, self.name)
 
 
@@ -181,53 +361,98 @@ class M365OAuthEmailBackend(EmailBackend):
         self.tenant_id, self.client_id, self._client_secret = tenant_id, client_id, client_secret
         self.sender, self.host, self.port = sender, host, int(port)
 
-    def _token(self) -> str:
+    def _token(self, plazo: _Plazo) -> str:
         import msal
 
-        aplicacion = msal.ConfidentialClientApplication(
-            self.client_id,
-            authority=f"https://login.microsoftonline.com/{self.tenant_id}",
-            client_credential=self._client_secret,
-        )
         try:
+            aplicacion = msal.ConfidentialClientApplication(
+                self.client_id,
+                authority=f"https://login.microsoftonline.com/{self.tenant_id}",
+                client_credential=self._client_secret,
+                timeout=min(TOKEN_TIMEOUT_SECONDS, plazo.restante()),
+            )
             resultado = aplicacion.acquire_token_for_client(scopes=[self.SCOPE])
         except Exception as exc:
-            raise EmailUnreachable("Microsoft Entra ID did not answer the token request.") from exc
+            # `requests` señala el tiempo agotado con su propia clase; no se
+            # importa para no atar el código a la librería que use msal.
+            if isinstance(exc, TimeoutError) or "Timeout" in type(exc).__name__:
+                raise EmailUnreachable(
+                    "Microsoft Entra ID did not answer the token request in time.", step="token_timeout"
+                ) from exc
+            # Un tenant que no existe o un authority mal escrito también caen
+            # aquí (msal lo valida al crear la aplicación).
+            raise EmailUnreachable(
+                "Microsoft Entra ID did not answer the token request. Check the Tenant ID.",
+                step="token_unreachable",
+            ) from exc
         token = (resultado or {}).get("access_token")
         if not token:
             # El mensaje de Entra puede repetir identificadores; sólo sale el código.
             codigo = (resultado or {}).get("error", "unknown_error")
-            raise EmailAuthFailed(f"Microsoft Entra ID refused the token request ({codigo}).")
+            raise EmailAuthFailed(
+                f"Microsoft Entra ID refused the token request ({codigo}). "
+                "Check the Client ID, the client secret and its expiry.",
+                step="token_refused",
+                code=codigo,
+            )
         return token
 
     def _xoauth2(self, token: str) -> str:
         return f"user={self.sender}\x01auth=Bearer {token}\x01\x01"
 
-    def _open(self) -> smtplib.SMTP:
-        token = self._token()
+    def _open(self, plazo: _Plazo) -> smtplib.SMTP:
+        token = self._token(plazo)
         try:
-            smtp = smtplib.SMTP(self.host, self.port, timeout=SMTP_TIMEOUT_SECONDS)
+            smtp = _abrir(_SMTP, self.host, self.port, plazo)
+            plazo.ajustar(smtp)
             smtp.ehlo()
+            plazo.ajustar(smtp)
             smtp.starttls()
+            plazo.ajustar(smtp)
             smtp.ehlo()
             cadena = self._xoauth2(token)
+            plazo.ajustar(smtp)
             smtp.auth("XOAUTH2", lambda challenge=None: cadena)
             return smtp
         except smtplib.SMTPAuthenticationError as exc:
             raise EmailAuthFailed(
                 "Exchange Online rejected the token. Check SMTP.SendAsApp, the service "
-                "principal and the mailbox permission."
+                "principal, the mailbox permission and that Authenticated SMTP is on for the mailbox."
             ) from exc
         except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("Exchange Online") from exc
             raise EmailUnreachable("Exchange Online did not answer or closed the connection.") from exc
 
     def check(self) -> None:
-        with self._open() as smtp:
-            smtp.noop()
+        plazo = _Plazo()
+        try:
+            with self._open(plazo) as smtp:
+                plazo.ajustar(smtp)
+                smtp.noop()
+        except TimeoutError as exc:
+            raise _sin_tiempo("Exchange Online") from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("Exchange Online") from exc
+            raise EmailUnreachable("Exchange Online closed the connection.") from exc
 
     def send(self, message: OutgoingEmail) -> None:
-        with self._open() as smtp:
-            smtp.send_message(_mensaje(message, self.sender))
+        plazo = _Plazo()
+        try:
+            with self._open(plazo) as smtp:
+                plazo.ajustar(smtp)
+                smtp.send_message(_mensaje(message, self.sender))
+        except TimeoutError as exc:
+            raise _sin_tiempo("Exchange Online") from exc
+        except smtplib.SMTPResponseException as exc:
+            raise _rechazado("Exchange Online", exc.smtp_code) from exc
+        except smtplib.SMTPRecipientsRefused as exc:
+            raise _rechazado("Exchange Online", None) from exc
+        except (smtplib.SMTPException, OSError) as exc:
+            if _es_tiempo(exc):
+                raise _sin_tiempo("Exchange Online") from exc
+            raise EmailUnreachable("Exchange Online closed the connection.") from exc
         logger.info("EMAIL | to=%s subject=%s backend=%s", message.to, message.subject, self.name)
 
 

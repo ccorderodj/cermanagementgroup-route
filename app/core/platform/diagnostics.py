@@ -122,9 +122,9 @@ def _email_check_sync(key: str, *, not_configured_detail: str) -> tuple[str, str
     try:
         backend.check()
     except backends.EmailAuthFailed as exc:
-        return AUTH_FAILED, str(exc)
+        return AUTH_FAILED, backends.describir(exc)
     except backends.EmailUnreachable as exc:
-        return UNREACHABLE, str(exc)
+        return UNREACHABLE, backends.describir(exc)
     return HEALTHY, f"Connected and authenticated with {backend.name}. No message was sent."
 
 
