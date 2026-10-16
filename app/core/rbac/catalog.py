@@ -111,6 +111,14 @@ CAPABILITIES: tuple[Capability, ...] = (
     # Permissions (ver `CAPACIDADES_A_DEMANDA`). Exige además `activity.read`.
     _cap("route", "activity.map.read", "View on a map the points used to calculate a trip's mileage"),
     #
+    # `route.activityemails.manage` entra con RTE-NOT-01: configurar las
+    # plantillas de los correos de actividad y quién los recibe. Una sola
+    # capacidad para leer y cambiar, porque la pantalla es de configuración y
+    # leerla sin poder cambiarla no sirve a nadie. **A demanda**, como el mapa:
+    # ve correos de personas y decide a quién se escribe, así que ninguna
+    # plantilla la concede y cada tenant decide a qué rol dársela.
+    _cap("route", "activityemails.manage", "Configure the activity email templates and who receives them"),
+    #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
     # compañía; cuando exista jerarquía organizativa, será el servidor quien
@@ -201,7 +209,9 @@ ALL_CAPABILITIES = "*"
 #: Capacidades que **ninguna plantilla** concede, ni siquiera las de «todo»
 #: (owner, admin): las asigna cada tenant a los roles que decida. Una plantilla
 #: que las incluyera daría por omisión acceso a datos sensibles.
-CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset({"route.activity.map.read"})
+CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset(
+    {"route.activity.map.read", "route.activityemails.manage"}
+)
 
 
 @dataclass(frozen=True)
