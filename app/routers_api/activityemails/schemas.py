@@ -14,6 +14,8 @@ class TokenHelp(BaseModel):
 
 class ActivityEmailTemplateRead(BaseModel):
     template_type: str
+    #: `motivational` o `strategic`: la pantalla los agrupa por esto.
+    group: str
     label: str
     schedule_label: str
     #: Cuándo se envía; sin actividades completadas, no hay correo.
@@ -122,3 +124,32 @@ class ActivityEmailTestResult(BaseModel):
     backend: str | None
     #: Siempre `False`: la entrega sólo la confirma la bandeja de destino.
     delivered_confirmed: bool
+
+
+class StrategicRecipientRead(BaseModel):
+    """Un mando y sus dos interruptores de reporte estratégico."""
+
+    user_id: int
+    first_name: str
+    last_name: str
+    email: str
+    role_name: str | None
+    #: Personas que hoy están en su rama: las que tendría su reporte.
+    coverage: int
+    strategic_midday_enabled: bool
+    strategic_end_of_day_enabled: bool
+    eligible: bool
+    #: `inactive` / `invalid_email` / `no_team`; `None` si es elegible.
+    ineligible_reason: str | None
+    version: int
+
+
+class StrategicRecipientUpdate(BaseModel):
+    """Uno o los dos interruptores estratégicos; el otro, y los motivacionales,
+    no cambian."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    strategic_midday_enabled: bool | None = None
+    strategic_end_of_day_enabled: bool | None = None
+    version: int = Field(ge=0)

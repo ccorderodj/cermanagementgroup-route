@@ -34,7 +34,9 @@ from app.core.email.politica_de_prueba import correo_valido
 from app.routers_api.activityemails import content
 from app.routers_api.activityemails.models import ActivityEmailPreference, ActivityEmailTemplate
 from app.routers_api.companies.models import UserCompany
+from app.core.rbac.catalog import ROUTE_PRODUCT_ROLE_LABELS
 from app.routers_api.organization import delegation as delegada
+from app.routers_api.organization.scope import ROLES_ACOTADOS, alcance_administrativo
 from app.routers_api.permissions.models import Permission
 from app.routers_api.rolepermissions.models import RolePermission
 from app.routers_api.roles.models import Role
@@ -76,6 +78,7 @@ class ActivityEmailService:
         body = fila.body if fila else s.default_body
         return {
             "template_type": template_type,
+            "group": s.group.value,
             "label": s.label,
             "schedule_label": s.schedule_label,
             "send_condition": s.send_condition,
@@ -85,7 +88,7 @@ class ActivityEmailService:
             "version": fila.version if fila else 0,
             "updated_at": fila.updated_at if fila else None,
             "updated_by_name": editor,
-            "subject_tokens": list(content.SUBJECT_TOKENS),
+            "subject_tokens": list(s.subject_tokens),
             "tokens": [
                 {
                     "token": t,
@@ -212,8 +215,8 @@ class ActivityEmailService:
         return {
             "is_sample": True,
             "sample_label": content.SAMPLE_LABEL,
-            "subject": content.render(subject, content.SAMPLE_VALUES),
-            "body": content.render(body, content.SAMPLE_VALUES),
+            "subject": content.render(subject, content.sample_values(tipo)),
+            "body": content.render(body, content.sample_values(tipo)),
         }
 
     # ── Destinatarios ───────────────────────────────────────────────────────
@@ -343,6 +346,26 @@ class ActivityEmailService:
             )
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=motivo)
 
+        await cls._guardar_preferencias(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            user_id=user_id,
+            cambios={"midday_enabled": midday_enabled, "end_of_day_enabled": end_of_day_enabled},
+            version=version,
+        )
+        return await cls._destinatario(company_id=company_id, actor_user_id=actor_user_id, user_id=user_id)
+
+    # ── Preferencias: un solo registro por persona ──────────────────────────
+
+    _CAMPOS = ("midday_enabled", "end_of_day_enabled", "strategic_midday_enabled", "strategic_end_of_day_enabled")
+
+    @classmethod
+    async def _guardar_preferencias(
+        cls, *, company_id: int, actor_user_id: int, user_id: int, cambios: dict, version: int
+    ) -> None:
+        """Escribe sólo los interruptores pedidos; los demás no cambian. 409 si la
+        versión es vieja. Auditado con el diff."""
+        cambios = {k: v for k, v in cambios.items() if v is not None}
         async with transaction() as session:
             fila = await session.scalar(
                 select(ActivityEmailPreference)
@@ -354,22 +377,19 @@ class ActivityEmailService:
             )
             if fila is None:
                 ensure_version(current=0, expected=version)
-                antes = {"midday_enabled": False, "end_of_day_enabled": False}
                 fila = ActivityEmailPreference(
-                    company_id=company_id, user_id=user_id, midday_enabled=False,
-                    end_of_day_enabled=False, version=0,
+                    company_id=company_id, user_id=user_id, version=0,
+                    **{c: False for c in cls._CAMPOS},
                 )
                 session.add(fila)
             else:
                 ensure_version(current=fila.version, expected=version)
-                antes = {"midday_enabled": fila.midday_enabled, "end_of_day_enabled": fila.end_of_day_enabled}
-            if midday_enabled is not None:
-                fila.midday_enabled = midday_enabled
-            if end_of_day_enabled is not None:
-                fila.end_of_day_enabled = end_of_day_enabled
+            antes = {c: bool(getattr(fila, c)) for c in cls._CAMPOS}
+            for campo, valor in cambios.items():
+                setattr(fila, campo, valor)
             fila.updated_by_user_id = actor_user_id
             fila.version = fila.version + 1
-            despues = {"midday_enabled": fila.midday_enabled, "end_of_day_enabled": fila.end_of_day_enabled}
+            despues = {c: bool(getattr(fila, c)) for c in cls._CAMPOS}
             try:
                 await session.flush()
             except IntegrityError as exc:
@@ -387,4 +407,144 @@ class ActivityEmailService:
                 summary=f"Activity email recipients updated for user {user_id}",
                 changes=delta,
             )
-        return await cls._destinatario(company_id=company_id, actor_user_id=actor_user_id, user_id=user_id)
+
+    # ── Reportes estratégicos: los mandos ───────────────────────────────────
+
+    @staticmethod
+    def _consulta_mandos(*, company_id: int, user_ids: set[int] | None, q: str | None):
+        """Miembros con un rol de mando de la jerarquía (CEO, COO, RM y el
+        `route_manager` heredado). El cargo vigente y el equipo se comprueban
+        después, contra la jerarquía real."""
+        stmt = (
+            select(
+                Users.id.label("user_id"),
+                Users.first_name,
+                Users.last_name,
+                Users.email,
+                Users.is_active.label("platform_active"),
+                UserCompany.is_active.label("membership_active"),
+                Role.name.label("role_name"),
+                func.coalesce(ActivityEmailPreference.strategic_midday_enabled, False).label("strategic_midday_enabled"),
+                func.coalesce(ActivityEmailPreference.strategic_end_of_day_enabled, False).label(
+                    "strategic_end_of_day_enabled"
+                ),
+                func.coalesce(ActivityEmailPreference.version, 0).label("version"),
+            )
+            .select_from(UserCompany)
+            .join(Users, Users.id == UserCompany.user_id)
+            .join(Role, and_(Role.id == UserCompany.role_id, Role.company_id == UserCompany.company_id))
+            .outerjoin(
+                ActivityEmailPreference,
+                and_(
+                    ActivityEmailPreference.user_id == UserCompany.user_id,
+                    ActivityEmailPreference.company_id == UserCompany.company_id,
+                ),
+            )
+            .where(
+                UserCompany.company_id == company_id,
+                UserCompany.deleted_at.is_(None),
+                Role.name.in_(ROLES_ACOTADOS),
+            )
+        )
+        if user_ids is not None:
+            stmt = stmt.where(Users.id.in_(user_ids) if user_ids else false())
+        if q:
+            like = f"%{q}%"
+            stmt = stmt.where(
+                or_(
+                    Users.username.ilike(like),
+                    Users.email.ilike(like),
+                    Users.first_name.ilike(like),
+                    Users.last_name.ilike(like),
+                )
+            )
+        return stmt
+
+    @staticmethod
+    async def _mando(row, *, company_id: int) -> dict:
+        """La fila de un mando con su cobertura: personas que **hoy** están en su
+        rama según la jerarquía (las mismas que tendría su reporte)."""
+        alcance = await alcance_administrativo(company_id=company_id, actor_user_id=row.user_id)
+        cobertura = 0 if alcance.tenant else len(alcance.actuales - {row.user_id})
+        motivo = None
+        if not (row.platform_active and row.membership_active):
+            motivo = "inactive"
+        elif not correo_valido(row.email):
+            motivo = "invalid_email"
+        elif cobertura == 0:
+            motivo = "no_team"
+        return {
+            "user_id": row.user_id,
+            "first_name": row.first_name,
+            "last_name": row.last_name,
+            "email": row.email,
+            "role_name": ROUTE_PRODUCT_ROLE_LABELS.get(row.role_name, row.role_name),
+            "coverage": cobertura,
+            "strategic_midday_enabled": bool(row.strategic_midday_enabled),
+            "strategic_end_of_day_enabled": bool(row.strategic_end_of_day_enabled),
+            "eligible": motivo is None,
+            "ineligible_reason": motivo,
+            "version": row.version,
+        }
+
+    @classmethod
+    async def list_strategic_recipients(
+        cls, *, company_id: int, actor_user_id: int, q: str | None, page: int, page_size: int
+    ) -> tuple[list[dict], int]:
+        d = await delegada.delegacion(company_id=company_id, actor_user_id=actor_user_id)
+        alcance = await delegada.gestionables(d, company_id=company_id)
+        stmt = cls._consulta_mandos(company_id=company_id, user_ids=alcance, q=q)
+        async with db_session() as session:
+            total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
+            filas = (
+                await session.execute(
+                    stmt.order_by(Users.first_name, Users.last_name, Users.id)
+                    .offset((page - 1) * page_size)
+                    .limit(page_size)
+                )
+            ).all()
+        return [await cls._mando(f, company_id=company_id) for f in filas], int(total or 0)
+
+    @classmethod
+    async def _mando_gestionable(cls, *, company_id: int, actor_user_id: int, user_id: int) -> dict:
+        d = await delegada.delegacion(company_id=company_id, actor_user_id=actor_user_id)
+        await delegada.exigir_objetivo(d, company_id=company_id, user_id=user_id)
+        stmt = cls._consulta_mandos(company_id=company_id, user_ids=None, q=None)
+        async with db_session() as session:
+            fila = (await session.execute(stmt.where(Users.id == user_id))).first()
+        if fila is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Manager not found for this company")
+        return await cls._mando(fila, company_id=company_id)
+
+    @classmethod
+    async def update_strategic_recipient(
+        cls,
+        *,
+        company_id: int,
+        actor_user_id: int,
+        user_id: int,
+        strategic_midday_enabled: bool | None,
+        strategic_end_of_day_enabled: bool | None,
+        version: int,
+    ) -> dict:
+        if strategic_midday_enabled is None and strategic_end_of_day_enabled is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="No changes to apply")
+        actual = await cls._mando_gestionable(company_id=company_id, actor_user_id=actor_user_id, user_id=user_id)
+        if (strategic_midday_enabled or strategic_end_of_day_enabled) and not actual["eligible"]:
+            motivo = {
+                "inactive": "This manager is not active in this company.",
+                "invalid_email": "This manager has no valid email address. Correct it in Users first.",
+                "no_team": "This manager has nobody in their branch to report on.",
+            }[actual["ineligible_reason"]]
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=motivo)
+        await cls._guardar_preferencias(
+            company_id=company_id,
+            actor_user_id=actor_user_id,
+            user_id=user_id,
+            cambios={
+                "strategic_midday_enabled": strategic_midday_enabled,
+                "strategic_end_of_day_enabled": strategic_end_of_day_enabled,
+            },
+            version=version,
+        )
+        return await cls._mando_gestionable(company_id=company_id, actor_user_id=actor_user_id, user_id=user_id)

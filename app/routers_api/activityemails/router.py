@@ -28,6 +28,8 @@ from app.routers_api.activityemails.schemas import (
     ActivityEmailTestSend,
     ActivityEmailTestTargets,
     RecipientsPaginationParams,
+    StrategicRecipientRead,
+    StrategicRecipientUpdate,
 )
 from app.routers_api.activityemails import envio_de_prueba
 from app.routers_api.activityemails.service import ActivityEmailService
@@ -149,6 +151,54 @@ async def update_recipient(
         version=payload.version,
     )
     return ActivityEmailRecipientRead.model_validate(fila)
+
+
+@router.get("/strategic-recipients")
+async def list_strategic_recipients(
+    request: Request,
+    params: RecipientsPaginationParams = Depends(),
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_GESTIONAR),
+    company: TenantContext = Depends(get_company_required),
+) -> schema.PaginatedResponse[StrategicRecipientRead]:
+    """Los mandos (CEO, COO, RM) que quien llama puede gestionar, con su
+    cobertura real y sus dos interruptores estratégicos."""
+    filas, total = await ActivityEmailService.list_strategic_recipients(
+        company_id=company.id,
+        actor_user_id=current_user.id,
+        q=params.q,
+        page=params.page,
+        page_size=params.page_size,
+    )
+    paginator = Paginator(
+        total_items=total,
+        page=params.page,
+        page_size=params.page_size,
+        results=[StrategicRecipientRead.model_validate(f) for f in filas],
+        request=request,
+    )
+    return schema.PaginatedResponse[StrategicRecipientRead](**paginator.to_response())
+
+
+@router.put("/strategic-recipients/{user_id}")
+async def update_strategic_recipient(
+    user_id: int,
+    payload: StrategicRecipientUpdate,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_GESTIONAR),
+    company: TenantContext = Depends(get_company_required),
+) -> StrategicRecipientRead:
+    """Uno o los dos interruptores estratégicos de **un** mando. No da al mando
+    ningún permiso nuevo ni cambia sus correos motivacionales."""
+    fila = await ActivityEmailService.update_strategic_recipient(
+        company_id=company.id,
+        actor_user_id=current_user.id,
+        user_id=user_id,
+        strategic_midday_enabled=payload.strategic_midday_enabled,
+        strategic_end_of_day_enabled=payload.strategic_end_of_day_enabled,
+        version=payload.version,
+    )
+    return StrategicRecipientRead.model_validate(fila)
 
 
 @router.get("/test-targets")

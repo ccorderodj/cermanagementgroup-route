@@ -42,8 +42,12 @@ def test_sin_actividades_no_hay_correo():
         assert "No activities, no email." in content.spec(tipo).send_condition
 
 
-def test_solo_dos_tipos():
-    assert set(ActivityEmailType.values()) == {"midday_motivation", "end_of_day_recognition"}
+def test_cuatro_tipos_cerrados():
+    """Dos motivacionales (RTE-NOT-01) y dos reportes estratégicos (V1.2)."""
+    assert set(ActivityEmailType.values()) == {
+        "midday_motivation", "end_of_day_recognition",
+        "strategic_midday_report", "strategic_end_of_day_report",
+    }
 
 
 @pytest.mark.parametrize(

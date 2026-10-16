@@ -85,4 +85,8 @@ class ActivityEmailPreference(TimeStampedModel, VersionedMixin):
     user_id = Column(Integer, nullable=False, index=True)
     midday_enabled = Column(Boolean, nullable=False, server_default=text("false"))
     end_of_day_enabled = Column(Boolean, nullable=False, server_default=text("false"))
+    #: Reportes estratégicos (V1.2): independientes de los motivacionales y,
+    #: como ellos, apagados. Sólo se pueden activar para un mando con equipo.
+    strategic_midday_enabled = Column(Boolean, nullable=False, server_default=text("false"))
+    strategic_end_of_day_enabled = Column(Boolean, nullable=False, server_default=text("false"))
     updated_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)

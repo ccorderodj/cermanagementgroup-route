@@ -1,8 +1,8 @@
 """T0 en el navegador (RTE-MAIL-UNIFIED-01, CP1): la prueba del proveedor.
 
 En Platform › Integrations & Settings, el paso Verify de «Outbound email»
-ofrece **Verify** y **Send Test Email** por separado, y el destino de la prueba
-se elige de los buzones que da el servidor: no hay campo de dirección libre.
+ofrece **Verify** y **Send Test Email** por separado, y el administrador de
+plataforma escribe la dirección de la prueba (V1.2), precargada con la suya.
 Captura en `var/screenshots/mail-provider-test/`.
 """
 
@@ -24,7 +24,7 @@ DESTINO = pathlib.Path("var/screenshots/mail-provider-test")
 
 
 @pytest.mark.parametrize("viewport", [ESCRITORIO, MOVIL], ids=["escritorio", "movil"])
-async def test_t0_buzones_aprobados_sin_destino_libre(seeded, alpha_client, live_server, viewport):
+async def test_t0_destino_editable(seeded, alpha_client, live_server, viewport):
     from playwright.async_api import async_playwright
 
     DESTINO.mkdir(parents=True, exist_ok=True)
@@ -43,8 +43,11 @@ async def test_t0_buzones_aprobados_sin_destino_libre(seeded, alpha_client, live
 
             await expect(hoja.get_by_role("button", name="Verify", exact=True)).to_be_visible(timeout=10_000)
             await expect(hoja.get_by_role("button", name="Send Test Email")).to_be_visible()
-            await expect(hoja.get_by_role("radio", name=propio)).to_be_checked(timeout=10_000)
-            await expect(hoja.get_by_role("textbox", name="Test recipient")).to_have_count(0)
+            # V1.2: campo editable, precargado con el propio correo.
+            campo = hoja.get_by_label("Test recipient")
+            await expect(campo).to_have_value(propio, timeout=10_000)
+            await campo.fill("externo.qa@otro-dominio.com")
+            await expect(campo).to_have_value("externo.qa@otro-dominio.com")
             # Sin proveedor guardado, no se puede mandar.
             await expect(hoja.get_by_role("button", name="Send Test Email")).to_be_disabled()
             tipo = "movil" if viewport is MOVIL else "escritorio"

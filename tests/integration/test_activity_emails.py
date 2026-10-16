@@ -109,7 +109,8 @@ async def test_nacen_con_el_texto_aprobado(seeded, alpha_client):
     await _conceder(seeded, "route_admin")
     await _como(alpha_client, seeded, "route_admin")
     t = await _plantillas(alpha_client)
-    assert set(t) == {MEDIODIA, FIN}
+    assert set(t) == {MEDIODIA, FIN, "strategic_midday_report", "strategic_end_of_day_report"}
+    assert t[MEDIODIA]["group"] == t[FIN]["group"] == "motivational"
     for tipo in (MEDIODIA, FIN):
         s = content.spec(tipo)
         assert t[tipo]["subject"] == s.default_subject

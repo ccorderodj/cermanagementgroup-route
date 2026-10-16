@@ -64,8 +64,8 @@ async def enviar_prueba(*, company_id: int, actor_user_id: int, template_type: s
         destination=destino,
     )
 
-    asunto = politica.asunto(content.render(plantilla["subject"], content.SAMPLE_VALUES))
-    cuerpo = politica.BANNER + content.render(plantilla["body"], content.SAMPLE_VALUES)
+    asunto = politica.asunto(content.render(plantilla["subject"], content.sample_values(template_type)))
+    cuerpo = politica.BANNER + content.render(plantilla["body"], content.sample_values(template_type))
     error = None
     backend = None
     try:

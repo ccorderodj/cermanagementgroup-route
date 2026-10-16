@@ -8,6 +8,22 @@ import {
 import { TemplateEditor } from './TemplateEditor';
 import { RecipientsTab } from './RecipientsTab';
 
+/** Los dos grupos de plantillas, en este orden. */
+const GRUPOS = [
+    {
+        group: 'motivational',
+        title: 'Motivational Emails',
+        description: 'Short, friendly reminders for each person about their own activity.',
+    },
+    {
+        group: 'strategic',
+        title: 'Strategic Activity Reports',
+        description:
+            'Team reports for managers: one block per authorized person and, at the end of the day, '
+            + 'the Team Weekly Summary. Real activity notes are not included until the notes policy is approved.',
+    },
+] as const;
+
 /**
  * Configuración de los correos de actividad (RTE-NOT-01): Templates y
  * Recipients.
@@ -93,19 +109,25 @@ export function ActivityEmailsPanel() {
                             <Button type="button" variant="outline" size="sm" onClick={load}>Retry</Button>
                         </div>
                     )}
-                    {!error && templates.length > 0 && (
-                        <div className="grid gap-4 xl:grid-cols-2">
-                            {templates.map((t) => (
-                                <TemplateEditor
-                                    key={t.template_type}
-                                    template={t}
-                                    onSaved={onSaved}
-                                    onReload={load}
-                                    onDirtyChange={onDirtyChange}
-                                />
-                            ))}
-                        </div>
-                    )}
+                    {!error && templates.length > 0 && GRUPOS.map((g) => (
+                        <section key={g.group} className="mb-8 space-y-3" aria-label={g.title}>
+                            <div>
+                                <h3 className="text-base font-semibold">{g.title}</h3>
+                                <p className="text-sm text-muted-foreground">{g.description}</p>
+                            </div>
+                            <div className="grid gap-4 xl:grid-cols-2">
+                                {templates.filter((t) => t.group === g.group).map((t) => (
+                                    <TemplateEditor
+                                        key={t.template_type}
+                                        template={t}
+                                        onSaved={onSaved}
+                                        onReload={load}
+                                        onDirtyChange={onDirtyChange}
+                                    />
+                                ))}
+                            </div>
+                        </section>
+                    ))}
                 </TabsContent>
 
                 <TabsContent value="recipients">

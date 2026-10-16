@@ -287,7 +287,7 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
         setBusy('test');
         setServerError('');
         setTestResult(null);
-        const accion = await dispatch(sendTestEmail({ key: integration.key, to: testTo }));
+        const accion = await dispatch(sendTestEmail({ key: integration.key, to: testTo.trim() }));
         setBusy(null);
         if (sendTestEmail.fulfilled.match(accion)) {
             setTestResult(accion.payload);
@@ -642,41 +642,36 @@ export const IntegrationGuideSheet = ({ integration, initialStep = 0, onOpenChan
                                     <h3 id="guide-test-title" className="text-sm font-semibold">Send a test message</h3>
                                     <p className="text-xs text-muted-foreground">
                                         Verify signs in without sending. Send Test Email sends one real message, marked [TEST],
-                                        through this provider only (never the fallback), to an approved test mailbox.
+                                        through this provider only (never the fallback), to the address you enter.
                                     </p>
-                                    {testTargets && testTargets.recipients.length === 0 && (
-                                        <p className="text-sm text-muted-foreground">
-                                            No approved test mailbox: your account has no valid email and MAIL_TEST_RECIPIENTS is empty.
-                                        </p>
-                                    )}
-                                    {testTargets && testTargets.recipients.length > 0 && (
-                                        <fieldset className="flex flex-col gap-1.5">
-                                            <legend className="mb-1 text-sm font-medium">Test mailbox</legend>
-                                            {testTargets.recipients.map((r, i) => (
-                                                <label key={r} htmlFor={`t0-${integration.key}-${i}`} className="flex items-center gap-2 text-sm">
-                                                    <input
-                                                        id={`t0-${integration.key}-${i}`}
-                                                        type="radio"
-                                                        name={`t0-${integration.key}`}
-                                                        value={r}
-                                                        checked={testTo === r}
-                                                        onChange={() => setTestTo(r)}
-                                                        className="size-4 accent-primary"
-                                                    />
-                                                    <span className="break-all">{r}</span>
-                                                </label>
+                                    <div className="flex flex-col gap-1.5">
+                                        <Label htmlFor={`t0-${integration.key}-to`}>Test recipient</Label>
+                                        <Input
+                                            id={`t0-${integration.key}-to`}
+                                            type="email"
+                                            autoComplete="email"
+                                            list={`t0-${integration.key}-suggestions`}
+                                            placeholder="name@company.com"
+                                            value={testTo}
+                                            onChange={(e) => setTestTo(e.target.value)}
+                                        />
+                                        <datalist id={`t0-${integration.key}-suggestions`}>
+                                            {testTargets?.recipients.map((r) => (
+                                                <option key={r} value={r} aria-label={r} />
                                             ))}
+                                        </datalist>
+                                        {testTargets && (
                                             <p className="text-xs text-muted-foreground">
-                                                {`Up to ${testTargets.limit} tests every ${testTargets.window_minutes} minutes, `
-                                                    + 'shared with the Activity Emails tests.'}
+                                                {`One address. Up to ${testTargets.limit} tests every `
+                                                    + `${testTargets.window_minutes} minutes, shared with the Activity Emails tests.`}
                                             </p>
-                                        </fieldset>
-                                    )}
+                                        )}
+                                    </div>
                                     <div>
                                         <Button
                                             type="button"
                                             variant="outline"
-                                            disabled={!testTo || !guardadoEsEste || busy !== null}
+                                            disabled={!testTo.trim() || !guardadoEsEste || busy !== null}
                                             onClick={sendTest}
                                         >
                                             {busy === 'test' && <Loader2 className="mr-2 size-4 animate-spin" aria-hidden="true" />}
