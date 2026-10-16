@@ -26,7 +26,7 @@ from app.config import settings
 from app.core.db.session import transaction
 from app.core.email import backends as email_backends
 from app.core.email import politica_de_prueba as politica
-from app.core.email.models import MailTestChannel, MailTestOutcome
+from app.core.email.models import MailTestChannel
 from app.core.platform import diagnostics, readiness
 from app.core.platform import providers as provider_defs
 from app.core.platform.audit import record_platform_event
@@ -267,23 +267,25 @@ async def send_test_message(
         sender=backend.sender or "",
         headers={politica.CABECERA: f"provider; {key}"},
     )
+    paso = None
     try:
         await asyncio.to_thread(backend.send, mensaje)
         resultado = politica.resultado_de(backend.name)
         error = None
-    except email_backends.EmailAuthFailed:
-        resultado, error = MailTestOutcome.FAILED_AUTH.value, "The mail provider rejected the configured credentials."
-    except email_backends.EmailUnreachable:
-        resultado, error = MailTestOutcome.FAILED_UNREACHABLE.value, "The mail provider could not be reached."
+    except email_backends.EmailFailure as exc:
+        resultado, paso, error = politica.fallo(exc)
     await politica.cerrar(fila, outcome=resultado, backend=backend.name)
     # Metadatos sin el texto del proveedor: puede repetir identificadores.
     await record_platform_event(
         request=request, actor=admin,
         action="email.test_failed" if error else "email.test_sent",
         target=f"integration:{key}",
-        changes={"to": destino, "outcome": resultado, "backend": backend.name},
+        changes={"to": destino, "outcome": resultado, "backend": backend.name, "step": paso},
     )
     if error:
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail={"outcome": resultado, "message": error})
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={"outcome": resultado, "step": paso, "message": error},
+        )
     return {"outcome": resultado, "to": destino, "backend": backend.name, "delivered_confirmed": False}
 

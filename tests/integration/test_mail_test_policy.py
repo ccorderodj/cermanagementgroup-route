@@ -133,6 +133,9 @@ async def test_t0_credenciales_malas_sin_filtrar(seeded, alpha_client, buzon, mo
     r = await alpha_client.post(T0.format("email"), json={"to": BUZON})
     assert r.status_code == 502
     assert r.json()["detail"]["outcome"] == "failed_auth"
+    # El paso, y un mensaje fijo que dice qué revisar (incidente 16-10-2026).
+    assert r.json()["detail"]["step"] == "smtp_auth_rejected"
+    assert "SMTP.SendAsApp" in r.json()["detail"]["message"]
     for secreto in ("AADSTS", "invalid_client", "abc123", "xyz"):
         assert secreto not in r.text
     eventos = await _filas(
@@ -181,3 +184,35 @@ async def test_test_una_sola_vez_en_el_asunto(seeded, alpha_client, buzon, outbo
     assert r.status_code == 200
     assert r.json()["subject"] == "[TEST] Hola María"
     assert r.json()["backend"] == "memory"
+
+
+class _EntraQueNoContesta(backends.EmailBackend):
+    name = "m365_oauth"
+    sender = "no-reply@cer-test.example.com"
+
+    def check(self):
+        raise backends.EmailUnreachable("raw: login.microsoftonline.com read timed out", step="token_timeout")
+
+    def send(self, message):
+        self.check()
+
+
+async def test_verify_y_t0_dicen_el_paso_que_falla(seeded, alpha_client, buzon, monkeypatch):
+    """Incidente 16-10-2026: Verify y T0 se colgaban (504) y la pantalla decía
+    «Something went wrong». Ahora responden con el paso, sin texto del proveedor."""
+    monkeypatch.setattr(backends, "backend_from_platform_config", lambda key="email": _EntraQueNoContesta())
+    await _como_plataforma(seeded, alpha_client)
+
+    r = await alpha_client.post("/api/platform/diagnostics/email/run")
+    assert r.status_code == 200, r.text
+    assert r.json()["status"] == "unreachable"
+    assert r.json()["detail"] == "Microsoft Entra ID did not answer the token request in time."
+
+    r = await alpha_client.post(T0.format("email"), json={"to": BUZON})
+    assert r.status_code == 502
+    assert r.json()["detail"] == {
+        "outcome": "failed_unreachable",
+        "step": "token_timeout",
+        "message": "Microsoft Entra ID did not answer the token request in time.",
+    }
+    assert "raw:" not in r.text

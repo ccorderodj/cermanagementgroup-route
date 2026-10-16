@@ -210,6 +210,8 @@ def test_a_rejected_cloudmersive_key_is_reported_without_releasing_anything():
 
 class _SmtpFalso:
     ultimo = None
+    #: Sin socket real: el plazo no tiene nada que ajustar.
+    sock = None
 
     def __init__(self, host, port, timeout):
         self.host, self.port, self.pasos = host, port, []
@@ -239,8 +241,9 @@ class _SmtpFalso:
 
 def _m365(monkeypatch, resultado_token):
     class _AppFalsa:
-        def __init__(self, client_id, authority, client_credential):
+        def __init__(self, client_id, authority, client_credential, timeout=None):
             _AppFalsa.args = (client_id, authority, client_credential)
+            _AppFalsa.timeout = timeout
 
         def acquire_token_for_client(self, scopes):
             _AppFalsa.scopes = scopes
@@ -249,7 +252,8 @@ def _m365(monkeypatch, resultado_token):
     import msal
 
     monkeypatch.setattr(msal, "ConfidentialClientApplication", _AppFalsa)
-    monkeypatch.setattr(backends.smtplib, "SMTP", _SmtpFalso)
+    # La conexión se abre en un solo sitio (`_abrir`, con el plazo total).
+    monkeypatch.setattr(backends, "_abrir", lambda clase, host, port, plazo: _SmtpFalso(host, port, None))
     backend = backends.M365OAuthEmailBackend(
         tenant_id="8a3c1f52-4b7e-4d19-9c0a-2f61d8e0b7a4",
         client_id="c41e97d0-6a28-4f3b-8e55-91b0d2a7c613",
@@ -265,6 +269,7 @@ def test_m365_authenticates_with_the_exact_xoauth2_string(monkeypatch):
 
     assert app.args[1] == "https://login.microsoftonline.com/8a3c1f52-4b7e-4d19-9c0a-2f61d8e0b7a4"
     assert app.scopes == ["https://outlook.office365.com/.default"]
+    assert 0 < app.timeout <= backends.TOKEN_TIMEOUT_SECONDS, "el token tiene límite"
     pasos = _SmtpFalso.ultimo.pasos
     assert pasos[:3] == ["ehlo", "starttls", "ehlo"], "STARTTLS antes de autenticar"
     assert pasos[3] == (
