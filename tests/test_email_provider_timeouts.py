@@ -13,6 +13,7 @@ error dice **en qué paso** falló y que el texto del proveedor no sale.
 from __future__ import annotations
 
 import socket
+import ssl
 import threading
 import time
 
@@ -175,3 +176,75 @@ def test_describir_es_fijo_y_seguro(paso, codigo, esperado):
     texto = backends.describir(exc)
     assert esperado in texto
     assert "secret=abc" not in texto and "AADSTS" not in texto and "<script>" not in texto
+
+
+@pytest.fixture
+def servidor_con_starttls():
+    """Un servidor SMTP mínimo que ofrece STARTTLS y después no sabe TLS.
+
+    Basta para que el cliente llegue a envolver el socket: ahí es donde, sin
+    nombre de servidor, `ssl` lanzaba `ValueError` (incidente 16-10-2026).
+    """
+    escucha = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    escucha.bind(("127.0.0.1", 0))
+    escucha.listen(4)
+    parar = threading.Event()
+
+    def atender():
+        escucha.settimeout(0.2)
+        while not parar.is_set():
+            try:
+                conexion, _ = escucha.accept()
+            except OSError:
+                continue
+            conexion.settimeout(2)
+            try:
+                conexion.sendall(b"220 prueba ESMTP\r\n")
+                lector = conexion.makefile("rb")
+                while True:
+                    linea = lector.readline()
+                    if not linea:
+                        break
+                    orden = linea.strip().upper()
+                    if orden.startswith(b"EHLO"):
+                        conexion.sendall(b"250-prueba\r\n250 STARTTLS\r\n")
+                    elif orden == b"STARTTLS":
+                        conexion.sendall(b"220 adelante\r\n")
+                        # Responde al saludo TLS con basura y corta.
+                        conexion.sendall(b"no es tls\r\n")
+                        break
+                    else:
+                        conexion.sendall(b"250 ok\r\n")
+            except OSError:
+                pass
+            finally:
+                conexion.close()
+
+    hilo = threading.Thread(target=atender, daemon=True)
+    hilo.start()
+    yield escucha.getsockname()[1]
+    parar.set()
+    hilo.join(timeout=1)
+    escucha.close()
+
+
+def test_starttls_usa_el_nombre_del_servidor(servidor_con_starttls, monkeypatch):
+    """El TLS se negocia con el nombre del servidor (SNI), no con uno vacío.
+
+    Antes de corregirlo esto era un `ValueError` sin traducir → 500. Ahora el
+    cliente llega al saludo TLS, el servidor de prueba no sabe TLS, y el fallo
+    es uno del proveedor con su paso.
+    """
+    nombres = []
+    original = ssl.SSLContext.wrap_socket
+
+    def espia(self, sock, *a, server_hostname=None, **k):
+        nombres.append(server_hostname)
+        return original(self, sock, *a, server_hostname=server_hostname, **k)
+
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", espia)
+    with pytest.raises(backends.EmailUnreachable) as fallo:
+        _smtp(servidor_con_starttls).check()
+    assert nombres == ["127.0.0.1"]
+    assert fallo.value.step in ("smtp_unreachable", "smtp_timeout")
+

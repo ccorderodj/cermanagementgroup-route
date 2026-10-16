@@ -238,6 +238,11 @@ class _SMTP_SSL(smtplib.SMTP_SSL):
 def _abrir(clase, host: str, port: int, plazo: _Plazo) -> smtplib.SMTP:
     smtp = clase(timeout=SMTP_TIMEOUT_SECONDS)
     smtp.plazo = plazo
+    # `smtplib` sólo guarda el nombre del servidor en `__init__`, no en
+    # `connect()`; STARTTLS y TLS lo usan para validar el certificado (SNI).
+    # Sin esto el TLS se intentaba con un nombre vacío (`ValueError`,
+    # incidente 16-10-2026 en DigitalOcean).
+    smtp._host = host
     smtp.connect(host, port)
     return smtp
 
