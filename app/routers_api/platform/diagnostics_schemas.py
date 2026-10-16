@@ -64,4 +64,7 @@ class VerifyRead(BaseModel):
 
 
 class TestMessageWrite(BaseModel):
+    # Sin campos extra: un `cc` o `bcc` se rechaza (422), no se ignora.
+    model_config = ConfigDict(extra="forbid")
+
     to: EmailStr

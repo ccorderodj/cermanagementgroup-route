@@ -178,3 +178,22 @@ export interface PlatformSettingsSchema {
     isLoading: boolean;
     error?: string;
 }
+
+/** Buzones a los que se puede mandar la prueba del proveedor (T0). */
+export const emailTestTargetsSchema = z.object({
+    recipients: z.array(z.string()),
+    limit: z.number(),
+    window_minutes: z.number(),
+});
+
+export type EmailTestTargets = z.infer<typeof emailTestTargetsSchema>;
+
+/** Resultado de T0. `delivered_confirmed` es siempre `false`. */
+export const emailTestResultSchema = z.object({
+    outcome: z.enum(['accepted_by_provider', 'not_sent_development_backend', 'captured_by_test_backend']),
+    to: z.string(),
+    backend: z.string(),
+    delivered_confirmed: z.literal(false),
+});
+
+export type EmailTestResult = z.infer<typeof emailTestResultSchema>;

@@ -72,6 +72,7 @@ export const activityEmailTestResultSchema = z.object({
     outcome: z.enum(['accepted_by_provider', 'not_sent_development_backend', 'captured_by_test_backend']),
     to: z.string(),
     subject: z.string(),
+    backend: z.string().nullable(),
     delivered_confirmed: z.literal(false),
 });
 

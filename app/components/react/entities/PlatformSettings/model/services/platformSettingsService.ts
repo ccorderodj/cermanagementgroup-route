@@ -6,6 +6,8 @@ import { normalizeApiError, parseApi } from '@/shared/api';
 import {
     checkRunSchema,
     checkSchema,
+    emailTestResultSchema,
+    emailTestTargetsSchema,
     integrationSchema,
     platformAuditSchema,
     policySchema,
@@ -14,6 +16,8 @@ import {
     verifyResultSchema,
     type Check,
     type CheckRun,
+    type EmailTestResult,
+    type EmailTestTargets,
     type Integration,
     type PlatformAudit,
     type Policy,
@@ -35,6 +39,10 @@ function detailMessage(error: unknown): string {
     const detail = (error as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
     if (Array.isArray(detail) && detail.every((d) => typeof d === 'string')) {
         return detail.join(' ');
+    }
+    // Las pruebas de correo responden `{ outcome, message }`.
+    if (detail && typeof detail === 'object' && 'message' in detail) {
+        return String((detail as { message: unknown }).message);
     }
     return normalizeApiError(error).message;
 }
@@ -168,16 +176,30 @@ export const verifyIntegration = createAsyncThunk<VerifyChange, string, ThunkCon
     },
 );
 
+/** Buzones de prueba permitidos para T0: el propio y `MAIL_TEST_RECIPIENTS`. */
+export const fetchEmailTestTargets = createAsyncThunk<EmailTestTargets, string, ThunkConfig<string>>(
+    'platformSettings/fetchEmailTestTargets',
+    async (key, { extra, rejectWithValue }) => {
+        try {
+            const response = await extra.api.get(`${PLATFORM}/integrations/${key}/test-targets`);
+            return parseApi(emailTestTargetsSchema, response.data, 'emailTestTargets');
+        } catch (error) {
+            return rejectWithValue(detailMessage(error));
+        }
+    },
+);
+
+/** T0: una prueba del proveedor elegido, sin respaldo oculto. */
 export const sendTestEmail = createAsyncThunk<
-{ to: string },
+EmailTestResult,
 { key: string; to: string },
 ThunkConfig<string>
 >(
     'platformSettings/sendTestEmail',
     async (arg, { extra, rejectWithValue }) => {
         try {
-            await extra.api.post(`${PLATFORM}/integrations/${arg.key}/test-message`, { to: arg.to });
-            return { to: arg.to };
+            const response = await extra.api.post(`${PLATFORM}/integrations/${arg.key}/test-message`, { to: arg.to });
+            return parseApi(emailTestResultSchema, response.data, 'sendTestEmail');
         } catch (error) {
             return rejectWithValue(detailMessage(error));
         }
