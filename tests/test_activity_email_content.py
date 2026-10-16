@@ -36,6 +36,12 @@ def test_los_textos_aprobados_son_validos_y_literales():
     assert "{{week_activity_block}}" in content.spec(FIN).default_body
 
 
+def test_sin_actividades_no_hay_correo():
+    """Decisión del PO (16-10-2026): ningún tipo se envía sin actividades completadas."""
+    for tipo in (MEDIODIA, FIN):
+        assert "No activities, no email." in content.spec(tipo).send_condition
+
+
 def test_solo_dos_tipos():
     assert set(ActivityEmailType.values()) == {"midday_motivation", "end_of_day_recognition"}
 

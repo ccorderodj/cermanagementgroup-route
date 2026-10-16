@@ -21,6 +21,14 @@ no se puede inyectar.
 Las variables nunca llevan datos sensibles (BR-06): ni ubicaciones, ni millas,
 ni clientes, ni empleados, ni horas exactas, ni rankings. Sólo el nombre de pila
 y bloques de recuento por categoría.
+
+Sin actividades, no hay correo
+------------------------------
+Decisión del PO (16-10-2026): si la persona no ha completado ninguna actividad,
+**no se le envía** el correo; no se manda una versión «sin recuento». Mediodía
+cuenta las completadas hasta las 12:00 de ese día; fin de jornada, las de la
+jornada cerrada. `TemplateSpec.send_condition` lo dice en pantalla y es el
+contrato del motor de envío (RTE-NOT-02/03), que es quien lo aplicará.
 """
 
 from __future__ import annotations
@@ -58,6 +66,8 @@ class TemplateSpec:
     body_tokens: tuple[str, ...]
     #: Las que el cuerpo no puede perder (BR-07).
     required_tokens: tuple[str, ...]
+    #: Cuándo se envía (y cuándo no): ver «Sin actividades, no hay correo».
+    send_condition: str
 
 
 #: Variables que admite el asunto: sólo el nombre. Un bloque de recuento en el
@@ -110,6 +120,10 @@ SPECS: dict[str, TemplateSpec] = {
         default_body=_MIDDAY_BODY,
         body_tokens=("user_first_name", "midday_activity_block"),
         required_tokens=("midday_activity_block",),
+        send_condition=(
+            "Sent only if the person completed at least one activity before noon. "
+            "No activities, no email."
+        ),
     ),
     ActivityEmailType.END_OF_DAY_RECOGNITION: TemplateSpec(
         type=ActivityEmailType.END_OF_DAY_RECOGNITION,
@@ -119,6 +133,10 @@ SPECS: dict[str, TemplateSpec] = {
         default_body=_END_OF_DAY_BODY,
         body_tokens=("user_first_name", "day_activity_block", "week_activity_block"),
         required_tokens=("day_activity_block", "week_activity_block"),
+        send_condition=(
+            "Sent only if the person completed at least one activity during the closed workday. "
+            "No activities, no email."
+        ),
     ),
 }
 
