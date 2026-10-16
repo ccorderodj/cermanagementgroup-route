@@ -145,3 +145,20 @@ async def get_route_standard_values_page(request: Request):
         name="admin/route/standard-values.html",
         context={},
     )
+
+
+@router.get(
+    "/activity-emails",
+    name="RouteActivityEmailsPage",
+    # RTE-NOT-01. La misma capacidad que exigen todos los endpoints de
+    # `/api/activity-emails`: el enlace no lleva a una pantalla que responde 403.
+    dependencies=[
+        Depends(require_page_permissions(["route.activityemails.manage"]))
+    ],
+)
+async def get_route_activity_emails_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/activity-emails.html",
+        context={},
+    )
