@@ -206,7 +206,12 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                     <p className="mt-2 text-xs text-muted-foreground">
                         Plain text only: no HTML or links. The subject accepts
                         {' '}
-                        <code className="text-xs">{'{{user_first_name}}'}</code>
+                        {template.subject_tokens.map((t, i) => (
+                            <span key={t}>
+                                {i > 0 && ', '}
+                                <code className="text-xs">{`{{${t}}}`}</code>
+                            </span>
+                        ))}
                         .
                     </p>
                 </div>
@@ -254,7 +259,7 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
             </CardContent>
 
             <Dialog open={preview !== null} onOpenChange={(open) => !open && setPreview(null)}>
-                <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-[560px]">
+                <DialogContent className="w-[calc(100vw-2rem)] sm:max-w-[720px]">
                     <DialogHeader>
                         <DialogTitle>{preview?.sample_label}</DialogTitle>
                         <DialogDescription>
@@ -268,7 +273,7 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                                 <span className="font-semibold">Subject: </span>
                                 {preview.subject}
                             </p>
-                            <div className="max-h-[50vh] overflow-y-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-sm">
+                            <div className="max-h-[50vh] overflow-auto whitespace-pre-wrap rounded-md border bg-muted/40 p-3 font-mono text-xs">
                                 {preview.body}
                             </div>
                         </div>

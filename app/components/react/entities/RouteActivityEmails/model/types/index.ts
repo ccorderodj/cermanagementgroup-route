@@ -1,7 +1,12 @@
 import { z } from 'zod';
 
-/** Los dos correos aprobados (BR-01). Cerrados: los define el producto. */
-export const ACTIVITY_EMAIL_TYPES = ['midday_motivation', 'end_of_day_recognition'] as const;
+/** Los correos aprobados: dos motivacionales y dos reportes estratégicos. */
+export const ACTIVITY_EMAIL_TYPES = [
+    'midday_motivation',
+    'end_of_day_recognition',
+    'strategic_midday_report',
+    'strategic_end_of_day_report',
+] as const;
 
 export const activityEmailTypeSchema = z.enum(ACTIVITY_EMAIL_TYPES);
 export type ActivityEmailType = z.infer<typeof activityEmailTypeSchema>;
@@ -16,6 +21,7 @@ export type ActivityEmailToken = z.infer<typeof activityEmailTokenSchema>;
 
 export const activityEmailTemplateSchema = z.object({
     template_type: activityEmailTypeSchema,
+    group: z.enum(['motivational', 'strategic']),
     label: z.string(),
     schedule_label: z.string(),
     send_condition: z.string(),
@@ -77,3 +83,20 @@ export const activityEmailTestResultSchema = z.object({
 });
 
 export type ActivityEmailTestResult = z.infer<typeof activityEmailTestResultSchema>;
+
+/** Un mando y sus dos interruptores de reporte estratégico (V1.2). */
+export const strategicRecipientSchema = z.object({
+    user_id: z.number(),
+    first_name: z.string(),
+    last_name: z.string(),
+    email: z.string(),
+    role_name: z.string().nullable(),
+    coverage: z.number(),
+    strategic_midday_enabled: z.boolean(),
+    strategic_end_of_day_enabled: z.boolean(),
+    eligible: z.boolean(),
+    ineligible_reason: z.enum(['inactive', 'invalid_email', 'no_team']).nullable(),
+    version: z.number(),
+});
+
+export type StrategicRecipient = z.infer<typeof strategicRecipientSchema>;

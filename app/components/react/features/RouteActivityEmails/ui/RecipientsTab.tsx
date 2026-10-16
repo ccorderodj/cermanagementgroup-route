@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useState } from 'react';
+import {
+    useCallback, useEffect, useState, type ReactNode,
+} from 'react';
 import { Loader2, Search } from 'lucide-react';
 import {
     Badge,
@@ -11,33 +13,63 @@ import {
     TableHeader,
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
+import type { Paginated } from '@/shared/api';
 import {
     fetchActivityEmailRecipients,
+    fetchStrategicRecipients,
     updateActivityEmailRecipient,
+    updateStrategicRecipient,
     type ActivityEmailRecipient,
+    type StrategicRecipient,
 } from '@/entities/RouteActivityEmails';
 import { readServerProblem } from '../lib/errors';
 import { ToggleSwitch } from './ToggleSwitch';
 
 const PAGE_SIZE = 20;
 
-type Campo = 'midday_enabled' | 'end_of_day_enabled';
+/** Lo común de una fila: persona, correo de la cuenta, elegibilidad y versión. */
+interface Fila {
+    user_id: number;
+    first_name: string;
+    last_name: string;
+    email: string;
+    role_name: string | null;
+    eligible: boolean;
+    ineligible_reason: string | null;
+    version: number;
+}
 
-const MOTIVO: Record<string, string> = {
-    inactive: 'Inactive in this company: cannot receive activity emails.',
-    invalid_email: 'No valid email address. Correct it in Users first.',
-};
+interface Interruptor<R> {
+    campo: keyof R & string;
+    corto: string;
+    largo: string;
+}
+
+interface ListaProps<R extends Fila> {
+    titulo: string;
+    explicacion: string;
+    vacio: string;
+    cargar: (p: { page: number; pageSize: number; q?: string }) => Promise<Paginated<R>>;
+    /** Guarda **un** interruptor; los demás no se envían y no cambian. */
+    guardar: (userId: number, campo: string, valor: boolean, version: number) => Promise<R>;
+    interruptores: Interruptor<R>[];
+    motivos: Record<string, string>;
+    extra?: (row: R) => ReactNode;
+}
 
 /**
- * Quién es elegible para cada correo.
+ * Una lista de destinatarios con sus interruptores.
  *
- * La lista es la del servidor: personas que ejecutan jornada y que quien mira
- * puede gestionar (un manager, sólo su rama). El correo es el de la cuenta y no
- * se edita aquí. Cada interruptor se guarda solo y el otro no cambia; sin
- * correo válido o sin acceso activo, los interruptores quedan bloqueados.
+ * La lista es la del servidor y ya viene acotada a quien mira (un manager, su
+ * rama). El correo es el de la cuenta y no se edita aquí. Cada interruptor se
+ * guarda solo y los demás no cambian; si la persona no es elegible, quedan
+ * bloqueados y se dice por qué.
  */
-export function RecipientsTab() {
-    const [rows, setRows] = useState<ActivityEmailRecipient[]>([]);
+function ListaDeDestinatarios<R extends Fila>(props: ListaProps<R>) {
+    const {
+        titulo, explicacion, vacio, cargar, guardar, interruptores, motivos, extra,
+    } = props;
+    const [rows, setRows] = useState<R[]>([]);
     const [total, setTotal] = useState(0);
     const [page, setPage] = useState(1);
     const [search, setSearch] = useState('');
@@ -51,7 +83,7 @@ export function RecipientsTab() {
         setLoading(true);
         setError(null);
         try {
-            const data = await fetchActivityEmailRecipients({ page, pageSize: PAGE_SIZE, q: query });
+            const data = await cargar({ page, pageSize: PAGE_SIZE, q: query });
             setRows(data.results);
             setTotal(data.count);
         } catch {
@@ -59,7 +91,7 @@ export function RecipientsTab() {
         } finally {
             setLoading(false);
         }
-    }, [page, query]);
+    }, [cargar, page, query]);
 
     useEffect(() => {
         load();
@@ -73,22 +105,15 @@ export function RecipientsTab() {
         return () => window.clearTimeout(t);
     }, [search]);
 
-    const toggle = async (row: ActivityEmailRecipient, campo: Campo, valor: boolean) => {
-        const clave = `${row.user_id}-${campo}`;
-        setSaving(clave);
+    const toggle = async (row: R, campo: string, valor: boolean) => {
+        setSaving(`${row.user_id}-${campo}`);
         setRowError((prev) => ({ ...prev, [row.user_id]: '' }));
         try {
-            const actualizado = await updateActivityEmailRecipient(row.user_id, {
-                [campo]: valor,
-                version: row.version,
-            });
+            const actualizado = await guardar(row.user_id, campo, valor, row.version);
             setRows((prev) => prev.map((r) => (r.user_id === row.user_id ? actualizado : r)));
         } catch (err) {
             const problema = readServerProblem(err, 'The change could not be saved.');
-            setRowError((prev) => ({
-                ...prev,
-                [row.user_id]: problema.message ?? 'The change could not be saved.',
-            }));
+            setRowError((prev) => ({ ...prev, [row.user_id]: problema.message ?? 'The change could not be saved.' }));
             // Un 409 es que el estado guardado ya no es el que se ve: se recarga
             // para enseñar el real antes de que nadie vuelva a intentarlo.
             if (problema.status === 409) await load();
@@ -99,18 +124,18 @@ export function RecipientsTab() {
 
     const paginas = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-    const interruptor = (row: ActivityEmailRecipient, campo: Campo, etiqueta: string) => (
+    const interruptor = (row: R, i: Interruptor<R>) => (
         <ToggleSwitch
-            id={`rcp-${row.user_id}-${campo}`}
-            label={`${etiqueta} for ${row.first_name} ${row.last_name}`}
-            checked={row[campo] && row.eligible}
-            disabled={!row.eligible || saving === `${row.user_id}-${campo}`}
-            onChange={(v) => toggle(row, campo, v)}
+            id={`rcp-${row.user_id}-${i.campo}`}
+            label={`${i.largo} for ${row.first_name} ${row.last_name}`}
+            checked={Boolean(row[i.campo]) && row.eligible}
+            disabled={!row.eligible || saving === `${row.user_id}-${i.campo}`}
+            onChange={(v) => toggle(row, i.campo, v)}
         />
     );
 
-    const aviso = (row: ActivityEmailRecipient) => {
-        const texto = rowError[row.user_id] || (row.ineligible_reason ? MOTIVO[row.ineligible_reason] : '');
+    const aviso = (row: R) => {
+        const texto = rowError[row.user_id] || (row.ineligible_reason ? motivos[row.ineligible_reason] : '');
         if (!texto) return null;
         const esError = Boolean(rowError[row.user_id]);
         return (
@@ -127,17 +152,14 @@ export function RecipientsTab() {
     };
 
     return (
-        <div className="space-y-4">
-            <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">
-                This page sets who will be eligible for each email once automatic sending is enabled.
-                It does not send anything now. Everyone starts with both emails off,
-                and no email is sent on a day without completed activities.
-            </p>
+        <section className="space-y-4" aria-label={titulo}>
+            <h3 className="text-base font-semibold">{titulo}</h3>
+            <p className="rounded-md border bg-muted/40 p-3 text-sm text-muted-foreground">{explicacion}</p>
 
             <div className="relative max-w-sm">
                 <Search className="pointer-events-none absolute left-2.5 top-2.5 size-4 text-muted-foreground" />
                 <Input
-                    aria-label="Search users"
+                    aria-label={`Search ${titulo}`}
                     placeholder="Search by name, username or email"
                     className="pl-8"
                     value={search}
@@ -159,7 +181,7 @@ export function RecipientsTab() {
             )}
             {!loading && !error && rows.length === 0 && (
                 <p className="py-8 text-center text-sm text-muted-foreground">
-                    {query ? 'No users match this search.' : 'There are no users you can manage here.'}
+                    {query ? 'No users match this search.' : vacio}
                 </p>
             )}
             {rows.length > 0 && (
@@ -170,25 +192,24 @@ export function RecipientsTab() {
                                 <TableRow>
                                     <TableHead>User</TableHead>
                                     <TableHead>Email</TableHead>
-                                    <TableHead className="w-28 text-center">Midday</TableHead>
-                                    <TableHead className="w-28 text-center">End of Day</TableHead>
+                                    {interruptores.map((i) => (
+                                        <TableHead key={i.campo} className="w-28 text-center">{i.corto}</TableHead>
+                                    ))}
                                 </TableRow>
                             </TableHeader>
                             <TableBody>
                                 {rows.map((row) => (
-                                    <TableRow key={row.user_id} data-testid={`recipient-${row.user_id}`}>
+                                    <TableRow key={row.user_id}>
                                         <TableCell>
                                             <div className="font-medium">{`${row.first_name} ${row.last_name}`}</div>
                                             <div className="text-xs text-muted-foreground">{row.role_name}</div>
+                                            {extra?.(row)}
                                             {aviso(row)}
                                         </TableCell>
                                         <TableCell className="text-sm">{row.email}</TableCell>
-                                        <TableCell className="text-center">
-                                            {interruptor(row, 'midday_enabled', 'Midday Motivation')}
-                                        </TableCell>
-                                        <TableCell className="text-center">
-                                            {interruptor(row, 'end_of_day_enabled', 'End of Day Recognition')}
-                                        </TableCell>
+                                        {interruptores.map((i) => (
+                                            <TableCell key={i.campo} className="text-center">{interruptor(row, i)}</TableCell>
+                                        ))}
                                     </TableRow>
                                 ))}
                             </TableBody>
@@ -197,20 +218,19 @@ export function RecipientsTab() {
 
                     <ul className="space-y-3 md:hidden">
                         {rows.map((row) => (
-                            <li key={row.user_id} className="space-y-2 rounded-md border p-3" data-testid={`recipient-card-${row.user_id}`}>
+                            <li key={row.user_id} className="space-y-2 rounded-md border p-3">
                                 <div>
                                     <div className="font-medium">{`${row.first_name} ${row.last_name}`}</div>
                                     <div className="break-all text-xs text-muted-foreground">{row.email}</div>
                                     {row.role_name && <Badge variant="secondary" className="mt-1">{row.role_name}</Badge>}
+                                    {extra?.(row)}
                                 </div>
-                                <div className="flex items-center justify-between gap-2">
-                                    <label htmlFor={`rcp-${row.user_id}-midday_enabled`} className="text-sm">Midday</label>
-                                    {interruptor(row, 'midday_enabled', 'Midday Motivation')}
-                                </div>
-                                <div className="flex items-center justify-between gap-2">
-                                    <label htmlFor={`rcp-${row.user_id}-end_of_day_enabled`} className="text-sm">End of Day</label>
-                                    {interruptor(row, 'end_of_day_enabled', 'End of Day Recognition')}
-                                </div>
+                                {interruptores.map((i) => (
+                                    <div key={i.campo} className="flex items-center justify-between gap-2">
+                                        <label htmlFor={`rcp-${row.user_id}-${i.campo}`} className="text-sm">{i.corto}</label>
+                                        {interruptor(row, i)}
+                                    </div>
+                                ))}
                                 {aviso(row)}
                             </li>
                         ))}
@@ -230,6 +250,75 @@ export function RecipientsTab() {
                     </div>
                 </>
             )}
+        </section>
+    );
+}
+
+const MOTIVOS_PERSONA: Record<string, string> = {
+    inactive: 'Inactive in this company: cannot receive activity emails.',
+    invalid_email: 'No valid email address. Correct it in Users first.',
+};
+
+const MOTIVOS_MANDO: Record<string, string> = {
+    ...MOTIVOS_PERSONA,
+    no_team: 'Nobody currently reports to this manager: there is nothing to report.',
+};
+
+const INTERRUPTORES_MOTIVACIONALES: Interruptor<ActivityEmailRecipient>[] = [
+    { campo: 'midday_enabled', corto: 'Midday', largo: 'Midday Motivation' },
+    { campo: 'end_of_day_enabled', corto: 'End of Day', largo: 'End of Day Recognition' },
+];
+
+const INTERRUPTORES_ESTRATEGICOS: Interruptor<StrategicRecipient>[] = [
+    { campo: 'strategic_midday_enabled', corto: 'Midday', largo: 'Strategic Midday Report' },
+    { campo: 'strategic_end_of_day_enabled', corto: 'End of Day', largo: 'Strategic End-of-Day Report' },
+];
+
+const cobertura = (row: StrategicRecipient) => (
+    <div className="text-xs text-muted-foreground">
+        {`Team in report: ${row.coverage} ${row.coverage === 1 ? 'person' : 'people'}`}
+    </div>
+);
+
+const guardarMotivacional = (id: number, campo: string, valor: boolean, version: number) => (
+    updateActivityEmailRecipient(id, { [campo]: valor, version } as Parameters<typeof updateActivityEmailRecipient>[1])
+);
+
+const guardarEstrategico = (id: number, campo: string, valor: boolean, version: number) => (
+    updateStrategicRecipient(id, { [campo]: valor, version } as Parameters<typeof updateStrategicRecipient>[1])
+);
+
+/** Las dos listas, separadas: activar un reporte no toca los motivacionales. */
+export function RecipientsTab() {
+    return (
+        <div className="space-y-8">
+            <ListaDeDestinatarios
+                titulo="Motivational Emails"
+                explicacion={
+                    'Who will be eligible for each motivational email once automatic sending is enabled. '
+                    + 'Nothing is sent now. Everyone starts with both emails off, and no email is sent on a day '
+                    + 'without completed activities.'
+                }
+                vacio="There are no users you can manage here."
+                cargar={fetchActivityEmailRecipients}
+                guardar={guardarMotivacional}
+                interruptores={INTERRUPTORES_MOTIVACIONALES}
+                motivos={MOTIVOS_PERSONA}
+            />
+            <ListaDeDestinatarios
+                titulo="Strategic Activity Reports"
+                explicacion={
+                    'Managers (CEO, COO, Regional Manager) who will receive the team report once automatic sending '
+                    + 'is enabled. The team is the one the hierarchy gives them today; enabling a report grants no '
+                    + 'extra access. Nothing is sent now and everyone starts off.'
+                }
+                vacio="There are no managers you can manage here."
+                cargar={fetchStrategicRecipients}
+                guardar={guardarEstrategico}
+                interruptores={INTERRUPTORES_ESTRATEGICOS}
+                motivos={MOTIVOS_MANDO}
+                extra={cobertura}
+            />
         </div>
     );
 }

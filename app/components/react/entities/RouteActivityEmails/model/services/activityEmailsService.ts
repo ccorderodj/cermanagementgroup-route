@@ -6,12 +6,14 @@ import {
     activityEmailTemplateSchema,
     activityEmailTestResultSchema,
     activityEmailTestTargetsSchema,
+    strategicRecipientSchema,
     type ActivityEmailPreview,
     type ActivityEmailRecipient,
     type ActivityEmailTemplate,
     type ActivityEmailTestResult,
     type ActivityEmailTestTargets,
     type ActivityEmailType,
+    type StrategicRecipient,
 } from '../types';
 
 /**
@@ -85,4 +87,23 @@ export async function sendActivityEmailTest(
 ): Promise<ActivityEmailTestResult> {
     const response = await $api.post(`/activity-emails/templates/${type}/test-send`, { to });
     return parseApi(activityEmailTestResultSchema, response.data, 'sendActivityEmailTest');
+}
+
+export async function fetchStrategicRecipients(params: {
+    page: number;
+    pageSize: number;
+    q?: string;
+}): Promise<Paginated<StrategicRecipient>> {
+    const response = await $api.get('/activity-emails/strategic-recipients', {
+        params: { page: params.page, page_size: params.pageSize, q: params.q || undefined },
+    });
+    return parseApi(paginatedSchema(strategicRecipientSchema), response.data, 'fetchStrategicRecipients');
+}
+
+export async function updateStrategicRecipient(
+    userId: number,
+    input: { strategic_midday_enabled?: boolean; strategic_end_of_day_enabled?: boolean; version: number },
+): Promise<StrategicRecipient> {
+    const response = await $api.put(`/activity-emails/strategic-recipients/${userId}`, input);
+    return parseApi(strategicRecipientSchema, response.data, 'updateStrategicRecipient');
 }

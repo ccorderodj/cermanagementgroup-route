@@ -142,7 +142,7 @@ async def test_recipients_en_movil_sin_desbordar(seeded, alpha_client, live_serv
             # La tabla se oculta en móvil: el interruptor visible es el de la tarjeta.
             tarjeta = page.get_by_role("switch", name="Midday Motivation for Supervisor Tester")
             await expect(tarjeta).to_be_visible(timeout=20_000)
-            await expect(page.get_by_role("table")).to_be_hidden()
+            await expect(page.get_by_role("table").first).to_be_hidden()
             await page.screenshot(path=str(DESTINO / "movil-recipients.png"), full_page=True)
             ancho = await page.evaluate("document.documentElement.scrollWidth")
             assert ancho <= MOVIL["width"], ancho
@@ -202,3 +202,95 @@ async def test_envio_de_prueba_controlado(seeded, alpha_client, live_server):
     )
     assert len(eventos) == 1
     assert eventos[0].changes["to"]["new"] == propio
+
+
+async def test_reportes_estrategicos_en_la_misma_pantalla(seeded, alpha_client, live_server):
+    """V1.2 (CP2/CP3): las plantillas estratégicas en su grupo, su vista previa
+    con el Team Weekly Summary, los interruptores de los mandos y T4."""
+    from playwright.async_api import async_playwright
+
+    from tests.integration.test_org_hierarchy import _organigrama
+
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await _conceder(seeded, "route_admin")
+    ceo = seeded.alpha.users["ceo"]
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=ESCRITORIO)
+            page = await contexto.new_page()
+            await abrir_sesion(page, seeded.alpha.users["route_admin"].email)
+            await page.goto(URL)
+            grupo = page.get_by_role("region", name="Strategic Activity Reports")
+            await expect(grupo).to_be_visible(timeout=20_000)
+            await expect(page.get_by_role("region", name="Motivational Emails")).to_be_visible()
+            cierre = page.get_by_role("region", name="Strategic End-of-Day Report")
+            await expect(cierre.get_by_label("Subject")).to_have_value(
+                "CER Route | Resumen del día y acumulado semanal — {{report_period_label}}"
+            )
+            await cierre.scroll_into_view_if_needed()
+            await page.screenshot(path=str(DESTINO / "escritorio-estrategicos.png"), full_page=True)
+
+            await cierre.get_by_role("button", name="Preview").click()
+            vista = page.get_by_role("dialog")
+            await expect(vista).to_contain_text("Team Weekly Summary")
+            await expect(vista).to_contain_text("Ana Ejemplo")
+            await page.wait_for_timeout(400)
+            await page.screenshot(path=str(DESTINO / "escritorio-preview-t4.png"))
+            await page.keyboard.press("Escape")
+
+            await cierre.get_by_role("button", name="Send test").click()
+            dialogo = page.get_by_role("dialog")
+            await dialogo.get_by_role("button", name="Send test").click()
+            await expect(dialogo.get_by_role("status")).to_contain_text("Nothing left the server", timeout=10_000)
+            await page.keyboard.press("Escape")
+
+            await page.get_by_role("tab", name="Recipients").click()
+            estrategicos = page.get_by_role("region", name="Strategic Activity Reports")
+            interruptor = estrategicos.get_by_role(
+                "switch", name=f"Strategic Midday Report for {ceo.username.split('_', 1)[1].capitalize()} Tester"
+            )
+            await expect(interruptor).to_have_attribute("aria-checked", "false", timeout=20_000)
+            await expect(estrategicos).to_contain_text("Team in report: 8 people")
+            await interruptor.click()
+            await expect(interruptor).to_have_attribute("aria-checked", "true", timeout=10_000)
+            await page.screenshot(path=str(DESTINO / "escritorio-mandos.png"), full_page=True)
+            await contexto.close()
+        finally:
+            await navegador.close()
+
+    pref = (await _filas(
+        "SELECT midday_enabled, strategic_midday_enabled FROM activity_email_preference WHERE user_id = :u",
+        u=ceo.id,
+    ))[0]
+    assert pref.strategic_midday_enabled is True and pref.midday_enabled is False
+    pruebas = await _filas("SELECT target FROM mail_test_send")
+    assert [f.target for f in pruebas] == ["strategic_end_of_day_report"]
+
+
+async def test_estrategicos_en_movil(seeded, alpha_client, live_server):
+    from playwright.async_api import async_playwright
+
+    from tests.integration.test_org_hierarchy import _organigrama
+
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await _conceder(seeded, "route_admin")
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=MOVIL)
+            page = await contexto.new_page()
+            await abrir_sesion(page, seeded.alpha.users["route_admin"].email)
+            await page.goto(URL)
+            await expect(page.get_by_role("region", name="Strategic Midday Report")).to_be_visible(timeout=20_000)
+            await page.get_by_role("tab", name="Recipients").click()
+            await expect(page.get_by_role("region", name="Strategic Activity Reports")).to_contain_text(
+                "Team in report", timeout=20_000
+            )
+            await page.screenshot(path=str(DESTINO / "movil-mandos.png"), full_page=True)
+            assert await page.evaluate("document.documentElement.scrollWidth") <= MOVIL["width"]
+            await contexto.close()
+        finally:
+            await navegador.close()

@@ -12,6 +12,7 @@ export type {
     ActivityEmailTestTargets,
     ActivityEmailToken,
     ActivityEmailType,
+    StrategicRecipient,
 } from './model/types';
 export {
     fetchActivityEmailTemplates,
@@ -22,4 +23,6 @@ export {
     updateActivityEmailRecipient,
     fetchActivityEmailTestTargets,
     sendActivityEmailTest,
+    fetchStrategicRecipients,
+    updateStrategicRecipient,
 } from './model/services/activityEmailsService';

@@ -40,10 +40,21 @@ from app.core.enums import BusinessEnum
 
 
 class ActivityEmailType(BusinessEnum):
-    """Los dos correos aprobados (BR-01). Cerrados: los define el producto."""
+    """Los correos aprobados. Cerrados: los define el producto.
+
+    Dos motivacionales (RTE-NOT-01) y dos reportes estratégicos para mandos
+    (RTE-MAIL-UNIFIED-01 V1.2).
+    """
 
     MIDDAY_MOTIVATION = "midday_motivation"
     END_OF_DAY_RECOGNITION = "end_of_day_recognition"
+    STRATEGIC_MIDDAY_REPORT = "strategic_midday_report"
+    STRATEGIC_END_OF_DAY_REPORT = "strategic_end_of_day_report"
+
+
+class ActivityEmailGroup(BusinessEnum):
+    MOTIVATIONAL = "motivational"
+    STRATEGIC = "strategic"
 
 
 #: Límites del asunto y del cuerpo. El asunto es una sola línea: un salto de
@@ -58,6 +69,7 @@ SAMPLE_LABEL = "Ejemplo / Vista previa"
 @dataclass(frozen=True)
 class TemplateSpec:
     type: ActivityEmailType
+    group: ActivityEmailGroup
     label: str
     schedule_label: str
     default_subject: str
@@ -68,17 +80,29 @@ class TemplateSpec:
     required_tokens: tuple[str, ...]
     #: Cuándo se envía (y cuándo no): ver «Sin actividades, no hay correo».
     send_condition: str
+    #: Variables que admite el asunto.
+    subject_tokens: tuple[str, ...]
+    #: Bloques generados que deben aparecer **una sola vez y en este orden**.
+    ordered_blocks: tuple[str, ...] = ()
 
 
-#: Variables que admite el asunto: sólo el nombre. Un bloque de recuento en el
-#: asunto sería una línea de varias filas.
+#: Variables que admite el asunto de los motivacionales: sólo el nombre. Un
+#: bloque de recuento en el asunto sería una línea de varias filas.
 SUBJECT_TOKENS: tuple[str, ...] = ("user_first_name",)
+#: Las de los reportes estratégicos: el mando y el periodo.
+STRATEGIC_SUBJECT_TOKENS: tuple[str, ...] = ("manager_first_name", "report_period_label")
 
 TOKEN_HELP: dict[str, str] = {
     "user_first_name": "Nombre de pila de la persona (si falta: «colega»)",
     "midday_activity_block": "Resumen breve de las actividades completadas hasta mediodía",
     "day_activity_block": "Resumen breve de las actividades completadas en la jornada",
     "week_activity_block": "Total de actividades completadas en la semana, por categoría general",
+    "manager_first_name": "Nombre de pila del mando que recibe el reporte",
+    "report_period_label": "Fecha del reporte",
+    "report_generated_at": "Momento en que se generó el reporte",
+    "per_person_report": "Un bloque por persona del equipo: desglose del día y detalle de actividades",
+    "team_weekly_summary": "Resumen semanal del equipo, al final, sin contar a nadie dos veces",
+    "week_period_label": "Fechas de la semana del reporte",
 }
 
 _MIDDAY_BODY = """¡Vas haciendo un gran trabajo!
@@ -111,9 +135,36 @@ El trabajo constante construye grandes resultados. Gracias por todo lo que aport
 
 CER Management Group"""
 
+_STRATEGIC_MIDDAY_BODY = """Hola, {{manager_first_name}}:
+
+Compartimos el avance operativo registrado por las personas bajo tu supervisión hasta las 12:00 p. m. de hoy.
+
+{{per_person_report}}
+
+Este reporte refleja únicamente la actividad registrada en CER Route hasta el momento del corte. La información en curso o pendiente de cierre se identifica como tal.
+
+CER Route"""
+
+_STRATEGIC_END_OF_DAY_BODY = """Hola, {{manager_first_name}}:
+
+Compartimos el resumen de las actividades registradas hoy por las personas bajo tu supervisión, junto con su acumulado de la semana.
+
+{{per_person_report}}
+
+{{team_weekly_summary}}
+
+Los datos corresponden a la información registrada y autorizada en CER Route al momento de generar el reporte. Las actividades pendientes de cierre o medición se indican expresamente.
+
+CER Route"""
+
+#: Lo que dice cada reporte estratégico sobre su envío. Las notas reales no
+#: salen por correo hasta DP-NOTES.
+_NOTAS = "Real activity notes are not included until the notes policy is approved."
+
 SPECS: dict[str, TemplateSpec] = {
     ActivityEmailType.MIDDAY_MOTIVATION: TemplateSpec(
         type=ActivityEmailType.MIDDAY_MOTIVATION,
+        group=ActivityEmailGroup.MOTIVATIONAL,
         label="Midday Motivation",
         schedule_label="12:00 p.m.",
         default_subject="¡Buen trabajo! Sigamos adelante 💪",
@@ -124,9 +175,11 @@ SPECS: dict[str, TemplateSpec] = {
             "Sent only if the person completed at least one activity before noon. "
             "No activities, no email."
         ),
+        subject_tokens=SUBJECT_TOKENS,
     ),
     ActivityEmailType.END_OF_DAY_RECOGNITION: TemplateSpec(
         type=ActivityEmailType.END_OF_DAY_RECOGNITION,
+        group=ActivityEmailGroup.MOTIVATIONAL,
         label="End of Day Recognition",
         schedule_label="End Work + 20 min",
         default_subject="¡Jornada finalizada! Este es tu avance de hoy 🌟",
@@ -137,6 +190,42 @@ SPECS: dict[str, TemplateSpec] = {
             "Sent only if the person completed at least one activity during the closed workday. "
             "No activities, no email."
         ),
+        subject_tokens=SUBJECT_TOKENS,
+    ),
+    ActivityEmailType.STRATEGIC_MIDDAY_REPORT: TemplateSpec(
+        type=ActivityEmailType.STRATEGIC_MIDDAY_REPORT,
+        group=ActivityEmailGroup.STRATEGIC,
+        label="Strategic Midday Report",
+        schedule_label="12:00 p.m. (reporting time)",
+        default_subject="CER Route | Reporte operativo de mediodía — {{report_period_label}}",
+        default_body=_STRATEGIC_MIDDAY_BODY,
+        body_tokens=("manager_first_name", "report_period_label", "report_generated_at", "per_person_report"),
+        required_tokens=("per_person_report",),
+        send_condition=(
+            "For enabled managers: one block per authorized team member, up to noon. "
+            "No weekly team block. " + _NOTAS
+        ),
+        subject_tokens=STRATEGIC_SUBJECT_TOKENS,
+        ordered_blocks=("per_person_report",),
+    ),
+    ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT: TemplateSpec(
+        type=ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT,
+        group=ActivityEmailGroup.STRATEGIC,
+        label="Strategic End-of-Day Report",
+        schedule_label="Team close + 20 min, or the approved cutoff time",
+        default_subject="CER Route | Resumen del día y acumulado semanal — {{report_period_label}}",
+        default_body=_STRATEGIC_END_OF_DAY_BODY,
+        body_tokens=(
+            "manager_first_name", "report_period_label", "report_generated_at",
+            "per_person_report", "team_weekly_summary", "week_period_label",
+        ),
+        required_tokens=("per_person_report", "team_weekly_summary"),
+        send_condition=(
+            "One consolidated email per enabled manager and day, ending with the Team Weekly "
+            "Summary. The cutoff time is not chosen yet. " + _NOTAS
+        ),
+        subject_tokens=STRATEGIC_SUBJECT_TOKENS,
+        ordered_blocks=("per_person_report", "team_weekly_summary"),
     ),
 }
 
@@ -174,6 +263,16 @@ def spec(template_type: str) -> TemplateSpec:
     return SPECS[ActivityEmailType(template_type)]
 
 
+def sample_values(template_type: str) -> dict[str, str]:
+    """Los valores **ficticios** de la vista previa y de las pruebas."""
+    s = spec(template_type)
+    if s.group == ActivityEmailGroup.MOTIVATIONAL:
+        return SAMPLE_VALUES
+    from app.routers_api.activityemails.strategic import valores_de_demostracion
+
+    return valores_de_demostracion(s.type == ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT)
+
+
 def _texto_libre(campo: str, valor: str) -> list[tuple[str, str]]:
     errores: list[tuple[str, str]] = []
     if _HTML.search(valor):
@@ -204,7 +303,7 @@ def validate(template_type: str, *, subject: str, body: str) -> list[tuple[str, 
     if "\r" in subject or "\n" in subject:
         errores.append(("subject", "The subject must be a single line."))
     errores += _texto_libre("subject", subject)
-    fuera = sorted(set(_marcadores(subject)) - set(SUBJECT_TOKENS))
+    fuera = sorted(set(_marcadores(subject)) - set(s.subject_tokens))
     if fuera:
         errores.append(("subject", f"Unsupported variable(s) in the subject: {', '.join(fuera)}."))
 
@@ -225,6 +324,14 @@ def validate(template_type: str, *, subject: str, body: str) -> list[tuple[str, 
             + ", ".join(f"{{{{{t}}}}}" for t in faltan)
             + ".",
         ))
+    # Los bloques generados de los reportes: una vez cada uno y en su orden (el
+    # resumen del equipo, siempre después de las personas).
+    if s.ordered_blocks and not faltan:
+        repetidos = [t for t in s.ordered_blocks if usados.count(t) > 1]
+        if repetidos:
+            errores.append(("body", "Each report block can appear only once: " + ", ".join(repetidos) + "."))
+        elif [t for t in usados if t in s.ordered_blocks] != list(s.ordered_blocks):
+            errores.append(("body", "The Team Weekly Summary must come after the per-person report."))
     return errores
 
 
