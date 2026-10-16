@@ -168,3 +168,37 @@ async def test_sin_la_capacidad_no_hay_enlace_ni_pagina(seeded, alpha_client, li
             await contexto.close()
         finally:
             await navegador.close()
+
+
+async def test_envio_de_prueba_controlado(seeded, alpha_client, live_server):
+    """RTE-MAIL-TEST-01: la prueba va al propio correo y el resultado no dice «entregado»."""
+    from playwright.async_api import async_playwright
+
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    await _conceder(seeded, "route_admin")
+    propio = seeded.alpha.users["route_admin"].email
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=ESCRITORIO)
+            page = await contexto.new_page()
+            await abrir_sesion(page, propio)
+            await page.goto(URL)
+            midday = page.get_by_role("region", name="Midday Motivation")
+            await midday.get_by_role("button", name="Send test").click()
+            dialogo = page.get_by_role("dialog")
+            await expect(dialogo.get_by_role("radio", name=propio)).to_be_checked(timeout=10_000)
+            await expect(dialogo).to_contain_text("No mail provider is configured yet")
+            await dialogo.get_by_role("button", name="Send test").click()
+            await expect(dialogo.get_by_role("status")).to_contain_text("Nothing left the server", timeout=10_000)
+            await page.wait_for_timeout(400)
+            await page.screenshot(path=str(DESTINO / "escritorio-envio-de-prueba.png"))
+            await contexto.close()
+        finally:
+            await navegador.close()
+
+    eventos = await _filas(
+        "SELECT changes FROM audit_event WHERE entity_type = 'activity_email_test' AND action = 'test_send'"
+    )
+    assert len(eventos) == 1
+    assert eventos[0].changes["to"]["new"] == propio

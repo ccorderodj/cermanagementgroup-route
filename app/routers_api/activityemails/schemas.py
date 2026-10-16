@@ -94,3 +94,28 @@ class RecipientsPaginationParams(CommonQueryParams):
     ):
         super().__init__(page=page, page_size=page_size)
         self.q = (q or "").strip() or None
+
+
+class ActivityEmailTestTargets(BaseModel):
+    """A quién se puede mandar una prueba, y si hay un proveedor real detrás."""
+
+    recipients: list[str]
+    provider_configured: bool
+    limit: int
+    window_minutes: int
+
+
+class ActivityEmailTestSend(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to: str = Field(min_length=3, max_length=254)
+
+
+class ActivityEmailTestResult(BaseModel):
+    #: `accepted_by_provider`, `not_sent_development_backend` o
+    #: `captured_by_test_backend`. Los fallos responden 502.
+    outcome: str
+    to: str
+    subject: str
+    #: Siempre `False`: la entrega sólo la confirma la bandeja de destino.
+    delivered_confirmed: bool

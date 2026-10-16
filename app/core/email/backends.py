@@ -47,6 +47,8 @@ class OutgoingEmail:
     subject: str
     body: str
     sender: str = ""
+    #: Cabeceras extra, p. ej. la que marca un correo de prueba.
+    headers: dict[str, str] = field(default_factory=dict)
 
 
 class EmailBackend:
@@ -99,6 +101,8 @@ def _mensaje(message: OutgoingEmail, sender: str) -> EmailMessage:
     email["From"] = message.sender or sender
     email["To"] = message.to
     email["Subject"] = message.subject
+    for nombre, valor in message.headers.items():
+        email[nombre] = valor
     email.set_content(message.body)
     return email
 
@@ -307,8 +311,12 @@ def set_email_backend(backend: EmailBackend | None) -> None:
     _override = backend
 
 
-def send_email(*, to: str, subject: str, body: str) -> None:
+def send_email(*, to: str, subject: str, body: str, headers: dict[str, str] | None = None) -> str:
     """Manda, probando cada proveedor disponible hasta que uno funcione.
+
+    Devuelve el `name` del backend que lo aceptó (`console` y `memory` no
+    mandan nada fuera del servidor), para que quien llama pueda decir con
+    honestidad qué pasó.
 
     No basta con elegir el preferido una vez: si M365 está configurado pero su
     client secret venció, o el relé SMTP está caído, ese envío en concreto no
@@ -317,8 +325,8 @@ def send_email(*, to: str, subject: str, body: str) -> None:
     """
     if _override is not None:
         remitente = getattr(_override, "sender", None) or settings.EMAIL_FROM
-        _override.send(OutgoingEmail(to=to, subject=subject, body=body, sender=remitente))
-        return
+        _override.send(OutgoingEmail(to=to, subject=subject, body=body, sender=remitente, headers=dict(headers or {})))
+        return _override.name
 
     candidatos = [
         b for b in (
@@ -330,11 +338,11 @@ def send_email(*, to: str, subject: str, body: str) -> None:
     ]
     for indice, backend in enumerate(candidatos):
         remitente = getattr(backend, "sender", None) or settings.EMAIL_FROM
-        mensaje = OutgoingEmail(to=to, subject=subject, body=body, sender=remitente)
+        mensaje = OutgoingEmail(to=to, subject=subject, body=body, sender=remitente, headers=dict(headers or {}))
         es_el_ultimo = indice == len(candidatos) - 1
         try:
             backend.send(mensaje)
-            return
+            return backend.name
         except (EmailAuthFailed, EmailUnreachable):
             if es_el_ultimo:
                 raise

@@ -228,6 +228,11 @@ class Settings(BaseSettings):
     SMTP_USER: str = ""
     SMTP_PASSWORD: str = ""
     SMTP_USE_TLS: bool = True
+    # RTE-MAIL-TEST-01: direcciones a las que se puede mandar una **prueba** de
+    # los correos de actividad, separadas por comas. Además de éstas, cada
+    # administrador puede mandársela a su propio correo. Nada fuera de esta
+    # lista recibe una prueba: no hay destinos libres.
+    MAIL_TEST_RECIPIENTS: str = ""
 
     PASSWORD_RESET_TOKEN_MINUTES: int = Field(default=60, ge=1)
 
