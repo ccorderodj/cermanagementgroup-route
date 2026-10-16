@@ -56,3 +56,23 @@ export const activityEmailRecipientSchema = z.object({
 });
 
 export type ActivityEmailRecipient = z.infer<typeof activityEmailRecipientSchema>;
+
+/** A quién se puede mandar una prueba (RTE-MAIL-TEST-01). */
+export const activityEmailTestTargetsSchema = z.object({
+    recipients: z.array(z.string()),
+    provider_configured: z.boolean(),
+    limit: z.number(),
+    window_minutes: z.number(),
+});
+
+export type ActivityEmailTestTargets = z.infer<typeof activityEmailTestTargetsSchema>;
+
+/** Resultado de una prueba. `delivered_confirmed` es siempre `false`. */
+export const activityEmailTestResultSchema = z.object({
+    outcome: z.enum(['accepted_by_provider', 'not_sent_development_backend', 'captured_by_test_backend']),
+    to: z.string(),
+    subject: z.string(),
+    delivered_confirmed: z.literal(false),
+});
+
+export type ActivityEmailTestResult = z.infer<typeof activityEmailTestResultSchema>;

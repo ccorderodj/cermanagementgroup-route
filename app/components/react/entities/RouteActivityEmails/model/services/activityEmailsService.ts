@@ -4,9 +4,13 @@ import {
     activityEmailPreviewSchema,
     activityEmailRecipientSchema,
     activityEmailTemplateSchema,
+    activityEmailTestResultSchema,
+    activityEmailTestTargetsSchema,
     type ActivityEmailPreview,
     type ActivityEmailRecipient,
     type ActivityEmailTemplate,
+    type ActivityEmailTestResult,
+    type ActivityEmailTestTargets,
     type ActivityEmailType,
 } from '../types';
 
@@ -67,4 +71,18 @@ export async function updateActivityEmailRecipient(
 ): Promise<ActivityEmailRecipient> {
     const response = await $api.put(`/activity-emails/recipients/${userId}`, input);
     return parseApi(activityEmailRecipientSchema, response.data, 'updateActivityEmailRecipient');
+}
+
+export async function fetchActivityEmailTestTargets(): Promise<ActivityEmailTestTargets> {
+    const response = await $api.get('/activity-emails/test-targets');
+    return parseApi(activityEmailTestTargetsSchema, response.data, 'fetchActivityEmailTestTargets');
+}
+
+/** Prueba controlada: datos ficticios, a un destinatario de prueba autorizado. */
+export async function sendActivityEmailTest(
+    type: ActivityEmailType,
+    to: string,
+): Promise<ActivityEmailTestResult> {
+    const response = await $api.post(`/activity-emails/templates/${type}/test-send`, { to });
+    return parseApi(activityEmailTestResultSchema, response.data, 'sendActivityEmailTest');
 }

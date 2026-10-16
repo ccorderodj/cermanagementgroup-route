@@ -1,9 +1,11 @@
 """
 Correos de actividad (RTE-NOT-01): plantillas y destinatarios.
 
-**Sólo configuración.** Ningún endpoint de aquí envía un correo ni programa un
-envío: guardar, activar o previsualizar sólo deja datos guardados. El envío es
-RTE-NOT-02/03 (BR-10, BR-12).
+**Sólo configuración.** Ningún endpoint de aquí programa un envío ni escribe a
+una persona real: guardar, activar o previsualizar sólo deja datos guardados. El
+envío es RTE-NOT-02/03 (BR-10, BR-12). La única excepción es la **prueba
+controlada** (RTE-MAIL-TEST-01): una plantilla con datos ficticios a un
+destinatario de prueba autorizado (ver `envio_de_prueba`).
 
 Todo exige `route.activityemails.manage`, la compañía del subdominio y, en
 destinatarios, el alcance de la jerarquía: un manager con la capacidad sólo ve
@@ -22,8 +24,12 @@ from app.routers_api.activityemails.schemas import (
     ActivityEmailTemplateRead,
     ActivityEmailTemplateRestore,
     ActivityEmailTemplateUpdate,
+    ActivityEmailTestResult,
+    ActivityEmailTestSend,
+    ActivityEmailTestTargets,
     RecipientsPaginationParams,
 )
+from app.routers_api.activityemails import envio_de_prueba
 from app.routers_api.activityemails.service import ActivityEmailService
 from app.routers_api.companies.context import TenantContext
 from app.routers_api.companies.dependencies import get_company_required
@@ -143,3 +149,37 @@ async def update_recipient(
         version=payload.version,
     )
     return ActivityEmailRecipientRead.model_validate(fila)
+
+
+@router.get("/test-targets")
+async def test_targets(
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_GESTIONAR),
+    company: TenantContext = Depends(get_company_required),
+) -> ActivityEmailTestTargets:
+    """A qué direcciones puede mandar una prueba quien llama."""
+    return ActivityEmailTestTargets(
+        recipients=await envio_de_prueba.destinatarios_de_prueba(actor_user_id=current_user.id),
+        provider_configured=envio_de_prueba.proveedor_configurado(),
+        limit=envio_de_prueba.LIMITE,
+        window_minutes=int(envio_de_prueba.VENTANA.total_seconds() // 60),
+    )
+
+
+@router.post("/templates/{template_type}/test-send")
+async def test_send(
+    template_type: str,
+    payload: ActivityEmailTestSend,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_GESTIONAR),
+    company: TenantContext = Depends(get_company_required),
+) -> ActivityEmailTestResult:
+    """Una prueba con datos ficticios a un destinatario autorizado. Auditada."""
+    return ActivityEmailTestResult.model_validate(
+        await envio_de_prueba.enviar_prueba(
+            company_id=company.id,
+            actor_user_id=current_user.id,
+            template_type=template_type,
+            to=payload.to,
+        )
+    )

@@ -8,6 +8,8 @@ export type {
     ActivityEmailPreview,
     ActivityEmailRecipient,
     ActivityEmailTemplate,
+    ActivityEmailTestResult,
+    ActivityEmailTestTargets,
     ActivityEmailToken,
     ActivityEmailType,
 } from './model/types';
@@ -18,4 +20,6 @@ export {
     previewActivityEmailTemplate,
     fetchActivityEmailRecipients,
     updateActivityEmailRecipient,
+    fetchActivityEmailTestTargets,
+    sendActivityEmailTest,
 } from './model/services/activityEmailsService';

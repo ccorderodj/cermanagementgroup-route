@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-    Eye, Loader2, MailX, RotateCcw, Save,
+    Eye, Loader2, MailX, RotateCcw, Save, Send,
 } from 'lucide-react';
 import {
     Badge,
@@ -29,6 +29,7 @@ import {
     type ActivityEmailTemplate,
 } from '@/entities/RouteActivityEmails';
 import { readServerProblem, type ServerProblem } from '../lib/errors';
+import { TestSendDialog } from './TestSendDialog';
 
 interface TemplateEditorProps {
     template: ActivityEmailTemplate;
@@ -63,6 +64,7 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
     const [preview, setPreview] = useState<ActivityEmailPreview | null>(null);
     const [confirmRestore, setConfirmRestore] = useState(false);
     const [restoring, setRestoring] = useState(false);
+    const [testOpen, setTestOpen] = useState(false);
 
     useEffect(() => {
         setSubject(template.subject);
@@ -220,7 +222,7 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                     </div>
                 )}
 
-                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+                <div className="flex flex-col-reverse gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-end">
                     <Button
                         type="button"
                         variant="ghost"
@@ -229,6 +231,16 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                     >
                         <RotateCcw className="mr-2 size-4" />
                         Restore default
+                    </Button>
+                    <Button
+                        type="button"
+                        variant="outline"
+                        disabled={dirty}
+                        title={dirty ? 'Save your changes first: the test uses the saved text.' : undefined}
+                        onClick={() => setTestOpen(true)}
+                    >
+                        <Send className="mr-2 size-4" />
+                        Send test
                     </Button>
                     <Button type="button" variant="outline" disabled={previewing} onClick={runPreview}>
                         {previewing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Eye className="mr-2 size-4" />}
@@ -263,6 +275,8 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                     )}
                 </DialogContent>
             </Dialog>
+
+            <TestSendDialog template={template} open={testOpen} onOpenChange={setTestOpen} />
 
             <ConfirmDestructiveDialog
                 open={confirmRestore}
