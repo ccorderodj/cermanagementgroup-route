@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 48" role="img" aria-label="CER Management Group">
+  <defs>
+    <linearGradient id="cerMark" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#003b5c"/>
+      <stop offset="100%" stop-color="#30c3e5"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="4" width="40" height="40" rx="11" fill="url(#cerMark)"/>
+  <text x="20" y="30.5" text-anchor="middle"
+        font-family="Inter, Segoe UI, Arial, sans-serif"
+        font-size="15" font-weight="800" fill="#ffffff" letter-spacing="0.5">CER</text>
+
+  <text x="52" y="24"
+        font-family="Inter, Segoe UI, Arial, sans-serif"
+        font-size="15" font-weight="700" fill="#003b5c">Management Group</text>
+  <text x="52" y="38"
+        font-family="Inter, Segoe UI, Arial, sans-serif"
+        font-size="10.5" font-weight="600" fill="#6e7b86" letter-spacing="1.4">APPLICATION FOUNDATION</text>
+</svg>

@@ -1,0 +1,33 @@
+#!/bin/sh
+#
+# Impide commitear directamente en una rama protegida.
+#
+# Por qué existe
+# --------------
+# Tres veces en este proyecto se empezó a escribir sobre `dev` sin darse cuenta,
+# y una cuarta se resucitó una rama ya fusionada al empujar su nombre por
+# costumbre. Las dos son el mismo descuido: no mirar en qué rama se está antes de
+# escribir. Un aviso al final no sirve — el trabajo ya está en el sitio
+# equivocado—, así que el control va **antes** del commit.
+#
+# No es una prohibición absoluta: `git commit --no-verify` sigue funcionando para
+# cuando de verdad hay que tocar `dev`. Lo que quita es el descuido, no la opción.
+#
+# Instalado con:  git config core.hooksPath .githooks
+
+rama=$(git symbolic-ref --short HEAD 2>/dev/null)
+
+case "$rama" in
+    dev|main|master)
+        echo ""
+        echo "  ✖ Estás en '$rama', que es una rama protegida."
+        echo ""
+        echo "  El trabajo va en una rama propia:"
+        echo "      git checkout -b feature/<lo-que-sea>"
+        echo ""
+        echo "  Si de verdad quieres commitear aquí:"
+        echo "      git commit --no-verify"
+        echo ""
+        exit 1
+        ;;
+esac

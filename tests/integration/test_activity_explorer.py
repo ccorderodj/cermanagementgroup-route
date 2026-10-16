@@ -1,0 +1,1099 @@
+"""Activity Explorer: lo que la pantalla afirma del pasado tiene que ser cierto.
+
+Qué defiende este archivo
+--------------------------
+El explorador no escribe nada, así que el riesgo no es corromper datos: es
+**contar mal la historia**. Un panel que agrupa una parada de la 1:00 AM en el
+día siguiente, o que parte un bloque de actividad en tres porque se
+seleccionaron tres actividades, no rompe nada y se cree durante meses.
+
+Por eso los tests se agrupan por la afirmación que hace la pantalla —este año
+tuvo estos meses, esta semana estos días, esta parada duró esto— y cada uno
+pone al dominio en un estado concreto por el camino real del producto.
+
+La semana empieza el lunes, y sale de la línea base
+----------------------------------------------------
+No es una elección de implementación: los grupos de mes de V0.7 rompen en
+`Sep 1–6`, `Sep 7–13`, `Sep 14–20` y `Sep 21–27`, y el 7, el 14 y el 21 de
+septiembre de 2026 son lunes. Un test lo fija para que nadie lo cambie a
+domingo por costumbre.
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal
+
+import pytest
+from sqlalchemy import text
+
+from app.database import async_session_maker
+from app.routers_api.standardvalues.provisioning import provision_standard_values
+
+pytestmark = pytest.mark.integration
+
+RUTA = "/api/activity-explorer"
+
+#: Un PNG de 1x1. La evidencia de odómetro no es lo que se prueba aquí.
+FOTO = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+    "890000000a49444154789c6360000002000100ffff03000006000557bfabd400"
+    "00000049454e44ae426082"
+)
+
+
+async def _perfil_y_vehiculo(
+    alpha_client, seeded, *, unidad: str, usuario="supervisor", compania="alpha"
+):
+    """Supervisor con perfil y vehículo asignado, por API.
+
+    `compania` existe para el test de aislamiento: el otro tenant se prepara
+    con **su** administrador, porque entrar con el de alpha en el cliente de
+    beta no es el estado que se quiere comprobar.
+    """
+    empresa = getattr(seeded, compania)
+    await alpha_client.login(empresa.users["route_admin"].email)
+    perfil = (
+        await alpha_client.post(
+            "/api/supervisors", json={"user_id": empresa.users[usuario].id}
+        )
+    ).json()
+    assert "id" in perfil, perfil
+    vehiculo = (
+        await alpha_client.post(
+            "/api/vehicles",
+            json={
+                "make": "Toyota", "model": "Hilux", "year": 2024, "unit": unidad,
+                "fuel_grade": "regular", "operational_mpg": "24.00",
+            },
+        )
+    ).json()
+    await alpha_client.post(
+        f"/api/supervisors/{perfil['id']}/assignments",
+        json={"vehicle_id": vehiculo["id"]},
+    )
+    return perfil, vehiculo
+
+
+async def _valores(cliente, company_id: int, lista: str) -> list[dict]:
+    async with async_session_maker() as session:
+        await provision_standard_values(session, company_id=company_id)
+        await session.commit()
+    respuesta = await cliente.get(f"/api/standard-values/{lista}")
+    assert respuesta.status_code == 200, respuesta.text
+    return respuesta.json()
+
+
+async def _jornada_con_parada(
+    alpha_client, seeded, *, usuario="supervisor", proposito="client_visit",
+    referencia="ABC Manufacturing", actividades=1, terminar=True, notas=None,
+    cerrar_jornada=True,
+) -> dict:
+    """Una jornada con un viaje y su bloque de actividad, por el producto.
+
+    Pasa por las guardas reales: odómetro de inicio resuelto, viaje planificado
+    con su valor de contexto, salida, llegada y bloque. Un test que las saltara
+    comprobaría un estado que el producto no puede alcanzar.
+    """
+    await alpha_client.login(seeded.alpha.users[usuario].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "100000.0"},
+    )
+
+    # Los dos conjuntos del dominio son disjuntos: `PRETRIP_STANDARD_LIST`
+    # —Employee Visit, Check Delivery, Office— lleva valor al planificar, y
+    # `POSTARRIVAL_ACTIVITY_LIST` —Client Visit, Recruiting, Other— lo lleva al
+    # llegar. Un contexto que no está en el primero **no acepta** valor previo.
+    plan: dict = {"purpose": proposito, "context_reference": referencia}
+    if proposito in ("office", "employee_visit", "check_delivery"):
+        lista = {"office": "office_purposes",
+                 "employee_visit": "employee_visit_reasons",
+                 "check_delivery": "delivery_types"}[proposito]
+        plan["standard_value_id"] = (
+            await _valores(alpha_client, seeded.alpha.id, lista)
+        )[0]["id"]
+
+    viaje = (await alpha_client.post("/api/trips", json=plan)).json()
+    assert "id" in viaje, viaje
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    ids: list[int] = []
+    if proposito == "client_visit":
+        disponibles = await _valores(
+            alpha_client, seeded.alpha.id, "client_visit_activities"
+        )
+        ids = [v["id"] for v in disponibles[:actividades]]
+
+    inicio = await alpha_client.post(
+        f"/api/trips/{viaje['id']}/activity/start", json={"activity_ids": ids}
+    )
+    assert inicio.status_code in (200, 201), inicio.text
+
+    if terminar:
+        resultados = await _valores(alpha_client, seeded.alpha.id, "outcomes")
+        cuerpo = {"action": "complete", "outcome_id": resultados[0]["id"]}
+        if notas is not None:
+            cuerpo["notes"] = notas
+        fin = await alpha_client.post(
+            f"/api/trips/{viaje['id']}/activity/complete", json=cuerpo
+        )
+        assert fin.status_code == 200, fin.text
+
+    if cerrar_jornada:
+        # Hay que cerrarla: un supervisor no tiene dos jornadas abiertas, así
+        # que sin esto la segunda llamada devolvería la misma y los días del
+        # test se pisarían. El cierre pasa por su propia guarda de odómetro.
+        await alpha_client.post(
+            f"/api/odometer/sessions/{jornada['id']}/end/photo",
+            files={"photo": ("odo.png", FOTO, "image/png")},
+        )
+        await alpha_client.post(
+            f"/api/odometer/sessions/{jornada['id']}/end/confirm",
+            json={"reading": "100120.0"},
+        )
+        cierre = await alpha_client.post(
+            f"/api/worksessions/{jornada['id']}/end", json={}
+        )
+        assert cierre.status_code == 200, cierre.text
+
+    return {"jornada": jornada, "viaje": viaje, "actividades": ids}
+
+
+async def _fechar_jornada(jornada_id: int, dia: date) -> None:
+    """Mueve el día de negocio de una jornada ya creada.
+
+    El `session_date` se calcula al abrir y no se puede pedir por API: para
+    probar años, meses y semanas distintos hace falta colocar jornadas en el
+    pasado. Se hace aquí, en la preparación del test, y no tocando ninguna
+    regla del producto: lo que se comprueba después es que el explorador
+    **agrupa por ese campo**, que es justo lo que PR-02 exige.
+    """
+    async with async_session_maker() as session:
+        await session.execute(
+            text("UPDATE work_session SET session_date = :d WHERE id = :i"),
+            {"d": dia, "i": jornada_id},
+        )
+        await session.commit()
+
+
+async def _explorar(cliente, **parametros) -> dict:
+    respuesta = await cliente.get(RUTA, params=parametros)
+    assert respuesta.status_code == 200, respuesta.text
+    return respuesta.json()
+
+
+# ── Autorización y aislamiento ──────────────────────────────────────────────
+
+
+async def test_sin_la_capacidad_no_se_explora(seeded, alpha_client):
+    """Un supervisor no lee la historia de los demás por adivinar la URL.
+
+    Es la comprobación que §9 pide de forma explícita. El filtrado del frontend
+    no es una frontera de autorización: la puerta está aquí.
+    """
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    respuesta = await alpha_client.get(RUTA, params={"range": "day"})
+    assert respuesta.status_code == 403, respuesta.text
+
+
+async def test_el_administrador_de_route_si_explora(seeded, alpha_client):
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    assert (await alpha_client.get(RUTA, params={"range": "day"})).status_code == 200
+
+
+async def test_no_se_ve_el_supervisor_de_otro_tenant(
+    seeded, alpha_client, beta_client
+):
+    """Y pedirlo por identificador devuelve 404, no 403.
+
+    Un 403 confirmaría que ese supervisor existe en alguna parte. El 404 no
+    dice nada, que es la regla de la casa para un recurso de otra compañía.
+    """
+    await _perfil_y_vehiculo(
+        beta_client, seeded, unidad="V-BETA-EXP", compania="beta"
+    )
+    ajeno = seeded.beta.users["supervisor"].id
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    respuesta = await alpha_client.get(
+        RUTA, params={"range": "day", "supervisor_user_id": ajeno}
+    )
+    assert respuesta.status_code == 404, respuesta.text
+
+
+async def test_sin_sesion_no_se_explora(seeded, alpha_anonymous):
+    """H-1: mostrar el selector en móvil no abre la puerta a nadie sin sesión."""
+    respuesta = await alpha_anonymous.get(
+        RUTA,
+        params={
+            "range": "day",
+            "supervisor_user_id": seeded.alpha.users["supervisor"].id,
+        },
+    )
+    assert respuesta.status_code == 401, respuesta.text
+
+
+async def test_un_supervisor_no_elegible_del_mismo_tenant_no_se_lee(
+    seeded, alpha_client
+):
+    """H-1: el selector sólo ofrece supervisores elegibles, y el servidor lo exige.
+
+    Una designación retirada sigue existiendo en el tenant, pero ya no es un
+    supervisor que se pueda explorar. Manipular el identificador desde el
+    navegador —el selector ya no lo ofrece— recibe el mismo 404 que un id que
+    no existe: confirmar que esa persona está en la compañía sería decir algo.
+    """
+    perfil, _ = await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-H1-RET")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    # Retirar la designación exige cerrar antes su vehículo: es la regla del
+    # producto, y se sigue por la API en vez de saltarla por SQL.
+    historial = (
+        await alpha_client.get(f"/api/supervisors/{perfil['id']}/assignments")
+    ).json()
+    for asignacion in historial:
+        if asignacion.get("effective_to") is None:
+            cerrada = await alpha_client.post(
+                f"/api/supervisors/assignments/{asignacion['id']}/end", json={}
+            )
+            assert cerrada.status_code == 200, cerrada.text
+    retirada = await alpha_client.put(
+        f"/api/supervisors/{perfil['id']}", json={"is_active": False}
+    )
+    assert retirada.status_code == 200, retirada.text
+
+    opciones = await _explorar(alpha_client, range="day")
+    assert seeded.alpha.users["supervisor"].id not in {
+        s["user_id"] for s in opciones["supervisors"]
+    }, "el selector no la ofrece"
+
+    respuesta = await alpha_client.get(
+        RUTA,
+        params={
+            "range": "day",
+            "supervisor_user_id": seeded.alpha.users["supervisor"].id,
+        },
+    )
+    assert respuesta.status_code == 404, respuesta.text
+
+
+async def test_otro_tenant_y_un_id_inexistente_son_indistinguibles(
+    seeded, alpha_client, beta_client
+):
+    """H-1: la respuesta a un supervisor ajeno no dice nada que no diga un id falso.
+
+    Mismo estado y **mismo cuerpo**, sin nombres ni pistas: si se distinguieran,
+    probar identificadores desde el selector manipulado serviría para enumerar
+    supervisores de otras compañías.
+    """
+    await _perfil_y_vehiculo(
+        beta_client, seeded, unidad="V-BETA-H1", compania="beta"
+    )
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    ajeno = await alpha_client.get(
+        RUTA,
+        params={"range": "day", "supervisor_user_id": seeded.beta.users["supervisor"].id},
+    )
+    inexistente = await alpha_client.get(
+        RUTA, params={"range": "day", "supervisor_user_id": 987654321}
+    )
+
+    assert ajeno.status_code == inexistente.status_code == 404
+    assert ajeno.json() == inexistente.json()
+    nombre = seeded.beta.users["supervisor"].email.split("@")[0]
+    assert nombre not in ajeno.text
+
+
+async def test_las_opciones_del_selector_son_del_tenant(seeded, alpha_client):
+    """El selector de supervisor de la línea base, autorizado en el servidor."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-SEL")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    cuerpo = await _explorar(alpha_client, range="day")
+
+    ids = {s["user_id"] for s in cuerpo["supervisors"]}
+    assert seeded.alpha.users["supervisor"].id in ids
+    assert seeded.beta.users["supervisor"].id not in ids
+    assert cuerpo["supervisor_user_id"] in ids, "queda uno seleccionado, como V0.7"
+
+
+# ── La jerarquía ────────────────────────────────────────────────────────────
+
+
+async def test_el_ano_agrupa_por_mes_y_solo_los_que_tienen_registros(
+    seeded, alpha_client
+):
+    """FR-02 y FR-03: el año enseña sus meses, y no fabrica los vacíos.
+
+    La línea base sólo dibuja los grupos que existen —sus días van de lunes a
+    viernes porque el fin de semana no tuvo jornada—, así que doce filas de
+    ceros serían una invención.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-ANO")
+    primero = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(primero["jornada"]["id"], date(2026, 3, 11))
+    segundo = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(segundo["jornada"]["id"], date(2026, 7, 22))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="year", date="2026-07-22",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["grouped_by"] == "month"
+    assert cuerpo["start"] == "2026-01-01" and cuerpo["end"] == "2026-12-31"
+    inicios = [g["start"] for g in cuerpo["groups"]]
+    assert inicios == ["2026-03-01", "2026-07-01"], (
+        f"se esperaban marzo y julio y nada más, salió {inicios}"
+    )
+    assert [g["activities"] for g in cuerpo["groups"]] == [1, 1]
+    assert cuerpo["groups"][0]["drill_date"] == "2026-03-01", (
+        "el botón de bajar nivel ancla en el primer día del grupo"
+    )
+
+
+async def test_el_mes_agrupa_por_semanas_de_lunes_a_domingo_recortadas(
+    seeded, alpha_client
+):
+    """FR-04: la convención de semana de la línea base, fijada.
+
+    Sus grupos de septiembre de 2026 son `Sep 1–6`, `Sep 7–13`, `Sep 14–20` y
+    `Sep 21–27`; el 7, el 14 y el 21 son lunes. La primera semana se **recorta**
+    al día 1 en vez de empezar en agosto, que es lo que produce ese grupo de
+    seis días.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-MES")
+    # Un día en la semana recortada y otro en una completa.
+    uno = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(uno["jornada"]["id"], date(2026, 9, 2))
+    dos = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(dos["jornada"]["id"], date(2026, 9, 16))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="month", date="2026-09-16",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["grouped_by"] == "week"
+    rangos = [(g["start"], g["end"]) for g in cuerpo["groups"]]
+    assert rangos == [("2026-09-01", "2026-09-06"), ("2026-09-14", "2026-09-20")], (
+        f"la semana no es lunes-domingo recortada al mes: {rangos}"
+    )
+
+
+async def test_la_semana_agrupa_por_dias(seeded, alpha_client):
+    """FR-05: la semana enseña sus días de negocio."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-SEM")
+    lunes = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(lunes["jornada"]["id"], date(2026, 9, 14))
+    jueves = await _jornada_con_parada(alpha_client, seeded)
+    await _fechar_jornada(jueves["jornada"]["id"], date(2026, 9, 17))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="week", date="2026-09-17",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["grouped_by"] == "day"
+    assert cuerpo["start"] == "2026-09-14" and cuerpo["end"] == "2026-09-20"
+    assert [g["start"] for g in cuerpo["groups"]] == ["2026-09-14", "2026-09-17"]
+    assert all(g["start"] == g["end"] for g in cuerpo["groups"])
+
+
+async def test_el_dia_enseña_las_paradas_y_no_agrupa(seeded, alpha_client):
+    """FR-06: la hoja de la jerarquía son las paradas registradas."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-DIA")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, referencia="ABC Manufacturing", notas="Pidió 4 más"
+    )
+    await _fechar_jornada(hecho["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["grouped_by"] is None
+    assert cuerpo["groups"] == []
+    assert len(cuerpo["activities"]) == 1
+    parada = cuerpo["activities"][0]
+    assert parada["purpose"] == "client_visit"
+    assert parada["context_reference"] == "ABC Manufacturing"
+    assert parada["notes"] == "Pidió 4 más"
+    assert parada["outcome_label"], "el resultado se lee con su etiqueta de entonces"
+    assert parada["trip_started_at"] and parada["arrived_at"], (
+        "la tarjeta de V0.7 separa viaje y permanencia: hacen falta las dos horas"
+    )
+    assert cuerpo["summary"]["activities"] == 1
+
+
+# ── Verdad histórica ────────────────────────────────────────────────────────
+
+
+async def test_una_jornada_que_cruza_medianoche_sigue_en_su_dia(seeded, alpha_client):
+    """PR-02: la parada de la 1:00 AM pertenece al día en que se empezó.
+
+    Es el caso que separa el día de negocio del día UTC. Si el explorador
+    agrupara por la fecha del evento, esta parada aparecería en el día
+    siguiente y el histórico dejaría de cuadrar con la jornada que la contiene.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-NOCHE")
+    hecho = await _jornada_con_parada(alpha_client, seeded)
+    dia_de_negocio = date(2026, 9, 18)
+    await _fechar_jornada(hecho["jornada"]["id"], dia_de_negocio)
+
+    # El bloque ocurrió pasada la medianoche, ya en el día natural siguiente.
+    async with async_session_maker() as session:
+        await session.execute(
+            text(
+                "UPDATE activity_execution SET started_at = :s, ended_at = :e "
+                "WHERE trip_id = :t"
+            ),
+            {
+                "s": datetime(2026, 9, 19, 1, 10, tzinfo=timezone.utc),
+                "e": datetime(2026, 9, 19, 2, 5, tzinfo=timezone.utc),
+                "t": hecho["viaje"]["id"],
+            },
+        )
+        await session.commit()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    del_dia = await _explorar(
+        alpha_client, range="day", date=dia_de_negocio.isoformat(),
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+    assert len(del_dia["activities"]) == 1, (
+        "la parada de madrugada salió de su día de negocio"
+    )
+
+    siguiente = await _explorar(
+        alpha_client, range="day", date=(dia_de_negocio + timedelta(days=1)).isoformat(),
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+    assert siguiente["activities"] == [], (
+        "la parada apareció también en el día natural siguiente"
+    )
+
+
+async def test_varias_actividades_son_un_bloque_y_se_ven_todas(seeded, alpha_client):
+    """PR-03 y §5: un bloque, varias etiquetas, horas y resultado compartidos.
+
+    Es la única adaptación visible que la instrucción permite, y lo que no se
+    puede hacer es fabricar tres historias de ejecución porque se eligieron
+    tres actividades. Aquí se comprueba lo segundo: **una** parada.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-MULTI")
+    hecho = await _jornada_con_parada(alpha_client, seeded, actividades=3)
+    assert len(hecho["actividades"]) == 3, "hacen falta tres para que el test valga"
+    await _fechar_jornada(hecho["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert len(cuerpo["activities"]) == 1, (
+        "tres actividades seleccionadas produjeron más de una parada"
+    )
+    parada = cuerpo["activities"][0]
+    assert len(parada["activity_labels"]) == 3, "no se enseñan todas las elegidas"
+    assert cuerpo["summary"]["activities"] == 1, (
+        "el resumen contó etiquetas en vez de paradas"
+    )
+
+
+async def test_el_proposito_y_la_actividad_no_se_confunden(seeded, alpha_client):
+    """PR-04: la razón del desplazamiento no es lo que se ejecutó al llegar.
+
+    En un contexto con lista post-llegada —Client Visit— lo que cualifica la
+    parada son las actividades seleccionadas, y el propósito viaja aparte. En
+    uno sin lista —Office— el dominio sólo tiene el valor del plan, y es ése el
+    que se presenta. Mezclarlos en un solo hecho es lo que está prohibido.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-PR04")
+    visita = await _jornada_con_parada(alpha_client, seeded, proposito="client_visit")
+    await _fechar_jornada(visita["jornada"]["id"], date(2026, 9, 18))
+    oficina = await _jornada_con_parada(
+        alpha_client, seeded, proposito="office", referencia="Athens Office"
+    )
+    await _fechar_jornada(oficina["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    por_proposito = {p["purpose"]: p for p in cuerpo["activities"]}
+    assert set(por_proposito) == {"client_visit", "office"}
+
+    con_lista = por_proposito["client_visit"]
+    assert con_lista["activity_labels"], "la visita ejecutó actividades"
+    assert con_lista["purpose_detail"] is None, (
+        "donde hay actividades, el valor del plan no se presenta como si lo fuera"
+    )
+
+    sin_lista = por_proposito["office"]
+    assert sin_lista["activity_labels"] == [], (
+        "el dominio no acepta actividades post-llegada en una visita a oficina"
+    )
+    assert sin_lista["purpose_detail"], (
+        "y entonces lo que cualifica la parada es el valor del plan"
+    )
+
+
+async def test_un_valor_retirado_sigue_leyendose(seeded, alpha_client):
+    """PR-05: desactivar un valor no borra la historia que lo usó.
+
+    La etiqueta de la actividad se congela al seleccionarla, así que la parada
+    se lee igual después. Y el valor no desaparece de debajo: su clave foránea
+    es `RESTRICT`.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-RETIRADO")
+    hecho = await _jornada_con_parada(alpha_client, seeded, actividades=1)
+    await _fechar_jornada(hecho["jornada"]["id"], date(2026, 9, 18))
+
+    async with async_session_maker() as session:
+        await session.execute(
+            text("UPDATE standard_value SET is_active = false WHERE id = :i"),
+            {"i": hecho["actividades"][0]},
+        )
+        await session.commit()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    parada = cuerpo["activities"][0]
+    assert parada["activity_labels"], (
+        "la parada perdió su actividad porque el valor se retiró"
+    )
+
+
+async def test_un_bloque_en_curso_no_duerme_como_duracion_cero(seeded, alpha_client):
+    """Un bloque abierto no duró nada: todavía no ha terminado.
+
+    Presentarlo como cero sería una afirmación falsa sobre un hecho que sigue
+    ocurriendo. La vista lo marca aparte para que la pantalla pueda decir
+    `In progress`, como la línea base.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-ABIERTO")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, terminar=False, cerrar_jornada=False
+    )
+    await _fechar_jornada(hecho["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["summary"]["has_open_activity"] is True
+    assert cuerpo["summary"]["activity_seconds"] == 0
+    assert cuerpo["activities"][0]["ended_at"] is None
+
+
+async def test_el_orden_es_determinista(seeded, alpha_client):
+    """Dos lecturas seguidas devuelven lo mismo, en el mismo orden."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-ORDEN")
+    for _ in range(3):
+        hecho = await _jornada_con_parada(alpha_client, seeded)
+        await _fechar_jornada(hecho["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    args = dict(
+        range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+    primera = await _explorar(alpha_client, **args)
+    segunda = await _explorar(alpha_client, **args)
+
+    assert [p["activity_execution_id"] for p in primera["activities"]] == [
+        p["activity_execution_id"] for p in segunda["activities"]
+    ]
+    assert len(primera["activities"]) == 3
+
+
+async def test_un_periodo_sin_registros_responde_vacio_sin_fallar(
+    seeded, alpha_client
+):
+    """FR-08: no hay datos es un estado, no un error ni una fila inventada."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-VACIO")
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    cuerpo = await _explorar(
+        alpha_client, range="year", date="2019-05-05",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert cuerpo["groups"] == []
+    assert cuerpo["activities"] == []
+    assert cuerpo["start"] == "2019-01-01"
+
+
+async def test_cada_supervisor_tiene_su_propia_historia(seeded, alpha_client):
+    """Dos supervisores en el mismo periodo no se mezclan."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-A")
+    await _perfil_y_vehiculo(
+        alpha_client, seeded, unidad="V-EXP-B", usuario="route_admin"
+    )
+    de_uno = await _jornada_con_parada(alpha_client, seeded, usuario="supervisor")
+    await _fechar_jornada(de_uno["jornada"]["id"], date(2026, 9, 18))
+    del_otro = await _jornada_con_parada(
+        alpha_client, seeded, usuario="route_admin", referencia="North Plant"
+    )
+    await _fechar_jornada(del_otro["jornada"]["id"], date(2026, 9, 18))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    uno = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+    otro = await _explorar(
+        alpha_client, range="day", date="2026-09-18",
+        supervisor_user_id=seeded.alpha.users["route_admin"].id,
+    )
+
+    assert len(uno["activities"]) == 1 and len(otro["activities"]) == 1
+    assert uno["activities"][0]["context_reference"] == "ABC Manufacturing"
+    assert otro["activities"][0]["context_reference"] == "North Plant"
+    assert (
+        uno["activities"][0]["supervisor_user_id"]
+        != otro["activities"][0]["supervisor_user_id"]
+    )
+
+
+# ── Lectura acotada ─────────────────────────────────────────────────────────
+
+
+async def test_el_numero_de_consultas_no_crece_con_las_paradas(
+    seeded, alpha_client, caplog
+):
+    """§15: nada de N+1. Medido, y sin instrumentar el motor.
+
+    Cómo se mide, y por qué así
+    ----------------------------
+    La primera versión de un test parecido en RTE07 enganchaba un *listener* al
+    motor de SQLAlchemy para contar consultas. Funcionaba aislado y **rompía la
+    suite**: tocar el motor global interfiere con el arnés que crea y desecha el
+    pool por test. Un test que hace fallar a otros no vale lo que mide.
+
+    Así que se lee lo que la aplicación ya publica: el middleware de rendimiento
+    registra `query_count` por petición. Es observación, no instrumentación.
+
+    Lo que se afirma: un día con cinco paradas cuesta **las mismas** consultas
+    que un día con una. Si el modelo de lectura pidiera las actividades
+    seleccionadas parada por parada, el segundo número sería mayor.
+    """
+    import logging
+    import re
+
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-EXP-N1")
+
+    una = await _jornada_con_parada(alpha_client, seeded, actividades=1)
+    await _fechar_jornada(una["jornada"]["id"], date(2026, 9, 14))
+
+    for _ in range(5):
+        otra = await _jornada_con_parada(alpha_client, seeded, actividades=3)
+        await _fechar_jornada(otra["jornada"]["id"], date(2026, 9, 15))
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+
+    async def consultas_de(dia: str) -> int:
+        caplog.clear()
+        with caplog.at_level(logging.INFO):
+            cuerpo = await _explorar(
+                alpha_client, range="day", date=dia,
+                supervisor_user_id=seeded.alpha.users["supervisor"].id,
+            )
+        medidas = [
+            int(m.group(1))
+            for m in (
+                re.search(r"endpoint=\S*activity-explorer\S* .*query_count=(\d+)", r.message)
+                for r in caplog.records
+            )
+            if m
+        ]
+        assert medidas, "el middleware no registró la petición: la medida no existe"
+        return medidas[-1], cuerpo
+
+    pocas, cuerpo_pocas = await consultas_de("2026-09-14")
+    muchas, cuerpo_muchas = await consultas_de("2026-09-15")
+
+    # El control de que de verdad hay más que contar en el segundo día.
+    assert len(cuerpo_pocas["activities"]) == 1
+    assert len(cuerpo_muchas["activities"]) == 5
+    assert sum(len(p["activity_labels"]) for p in cuerpo_muchas["activities"]) == 15
+
+    assert muchas == pocas, (
+        f"un día con 5 paradas y 15 etiquetas costó {muchas} consultas y uno "
+        f"con 1 parada costó {pocas}: el coste crece con las filas"
+    )
+
+
+# ── R-1 · El detalle explica el consolidado ─────────────────────────────────
+#
+# El total salía de `agregados_por_dia` —todos los viajes— y la lista de
+# `paradas_del_dia`, que partía de `ActivityExecution`. Un viaje que no abre
+# parada aportaba millas y no aparecía: el regreso a casa, uno interrumpido, o
+# uno que llegó y cuya parada no se inició.
+#
+# Medido en el caso que lo destapó, el viaje invisible era la mitad del
+# kilometraje del día. Estos tests fijan que el detalle reconcilie el total y,
+# sobre todo, que al hacerlo no empiece a llamar «actividad» a un trayecto.
+
+
+async def _viaje_a_casa(alpha_client, seeded, jornada_id: int, metros: str) -> dict:
+    """Un regreso a casa con millaje calculado y **sin** bloque de actividad.
+
+    Es el caso canónico: `HOME` cierra el viaje al llegar y no abre parada
+    ninguna. No se fabrica una: el objeto del checkpoint es justamente que el
+    dominio no la necesite.
+    """
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "home"})
+    ).json()
+    assert "id" in viaje, viaje
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    async with async_session_maker() as s:
+        await s.execute(
+            text(
+                "UPDATE trip_mileage SET state = 'calculated', total_meters = :m, "
+                "calculated_at = now() WHERE trip_id = :t"
+            ),
+            {"m": metros, "t": viaje["id"]},
+        )
+        await s.commit()
+    return viaje
+
+
+def _fila_de(cuerpo: dict, trip_id: int) -> dict:
+    return next(a for a in cuerpo["activities"] if a["trip_id"] == trip_id)
+
+
+async def test_el_regreso_a_casa_aparece_en_el_detalle(seeded, alpha_client):
+    """AC1: un viaje a casa con millas calculadas se ve en la lista.
+
+    Antes aportaba sus millas al total y no existía para el detalle, de modo
+    que el consolidado no se podía explicar con lo que la pantalla enseñaba.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-CASA")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    casa = await _viaje_a_casa(
+        alpha_client, seeded, hecho["jornada"]["id"], "16093.4"
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    viajes = [a["trip_id"] for a in cuerpo["activities"]]
+    assert casa["id"] in viajes, (
+        f"el regreso a casa no está en el detalle: {viajes}"
+    )
+
+    fila = _fila_de(cuerpo, casa["id"])
+    assert fila["purpose"] == "home"
+    assert fila["official_miles"] == "10.0", fila["official_miles"]
+
+
+async def test_el_detalle_reconcilia_el_total_consolidado(seeded, alpha_client):
+    """La propiedad que da sentido al checkpoint: la suma de lo visible es el total.
+
+    Es la comprobación que el caso de campo reclamaba: `125,5 mi` arriba y
+    `62,5` repartidos abajo. Aquí son 10 + 10 y tienen que dar 20 en los dos
+    sitios.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-REC")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    async with async_session_maker() as s:
+        await s.execute(
+            text(
+                "UPDATE trip_mileage SET state='calculated', total_meters=16093.4, "
+                "calculated_at=now() WHERE trip_id = :t"
+            ),
+            {"t": hecho["viaje"]["id"]},
+        )
+        await s.commit()
+    await _viaje_a_casa(alpha_client, seeded, hecho["jornada"]["id"], "16093.4")
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    total = Decimal(cuerpo["summary"]["official_miles"])
+    visible = sum(Decimal(a["official_miles"]) for a in cuerpo["activities"])
+
+    assert total == Decimal("20.0"), total
+    assert visible == total, (
+        f"el detalle no explica el total: {visible} visibles de {total}"
+    )
+
+
+async def test_un_viaje_sin_parada_no_cuenta_como_actividad(seeded, alpha_client):
+    """AC2: el contador sigue contando paradas reales, no filas de la lista.
+
+    Era `len(paradas)`. Al crecer la lista con los trayectos, contar filas haría
+    que el número subiera con cada regreso a casa — diría dos donde hubo una.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-CNT")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    await _viaje_a_casa(alpha_client, seeded, hecho["jornada"]["id"], "16093.4")
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    assert len(cuerpo["activities"]) == 2, "la lista tiene los dos viajes"
+    assert cuerpo["summary"]["activities"] == 1, (
+        "sólo una de las dos filas es una parada; el contador no puede subir "
+        f"con los trayectos: {cuerpo['summary']['activities']}"
+    )
+
+
+async def test_un_viaje_sin_parada_no_se_presenta_como_en_curso(
+    seeded, alpha_client
+):
+    """AC3: sin parada no hay resultado, y eso no es `In progress`.
+
+    La tarjeta dibuja `outcome_label || 'In progress'`. Sin un indicador
+    explícito, un trayecto sin resultado se habría presentado como una parada
+    abierta esperando a que alguien la cierre — y un regreso a casa no abre
+    nada.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-PRG")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    casa = await _viaje_a_casa(
+        alpha_client, seeded, hecho["jornada"]["id"], "16093.4"
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    trayecto = _fila_de(cuerpo, casa["id"])
+    assert trayecto["has_activity"] is False
+    assert trayecto["activity_execution_id"] is None
+    assert trayecto["started_at"] is None, (
+        "un viaje sin parada no tiene hora de inicio de parada"
+    )
+    assert trayecto["outcome_label"] is None
+    assert trayecto["terminal_action"] is None
+    assert trayecto["activity_labels"] == []
+
+    parada = _fila_de(cuerpo, hecho["viaje"]["id"])
+    assert parada["has_activity"] is True
+    assert parada["started_at"] is not None
+
+
+async def test_un_viaje_interrumpido_tambien_aparece(seeded, alpha_client):
+    """El otro viaje sin parada: `End Work Anyway` no fabrica una llegada."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-INT")
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    jornada = (await alpha_client.post("/api/worksessions", json={})).json()
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/photo",
+        files={"photo": ("odo.png", FOTO, "image/png")},
+    )
+    await alpha_client.post(
+        f"/api/odometer/sessions/{jornada['id']}/start/confirm",
+        json={"reading": "100000.0"},
+    )
+    viaje = (
+        await alpha_client.post(
+            "/api/trips",
+            json={"purpose": "client_visit", "context_reference": "Acme"},
+        )
+    ).json()
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    # En tránsito y se termina el día: el viaje queda interrumpido, sin llegada
+    # fabricada y sin parada.
+    await alpha_client.post(
+        f"/api/worksessions/{jornada['id']}/end", json={"end_anyway": True}
+    )
+
+    async with async_session_maker() as s:
+        await s.execute(
+            text(
+                "UPDATE trip_mileage SET state='calculated', total_meters=8046.7, "
+                "calculated_at=now() WHERE trip_id = :t"
+            ),
+            {"t": viaje["id"]},
+        )
+        await s.commit()
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    fila = _fila_de(cuerpo, viaje["id"])
+    assert fila["has_activity"] is False
+    assert fila["official_miles"] == "5.0"
+    assert cuerpo["summary"]["activities"] == 0, (
+        "un viaje interrumpido no es una parada"
+    )
+
+
+async def test_el_millaje_pendiente_sigue_distinguiendose(seeded, alpha_client):
+    """AC6: un trayecto con cálculo pendiente lo dice, y no aporta un cero mudo."""
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-PEN")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    # Este no se calcula: queda pendiente, como lo deja el dominio al llegar.
+    viaje = (
+        await alpha_client.post("/api/trips", json={"purpose": "home"})
+    ).json()
+    await alpha_client.post(f"/api/trips/{viaje['id']}/start", json={})
+    await alpha_client.post(f"/api/trips/{viaje['id']}/arrive", json={})
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    fila = _fila_de(cuerpo, viaje["id"])
+    assert fila["mileage_pending"] is True
+    assert fila["official_miles"] == "0.0", (
+        "pendiente no es una cifra: el cero va acompañado de su aviso"
+    )
+    assert cuerpo["summary"]["mileage_pending"] is True
+    assert hecho["viaje"]["id"] is not None
+
+
+async def test_no_hay_viajes_duplicados_en_el_detalle(seeded, alpha_client):
+    """AC7: el `outerjoin` no puede repetir un viaje.
+
+    Lo garantizan dos índices únicos sobre `trip_id` —uno en
+    `activity_execution` y otro en `trip_mileage`—, pero una consulta futura
+    podría añadir una relación 1:N sin darse cuenta. Esto lo detectaría.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-DUP")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", actividades=3,
+        cerrar_jornada=False,
+    )
+    await _viaje_a_casa(alpha_client, seeded, hecho["jornada"]["id"], "16093.4")
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    viajes = [a["trip_id"] for a in cuerpo["activities"]]
+    assert len(viajes) == len(set(viajes)), f"viajes repetidos: {viajes}"
+    # Y las tres actividades seleccionadas siguen viajando en **una** fila.
+    parada = _fila_de(cuerpo, hecho["viaje"]["id"])
+    assert len(parada["activity_labels"]) == 3, parada["activity_labels"]
+
+
+async def test_dos_jornadas_el_mismo_dia_se_ven_las_dos(seeded, alpha_client):
+    """El caso que destapó todo: varias jornadas en un día.
+
+    El detalle agrupa por `session_date`, así que las dos tienen que estar — y
+    sus viajes no pueden mezclarse ni perderse.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-DOS")
+    primera = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=True
+    )
+    segunda = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    casa = await _viaje_a_casa(
+        alpha_client, seeded, segunda["jornada"]["id"], "16093.4"
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    cuerpo = await _explorar(
+        alpha_client,
+        range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    viajes = {a["trip_id"] for a in cuerpo["activities"]}
+    assert primera["viaje"]["id"] in viajes
+    assert segunda["viaje"]["id"] in viajes
+    assert casa["id"] in viajes
+    assert cuerpo["summary"]["activities"] == 2, (
+        "dos paradas en dos jornadas, y el trayecto no suma"
+    )
+
+
+async def test_el_orden_pone_los_trayectos_en_su_sitio(seeded, alpha_client):
+    """El orden es por hora de salida del viaje, no por inicio de parada.
+
+    Ordenar por el inicio de la actividad dejaría los trayectos agrupados en un
+    extremo según cómo trate los nulos el motor, que es el orden no determinista
+    que §12 prohíbe.
+    """
+    await _perfil_y_vehiculo(alpha_client, seeded, unidad="V-R1-ORD")
+    hecho = await _jornada_con_parada(
+        alpha_client, seeded, proposito="client_visit", cerrar_jornada=False
+    )
+    casa = await _viaje_a_casa(
+        alpha_client, seeded, hecho["jornada"]["id"], "16093.4"
+    )
+
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    primera = await _explorar(
+        alpha_client, range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+    segunda = await _explorar(
+        alpha_client, range="day",
+        supervisor_user_id=seeded.alpha.users["supervisor"].id,
+    )
+
+    orden = [a["trip_id"] for a in primera["activities"]]
+    assert orden == [a["trip_id"] for a in segunda["activities"]], (
+        "dos lecturas seguidas devuelven órdenes distintos"
+    )
+    # La parada salió antes que el regreso a casa, y así se lee.
+    assert orden.index(hecho["viaje"]["id"]) < orden.index(casa["id"])

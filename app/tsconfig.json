@@ -1,0 +1,56 @@
+{
+    "compilerOptions": {
+        "outDir": "./dist/",
+        // Marca los sitios donde no se especificó el tipo. No prohíbe `any`:
+        // obliga a escribirlo explícitamente cuando se quiere.
+        "noImplicitAny": true,
+        "module": "ESNext",
+        // El bundle lo transpila babel-loader según browserslist, así que este
+        // target solo determina qué librerías de tipos ve el editor. ES2020 es
+        // lo que corresponde al código que se escribe hoy (Object.entries,
+        // optional chaining, Promise.allSettled...).
+        "target": "ES2020",
+        "lib": ["ES2020", "DOM", "DOM.Iterable"],
+        "jsx": "react-jsx",
+        "allowJs": true,
+        "strict": true,
+        // "bundler" es la resolución que corresponde cuando quien empaqueta es
+        // webpack. La antigua "node" (node10) quedó obsoleta en TypeScript 5.9
+        // y deja de funcionar en la 7.
+        "moduleResolution": "bundler",
+        // Imports absolutos: @/algo -> components/react/algo
+        // Sin `baseUrl` (también obsoleto): las rutas van relativas a este
+        // archivo.
+        "paths": {
+            "@/*": ["./components/react/*"]
+        },
+        "resolveJsonModule": true,
+        // esModuleInterop permite usar paquetes CommonJS con `import` normal.
+        // Sin él, `import Moment from 'moment'` da undefined.
+        "esModuleInterop": true,
+        // Deja importar por defecto paquetes que no exponen un default export:
+        //   import React from 'react'   en vez de   import * as React from 'react'
+        "allowSyntheticDefaultImports": true,
+        "isolatedModules": true,
+        "forceConsistentCasingInFileNames": true,
+        // No revisar los .d.ts de dependencias: sus tipos son problema suyo y
+        // revisarlos alarga el arranque del editor sin aportar nada.
+        "skipLibCheck": true,
+        // El bundle lo emite webpack; aquí solo se comprueban tipos.
+        "noEmit": true
+    },
+    "ts-node": {
+        "compilerOptions": {
+            "module": "CommonJS"
+        }
+    },
+    "include": [
+        "./**/*.ts",
+        "./**/*.tsx"
+    ],
+    "exclude": [
+        "node_modules",
+        "dist",
+        "static"
+    ]
+}

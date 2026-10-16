@@ -1,0 +1,23 @@
+# Finales de linea normalizados a LF en el repositorio Y en el arbol de trabajo.
+#
+# Sin esto, un repositorio trabajado en Windows acumula CRLF y la regla
+# `linebreak-style` de eslint-config-airbnb produce un hallazgo por linea:
+# 11.268 de los 11.413 problemas del lint eran exactamente eso, y sepultaban
+# los 145 reales (AUD-TOOL-003).
+#
+# `eol=lf` tiene prioridad sobre `core.autocrlf`, asi que da igual como tenga
+# configurado git cada persona del equipo.
+* text=auto eol=lf
+
+# Binarios: git no debe tocarlos.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.ttf  binary
+*.woff binary
+*.woff2 binary
+*.pdf  binary
+*.zip  binary
+*.svg  text eol=lf

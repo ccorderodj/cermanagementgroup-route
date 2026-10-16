@@ -1,0 +1,20 @@
+// El CSS de Leaflet viaja con el visor: sólo se descarga al abrir un mapa.
+@use 'leaflet/dist/leaflet';
+
+// Marcador numerado de un punto del cálculo (salida, cambio de plan,
+// llegada). Colores del tema del tenant, no fijos.
+.cer-route-pin {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 9999px;
+    border: 2px solid hsl(var(--background));
+    background: hsl(var(--primary));
+    color: hsl(var(--primary-foreground));
+    font-size: 12px;
+    font-weight: 600;
+    line-height: 1;
+    box-shadow: 0 1px 3px rgb(0 0 0 / 35%);
+}
