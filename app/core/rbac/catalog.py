@@ -119,6 +119,13 @@ CAPABILITIES: tuple[Capability, ...] = (
     # plantilla la concede y cada tenant decide a qué rol dársela.
     _cap("route", "activityemails.manage", "Configure the activity email templates and who receives them"),
     #
+    # RTE-MAIL-CP4-02: ver un reporte con **datos reales** y enviarlo ahora son
+    # dos autoridades distintas de configurar (OD-10). Las dos a demanda: un
+    # reporte real enseña la actividad de personas y enviarlo la saca de CER
+    # Route. Ver no autoriza a enviar.
+    _cap("route", "activityemails.preview", "Generate an activity email report with real data, without sending it"),
+    _cap("route", "activityemails.send", "Send an activity email report now to its configured recipient"),
+    #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
     # compañía; cuando exista jerarquía organizativa, será el servidor quien
@@ -210,7 +217,12 @@ ALL_CAPABILITIES = "*"
 #: (owner, admin): las asigna cada tenant a los roles que decida. Una plantilla
 #: que las incluyera daría por omisión acceso a datos sensibles.
 CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset(
-    {"route.activity.map.read", "route.activityemails.manage"}
+    {
+        "route.activity.map.read",
+        "route.activityemails.manage",
+        "route.activityemails.preview",
+        "route.activityemails.send",
+    }
 )
 
 

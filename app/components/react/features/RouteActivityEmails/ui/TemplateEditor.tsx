@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
-    Eye, Loader2, MailX, RotateCcw, Save, Send,
+    Eye, FileText, Loader2, MailX, RotateCcw, Save, Send,
 } from 'lucide-react';
 import {
     Badge,
@@ -21,6 +21,7 @@ import {
 } from '@/shared/ui/shadcn/new-york';
 import { ConfirmDestructiveDialog } from '@/features/Common';
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
+import { useUser } from '@/app/providers/StoreProvider';
 import {
     previewActivityEmailTemplate,
     restoreActivityEmailTemplate,
@@ -30,6 +31,7 @@ import {
 } from '@/entities/RouteActivityEmails';
 import { readServerProblem, type ServerProblem } from '../lib/errors';
 import { TestSendDialog } from './TestSendDialog';
+import { GenerateReportDialog } from './GenerateReportDialog';
 
 interface TemplateEditorProps {
     template: ActivityEmailTemplate;
@@ -65,6 +67,9 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
     const [confirmRestore, setConfirmRestore] = useState(false);
     const [restoring, setRestoring] = useState(false);
     const [testOpen, setTestOpen] = useState(false);
+    const [reportOpen, setReportOpen] = useState(false);
+    const { hasUserPermission } = useUser();
+    const puedeGenerar = hasUserPermission('route.activityemails.preview');
 
     useEffect(() => {
         setSubject(template.subject);
@@ -247,6 +252,18 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
                         <Send className="mr-2 size-4" />
                         Send test
                     </Button>
+                    {puedeGenerar && (
+                        <Button
+                            type="button"
+                            variant="outline"
+                            disabled={dirty}
+                            title={dirty ? 'Save your changes first: the report uses the saved text.' : undefined}
+                            onClick={() => setReportOpen(true)}
+                        >
+                            <FileText className="mr-2 size-4" />
+                            Generate report
+                        </Button>
+                    )}
                     <Button type="button" variant="outline" disabled={previewing} onClick={runPreview}>
                         {previewing ? <Loader2 className="mr-2 size-4 animate-spin" /> : <Eye className="mr-2 size-4" />}
                         Preview
@@ -282,6 +299,9 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
             </Dialog>
 
             <TestSendDialog template={template} open={testOpen} onOpenChange={setTestOpen} />
+            {puedeGenerar && (
+                <GenerateReportDialog template={template} open={reportOpen} onOpenChange={setReportOpen} />
+            )}
 
             <ConfirmDestructiveDialog
                 open={confirmRestore}

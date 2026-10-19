@@ -13,6 +13,9 @@ export type {
     ActivityEmailToken,
     ActivityEmailType,
     StrategicRecipient,
+    Delivery,
+    RealReportPreview,
+    ReportSendResult,
 } from './model/types';
 export {
     fetchActivityEmailTemplates,
@@ -25,4 +28,7 @@ export {
     sendActivityEmailTest,
     fetchStrategicRecipients,
     updateStrategicRecipient,
+    previewRealReport,
+    sendRealReport,
+    fetchDeliveries,
 } from './model/services/activityEmailsService';
