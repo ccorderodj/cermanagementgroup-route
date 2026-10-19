@@ -93,9 +93,13 @@ class RecipientsPaginationParams(CommonQueryParams):
         page: int = Query(1, ge=1),
         page_size: int = Query(10, ge=1, le=100),
         q: str | None = Query(None, max_length=150),
+        include_self: bool = Query(False),
     ):
         super().__init__(page=page, page_size=page_size)
         self.q = (q or "").strip() or None
+        # Sólo «Generate report»: un mando puede pedir su propio reporte, pero
+        # no configura sus propios interruptores (la pestaña lo pide en False).
+        self.include_self = include_self
 
 
 class ActivityEmailTestTargets(BaseModel):

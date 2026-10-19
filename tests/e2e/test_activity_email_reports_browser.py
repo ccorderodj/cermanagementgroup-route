@@ -137,3 +137,31 @@ async def test_sin_permiso_de_envio_no_hay_boton(seeded, alpha_client, live_serv
             await contexto.close()
         finally:
             await navegador.close()
+
+
+async def test_un_mando_genera_su_propio_reporte(seeded, alpha_client, live_server):
+    """El CEO se encuentra a sí mismo en la lista de «Generate report»."""
+    from playwright.async_api import async_playwright
+
+    from tests.integration.test_org_hierarchy import _organigrama
+
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    await _capacidades(seeded, "CEO", "route.activityemails.manage", "route.activityemails.preview")
+    yo = seeded.alpha.users["ceo"]
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=ESCRITORIO)
+            page = await contexto.new_page()
+            await abrir_sesion(page, yo.email)
+            await page.goto(URL)
+            estrategico = page.get_by_role("region", name="Strategic Midday Report")
+            await estrategico.get_by_role("button", name="Generate report").click()
+            dialogo = page.get_by_role("dialog")
+            await dialogo.get_by_label("Manager").select_option(value=str(yo.id), timeout=20_000)
+            await dialogo.get_by_label("Operational day").fill(DIA.isoformat())
+            await dialogo.get_by_role("button", name="Generate report").click()
+            await expect(dialogo.get_by_role("region", name="Report preview")).to_be_visible(timeout=20_000)
+            await contexto.close()
+        finally:
+            await navegador.close()

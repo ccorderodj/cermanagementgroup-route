@@ -14,6 +14,12 @@ Para quien opera CER Route en DigitalOcean. Los cuatro correos son: Midday Motiv
 
 Los tres llaman al mismo despacho, `app/routers_api/activityemails/delivery.py`.
 
+**A quién se puede elegir en Generate report:**
+- Un administrador ve a todos los de la compañía.
+- Un mando (CEO, COO, Regional Manager) ve a su rama **y a sí mismo**, para pedir su propio reporte. La pestaña de destinatarios sigue sin incluirle: un mando no se activa sus propios correos.
+
+Hacen falta `route.activityemails.manage` para entrar a la pantalla y `route.activityemails.preview` para generar. Las dos se asignan a demanda.
+
 ## 2. Interruptores (variables de la App)
 | Variable | Por defecto | Efecto |
 |---|---|---|
