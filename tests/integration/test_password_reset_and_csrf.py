@@ -214,7 +214,8 @@ async def test_a_mutating_request_without_the_csrf_header_is_rejected(
     )
 
     assert response.status_code == 403
-    assert "CSRF" in response.json()["detail"]
+    assert response.json()["detail"]["code"] == "csrf_missing"
+    assert "CSRF" in response.json()["detail"]["message"]
 
 
 async def test_a_mismatched_csrf_token_is_rejected(seeded, alpha_client):
@@ -227,6 +228,7 @@ async def test_a_mismatched_csrf_token_is_rejected(seeded, alpha_client):
     )
 
     assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "csrf_mismatch"
 
 
 async def test_reads_do_not_require_a_csrf_token(seeded, alpha_client):
@@ -243,3 +245,14 @@ async def test_the_csrf_cookie_is_issued_by_loading_a_page(alpha_client):
     petición mutante.
     """
     assert alpha_client.cookies.get("cer_csrf_token")
+
+
+async def test_un_login_sin_testigo_csrf_lo_dice_con_su_codigo(seeded, alpha_client):
+    """Incidente 19-10-2026: una pestaña sin cookies. El 403 lleva un código
+    estable para que el formulario renueve las cookies y reintente."""
+    response = await alpha_client._client.post(  # noqa: SLF001 - sin el testigo, a propósito
+        "/api/public/auth/login",
+        json={"email": seeded.alpha.users["supervisor"].email, "password": "irrelevante"},
+    )
+    assert response.status_code == 403
+    assert response.json()["detail"]["code"] == "csrf_missing"

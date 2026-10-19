@@ -23,7 +23,6 @@ import {
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch';
 import { login } from '@/entities/users';
-import { extractErrorMessage } from '@/shared/lib/utils/utils';
 import { useApp } from '@/app/providers/StoreProvider';
 
 const loginSchema = z.object({
@@ -100,9 +99,11 @@ export function LoginForm() {
             );
 
             if (login.rejected.match(result)) {
-                const errorMessage = extractErrorMessage(result, '');
-
-                throw new Error(errorMessage);
+                // El servicio ya rechaza con el mensaje para la pantalla (un
+                // texto). `extractErrorMessage` buscaba un `detail` que no
+                // existe, y por eso todo fallo decía «Something went wrong»
+                // (incidente 19-10-2026).
+                throw new Error(result.payload || '');
             }
 
             toast({
