@@ -56,6 +56,12 @@ export interface ApiError {
 
 const GENERIC_MESSAGE = 'Something went wrong. Please try again.';
 
+/**
+ * El login. Un 401 suyo es «credenciales incorrectas», no «sesión caducada»: no
+ * se redirige, para que el formulario conserve lo escrito y diga qué pasó.
+ */
+export const LOGIN_ENDPOINT = '/public/auth/login';
+
 function extractFieldErrors(detail: unknown): Record<string, string> | undefined {
     if (!Array.isArray(detail)) return undefined;
 
@@ -169,7 +175,8 @@ $api.interceptors.response.use(
         // `next` lleva de vuelta a donde estaba quien perdió la sesión, para
         // que reautenticarse no lo deje varado en el panel de Admin cuando
         // trabajaba, por ejemplo, en /route (D-09).
-        if (error.response?.status === 401 && typeof window !== 'undefined') {
+        const esElLogin = error.config?.url === LOGIN_ENDPOINT;
+        if (error.response?.status === 401 && !esElLogin && typeof window !== 'undefined') {
             const volver = encodeURIComponent(
                 window.location.pathname + window.location.search,
             );

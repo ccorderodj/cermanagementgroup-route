@@ -75,16 +75,19 @@ class CsrfMiddleware(BaseHTTPMiddleware):
 
         if not cookie_token or not header_token:
             return self._rejected(
+                "csrf_missing",
                 "Missing CSRF token. The browser must send the "
-                f"{CSRF_HEADER_NAME} header matching the {CSRF_COOKIE_NAME} cookie."
+                f"{CSRF_HEADER_NAME} header matching the {CSRF_COOKIE_NAME} cookie.",
             )
 
         # Comparación en tiempo constante: el testigo es un secreto por sesión.
         if not secrets.compare_digest(cookie_token, header_token):
-            return self._rejected("CSRF token mismatch.")
+            return self._rejected("csrf_mismatch", "CSRF token mismatch.")
 
         return await call_next(request)
 
     @staticmethod
-    def _rejected(detail: str) -> JSONResponse:
-        return JSONResponse(status_code=403, content={"detail": detail})
+    def _rejected(code: str, message: str) -> JSONResponse:
+        """403 con un código estable: la interfaz reacciona al código, no a la
+        frase. Una pestaña restaurada sin cookies se recupera recargándolas."""
+        return JSONResponse(status_code=403, content={"detail": {"code": code, "message": message}})
