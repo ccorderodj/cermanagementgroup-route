@@ -62,9 +62,16 @@ export async function fetchActivityEmailRecipients(params: {
     page: number;
     pageSize: number;
     q?: string;
+    /** Sólo «Generate report»: incluye a quien llama para pedir su propio reporte. */
+    includeSelf?: boolean;
 }): Promise<Paginated<ActivityEmailRecipient>> {
     const response = await $api.get('/activity-emails/recipients', {
-        params: { page: params.page, page_size: params.pageSize, q: params.q || undefined },
+        params: {
+            page: params.page,
+            page_size: params.pageSize,
+            q: params.q || undefined,
+            include_self: params.includeSelf || undefined,
+        },
     });
     return parseApi(
         paginatedSchema(activityEmailRecipientSchema),
@@ -99,9 +106,16 @@ export async function fetchStrategicRecipients(params: {
     page: number;
     pageSize: number;
     q?: string;
+    /** Sólo «Generate report»: incluye a quien llama para pedir su propio reporte. */
+    includeSelf?: boolean;
 }): Promise<Paginated<StrategicRecipient>> {
     const response = await $api.get('/activity-emails/strategic-recipients', {
-        params: { page: params.page, page_size: params.pageSize, q: params.q || undefined },
+        params: {
+            page: params.page,
+            page_size: params.pageSize,
+            q: params.q || undefined,
+            include_self: params.includeSelf || undefined,
+        },
     });
     return parseApi(paginatedSchema(strategicRecipientSchema), response.data, 'fetchStrategicRecipients');
 }

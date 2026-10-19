@@ -145,6 +145,31 @@ async def test_un_coo_no_ve_fuera_de_su_rama(seeded, alpha_client):
     assert (await alpha_client.post(PREVIEW, json=_pedido(seeded, "coo", EST_MEDIODIA))).status_code == 200
 
 
+async def test_generate_report_ofrece_el_propio_reporte_sin_tocar_la_configuracion(seeded, alpha_client):
+    """La lista de «Generate report» incluye a quien la abre; la de configurar
+    destinatarios, no (un mando no se activa sus propios correos)."""
+    await _organigrama(alpha_client, seeded, perfiles=False)
+    lista = "/api/activity-emails/strategic-recipients"
+    for clave, rol in (("ceo", "CEO"), ("coo", "COO")):
+        await _capacidades(seeded, rol, "route.activityemails.manage", "route.activityemails.preview")
+        await _como(alpha_client, seeded, clave)
+        yo = seeded.alpha.users[clave].id
+
+        configurar = await alpha_client.get(lista, params={"page_size": 100})
+        assert configurar.status_code == 200
+        assert yo not in {f["user_id"] for f in configurar.json()["results"]}
+
+        generar = await alpha_client.get(lista, params={"page_size": 100, "include_self": "true"})
+        assert generar.status_code == 200
+        ids = {f["user_id"] for f in generar.json()["results"]}
+        assert yo in ids, f"{clave} no puede elegirse para su propio reporte"
+        if clave == "coo":
+            assert seeded.alpha.users["ceo"].id not in ids, "incluirse no amplía la rama"
+            assert seeded.alpha.users["rm_b"].id not in ids
+        assert (await alpha_client.post(PREVIEW, json=_pedido(seeded, clave, EST_MEDIODIA))).status_code == 200
+    assert (await alpha_client.post(PREVIEW, json=_pedido(seeded, "ceo", EST_MEDIODIA))).status_code == 404
+
+
 # ── Ventanas y contenido real ───────────────────────────────────────────────
 
 

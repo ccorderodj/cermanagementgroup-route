@@ -294,12 +294,33 @@ class ActivityEmailService:
             "version": row.version,
         }
 
-    @classmethod
-    async def list_recipients(
-        cls, *, company_id: int, actor_user_id: int, q: str | None, page: int, page_size: int
-    ) -> tuple[list[dict], int]:
+    @staticmethod
+    async def _alcance(*, company_id: int, actor_user_id: int, include_self: bool) -> set[int] | None:
+        """A quién lista este actor; `None`: sin acotar.
+
+        La rama de un mando nunca le incluye a él. `include_self` lo añade para
+        pedir su propio reporte (lo que `_objetivo` del router ya permite); la
+        consulta de cada lista sigue filtrando por rol, así que un mando sólo
+        aparece en la lista estratégica si su rol es de mando.
+        """
         d = await delegada.delegacion(company_id=company_id, actor_user_id=actor_user_id)
         alcance = await delegada.gestionables(d, company_id=company_id)
+        if include_self and alcance is not None:
+            alcance = alcance | {actor_user_id}
+        return alcance
+
+    @classmethod
+    async def list_recipients(
+        cls,
+        *,
+        company_id: int,
+        actor_user_id: int,
+        q: str | None,
+        page: int,
+        page_size: int,
+        include_self: bool = False,
+    ) -> tuple[list[dict], int]:
+        alcance = await cls._alcance(company_id=company_id, actor_user_id=actor_user_id, include_self=include_self)
         stmt = cls._consulta_destinatarios(company_id=company_id, user_ids=alcance, q=q)
         async with db_session() as session:
             total = await session.scalar(select(func.count()).select_from(stmt.subquery()))
@@ -489,10 +510,16 @@ class ActivityEmailService:
 
     @classmethod
     async def list_strategic_recipients(
-        cls, *, company_id: int, actor_user_id: int, q: str | None, page: int, page_size: int
+        cls,
+        *,
+        company_id: int,
+        actor_user_id: int,
+        q: str | None,
+        page: int,
+        page_size: int,
+        include_self: bool = False,
     ) -> tuple[list[dict], int]:
-        d = await delegada.delegacion(company_id=company_id, actor_user_id=actor_user_id)
-        alcance = await delegada.gestionables(d, company_id=company_id)
+        alcance = await cls._alcance(company_id=company_id, actor_user_id=actor_user_id, include_self=include_self)
         stmt = cls._consulta_mandos(company_id=company_id, user_ids=alcance, q=q)
         async with db_session() as session:
             total = await session.scalar(select(func.count()).select_from(stmt.subquery()))

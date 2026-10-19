@@ -131,6 +131,7 @@ async def list_recipients(
         company_id=company.id,
         actor_user_id=current_user.id,
         q=params.q,
+        include_self=params.include_self,
         page=params.page,
         page_size=params.page_size,
     )
@@ -178,6 +179,7 @@ async def list_strategic_recipients(
         company_id=company.id,
         actor_user_id=current_user.id,
         q=params.q,
+        include_self=params.include_self,
         page=params.page,
         page_size=params.page_size,
     )

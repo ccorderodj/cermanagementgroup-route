@@ -101,7 +101,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
         setError(null);
         setConfirmar(false);
         const cargar = estrategico ? fetchStrategicRecipients : fetchActivityEmailRecipients;
-        cargar({ page: 1, pageSize: 100, q: filtro || undefined })
+        cargar({ page: 1, pageSize: 100, q: filtro || undefined, includeSelf: true })
             .then((p) => setPersonas(p.results))
             .catch(() => setError('The recipients could not be loaded.'));
     }, [open, estrategico, filtro]);
