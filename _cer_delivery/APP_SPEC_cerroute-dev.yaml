@@ -22,6 +22,20 @@
 #
 # `converge` solo anade, es idempotente, no crea companias ni usuarios y no
 # sobrescribe una integracion que un administrador haya configurado a mano.
+#
+# RTE-MAIL-CP4-01 (19-10-2026) -- envio automatico de los correos de actividad:
+#
+#   3. Dos variables: MAIL_AUTOMATION_ENABLED=false y MAIL_AUTOMATION_DRY_RUN=true.
+#      Con estos valores NO sale ningun correo. Encenderlo es una decision del PO
+#      (GO), por tipo con MAIL_REAL_SEND_TYPES, nunca todos a la vez.
+#
+#   4. Un job `route-mail-reconcile` de tipo SCHEDULED, cada 15 minutos (el
+#      minimo de App Platform), que ejecuta una sola pasada y termina:
+#         python -m app.routers_api.activityemails.jobs --once
+#      Es el reconciliador. La precision (End Work + 20 min) la da el
+#      programador interno de la app, cada minuto, en la replica lider. Los dos
+#      reservan sobre la misma clave: si coinciden, no se duplica nada.
+#      Comparte rama, build y variables con el servicio web.
 
 alerts:
 - rule: DEPLOYMENT_FAILED
@@ -90,6 +104,14 @@ envs:
   type: SECRET
   value: <<< PEGAR AQUI LA CLAVE DE TOMTOM >>>
 
+# RTE-MAIL-CP4-01: envio automatico de los correos de actividad. APAGADO.
+# Ver docs/MAIL_DISPATCH_RUNBOOK.md antes de cambiar cualquiera de los dos.
+- key: MAIL_AUTOMATION_ENABLED
+  scope: RUN_TIME
+  value: "false"
+- key: MAIL_AUTOMATION_DRY_RUN
+  scope: RUN_TIME
+  value: "true"
 features:
 - buildpack-stack=ubuntu-22
 ingress:
@@ -164,6 +186,21 @@ jobs:
     echo "========================================="
     echo " DEPLOY PREPARATION COMPLETE"
     echo "========================================="
+  source_dir: /
+# RTE-MAIL-CP4-01: reconciliador de los correos de actividad (cada 15 min).
+- environment_slug: python
+  gitlab:
+    branch: dev
+    deploy_on_push: true
+    repo: cermanagementgroup/cermanagementgroup-route
+  instance_count: 1
+  instance_size_slug: apps-s-1vcpu-0.5gb
+  kind: SCHEDULED
+  name: route-mail-reconcile
+  schedule:
+    cron: "*/15 * * * *"
+    time_zone: Etc/UTC
+  run_command: python -m app.routers_api.activityemails.jobs --once
   source_dir: /
 name: cerroute-dev
 region: nyc

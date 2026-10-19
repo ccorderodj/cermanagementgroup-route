@@ -295,6 +295,8 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "role_permission_change_request",
     "role_permission",
     "org_assignment",
+    # RTE-MAIL-CP4: el registro productivo cuelga de la pertenencia.
+    "activity_email_delivery",
     # RTE-MAIL-UNIFIED-01: el registro de pruebas cuelga de usuario y compañía.
     "mail_test_send",
     # RTE-NOT-01: la preferencia cuelga de la pertenencia.

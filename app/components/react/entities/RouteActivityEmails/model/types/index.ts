@@ -100,3 +100,66 @@ export const strategicRecipientSchema = z.object({
 });
 
 export type StrategicRecipient = z.infer<typeof strategicRecipientSchema>;
+
+/** Un envío real (RTE-MAIL-CP4). `accepted_by_provider` no es «entregado». */
+export const DELIVERY_STATUSES = [
+    'pending',
+    'claimed',
+    'accepted_by_provider',
+    'retryable_failure',
+    'permanent_failure',
+    'skipped',
+    'unknown_outcome',
+] as const;
+
+export const deliverySchema = z.object({
+    id: z.number(),
+    report_type: activityEmailTypeSchema,
+    recipient_user_id: z.number(),
+    operational_date: z.string(),
+    status: z.enum(DELIVERY_STATUSES),
+    source: z.enum(['schedule', 'reconcile', 'manual']),
+    attempt_count: z.number(),
+    cutoff_at: z.string().nullable(),
+    due_at: z.string().nullable(),
+    last_attempt_at: z.string().nullable(),
+    accepted_at: z.string().nullable(),
+    reason_code: z.string().nullable(),
+    requested_by_user_id: z.number().nullable(),
+    provider_backend: z.string().nullable(),
+});
+
+export type Delivery = z.infer<typeof deliverySchema>;
+
+/** La vista previa con datos reales: generarla no escribe ni envía nada. */
+export const realReportPreviewSchema = z.object({
+    report_type: activityEmailTypeSchema,
+    recipient_user_id: z.number(),
+    recipient_name: z.string(),
+    destination_masked: z.string().nullable(),
+    operational_date: z.string(),
+    time_zone: z.string().nullable(),
+    cutoff_at: z.string().nullable(),
+    due_at: z.string().nullable(),
+    generated_at: z.string(),
+    provisional: z.boolean(),
+    eligible: z.boolean(),
+    reason_code: z.string().nullable(),
+    reason_message: z.string().nullable(),
+    coverage: z.number().nullable(),
+    activity_count: z.number(),
+    subject: z.string().nullable(),
+    body: z.string().nullable(),
+    can_send: z.boolean(),
+    blocked_reason: z.string().nullable(),
+    blocked_message: z.string().nullable(),
+    delivery: deliverySchema.nullable(),
+});
+
+export type RealReportPreview = z.infer<typeof realReportPreviewSchema>;
+
+export const reportSendResultSchema = deliverySchema.extend({
+    destination_masked: z.string().nullable(),
+});
+
+export type ReportSendResult = z.infer<typeof reportSendResultSchema>;

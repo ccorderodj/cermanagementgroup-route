@@ -126,10 +126,12 @@ async def _platform_config_startup() -> None:
         from app.core.platform.scheduler import platform_scheduler
         from app.routers_api.mileage.jobs import register_route_jobs
         from app.routers_api.odometer.jobs import register_odometer_jobs
+        from app.routers_api.activityemails.jobs import register_activity_email_jobs
 
         # Antes de arrancar: `register` solo se lee en `start()`.
         register_route_jobs()
         register_odometer_jobs()
+        register_activity_email_jobs()
         await platform_scheduler.start()
 
 

@@ -234,6 +234,27 @@ class Settings(BaseSettings):
     # lista recibe una prueba: no hay destinos libres.
     MAIL_TEST_RECIPIENTS: str = ""
 
+    # RTE-MAIL-CP4: envío **real** de los correos de actividad. Todo apagado
+    # por defecto: nada sale a una persona real sin un GO explícito del PO.
+    #
+    # Interruptor general del envío automático (programador interno y cron).
+    MAIL_AUTOMATION_ENABLED: bool = False
+    # Con la automatización encendida, sólo calcula y registra en el log qué
+    # enviaría; no reserva ni envía nada.
+    MAIL_AUTOMATION_DRY_RUN: bool = True
+    # Tipos cuyo envío real (automático o «Send now») está permitido, separados
+    # por comas: midday_motivation, end_of_day_recognition,
+    # strategic_midday_report, strategic_end_of_day_report. Vacío = ninguno:
+    # cada tipo se habilita cuando sus decisiones de producto estén cerradas
+    # (DP-TIMEZONE, DP-WEEK, DP-CUTOFF, DP-TEAM, DP-NOTES).
+    MAIL_REAL_SEND_TYPES: str = ""
+    # DP-CUTOFF: hora local máxima (HH:MM) del reporte estratégico de cierre.
+    # Vacía = no elegida: sin cierre completo del equipo no hay reporte final.
+    MAIL_STRATEGIC_CUTOFF: str = ""
+    # DP-RECOVERY: cuántas horas atrás recoge el barrido un envío vencido. Un
+    # valor corto evita mandar de golpe correos viejos al activar el envío.
+    MAIL_RECOVERY_WINDOW_HOURS: int = Field(default=2, ge=0, le=48)
+
     PASSWORD_RESET_TOKEN_MINUTES: int = Field(default=60, ge=1)
 
     # ── Almacén de secretos de plataforma (D12-01, fase 12) ─────────────────

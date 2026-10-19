@@ -26,8 +26,11 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     Column,
+    Date,
+    DateTime,
     ForeignKey,
     ForeignKeyConstraint,
+    Index,
     Integer,
     String,
     Text,
@@ -35,6 +38,7 @@ from sqlalchemy import (
     text,
 )
 
+from app.core.enums import BusinessEnum
 from app.core.models.TimeStamped import TimeStampedModel
 from app.core.models.Versioned import VersionedMixin
 from app.routers_api.activityemails.content import BODY_MAX, SUBJECT_MAX, ActivityEmailType
@@ -90,3 +94,78 @@ class ActivityEmailPreference(TimeStampedModel, VersionedMixin):
     strategic_midday_enabled = Column(Boolean, nullable=False, server_default=text("false"))
     strategic_end_of_day_enabled = Column(Boolean, nullable=False, server_default=text("false"))
     updated_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+
+
+class DeliveryStatus(BusinessEnum):
+    """Estados de un envío real (RTE-MAIL-CP4). `accepted_by_provider` no es
+    «entregado»: eso sólo lo sabe la bandeja de destino."""
+
+    PENDING = "pending"
+    CLAIMED = "claimed"
+    ACCEPTED_BY_PROVIDER = "accepted_by_provider"
+    RETRYABLE_FAILURE = "retryable_failure"
+    PERMANENT_FAILURE = "permanent_failure"
+    SKIPPED = "skipped"
+    UNKNOWN_OUTCOME = "unknown_outcome"
+
+
+class DeliverySource(BusinessEnum):
+    SCHEDULE = "schedule"
+    RECONCILE = "reconcile"
+    MANUAL = "manual"
+
+
+class ActivityEmailDelivery(TimeStampedModel, VersionedMixin):
+    """El registro **productivo** de envíos de correos de actividad.
+
+    Uno solo para el programador interno, el cron de DigitalOcean y el botón
+    «Send now» (RTE-MAIL-CP4-01/02): la clave única `(company, recipient, type,
+    operational_date)` hace que el mismo correo del mismo día no salga dos veces
+    aunque lo pidan a la vez. **No** es `mail_test_send`, que sólo registra
+    pruebas con datos ficticios.
+
+    Sólo metadatos: ni asunto, ni cuerpo, ni notas, ni texto del proveedor.
+    """
+
+    __tablename__ = "activity_email_delivery"
+    __table_args__ = (
+        UniqueConstraint(
+            "company_id", "recipient_user_id", "report_type", "operational_date",
+            name="uq_activity_email_delivery_key",
+        ),
+        ForeignKeyConstraint(
+            ["recipient_user_id", "company_id"],
+            ["user_company.user_id", "user_company.company_id"],
+            name="fk_activity_email_delivery_membership",
+            ondelete="CASCADE",
+        ),
+        ActivityEmailType.check("report_type", name="ck_activity_email_delivery_type"),
+        DeliveryStatus.check("status", name="ck_activity_email_delivery_status"),
+        DeliverySource.check("source", name="ck_activity_email_delivery_source"),
+        CheckConstraint("attempt_count >= 0", name="ck_activity_email_delivery_attempts"),
+        Index("ix_activity_email_delivery_status_due", "status", "due_at"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id", ondelete="CASCADE"), nullable=False)
+    recipient_user_id = Column(Integer, nullable=False, index=True)
+    report_type = Column(String(40), nullable=False)
+    operational_date = Column(Date, nullable=False)
+    #: Fin de la ventana de datos del reporte (12:00 local, cierre…).
+    cutoff_at = Column(DateTime(timezone=True), nullable=True)
+    due_at = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(30), nullable=False, server_default="pending")
+    source = Column(String(20), nullable=False)
+    attempt_count = Column(Integer, nullable=False, server_default=text("0"))
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    next_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    #: Hasta cuándo es de quien la reservó. Una reserva caducada es un
+    #: resultado incierto, no una invitación a reenviar.
+    lease_expires_at = Column(DateTime(timezone=True), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)
+    provider_backend = Column(String(40), nullable=True)
+    #: Código fijo del motivo (`no_activity`, `token_refused`…), sin texto libre.
+    reason_code = Column(String(60), nullable=True)
+    requested_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    request_reason = Column(String(300), nullable=True)
+    template_version = Column(Integer, nullable=True)

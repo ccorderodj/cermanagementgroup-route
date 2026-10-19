@@ -7,6 +7,9 @@ import {
     activityEmailTestResultSchema,
     activityEmailTestTargetsSchema,
     strategicRecipientSchema,
+    deliverySchema,
+    realReportPreviewSchema,
+    reportSendResultSchema,
     type ActivityEmailPreview,
     type ActivityEmailRecipient,
     type ActivityEmailTemplate,
@@ -14,6 +17,9 @@ import {
     type ActivityEmailTestTargets,
     type ActivityEmailType,
     type StrategicRecipient,
+    type Delivery,
+    type RealReportPreview,
+    type ReportSendResult,
 } from '../types';
 
 /**
@@ -106,4 +112,33 @@ export async function updateStrategicRecipient(
 ): Promise<StrategicRecipient> {
     const response = await $api.put(`/activity-emails/strategic-recipients/${userId}`, input);
     return parseApi(strategicRecipientSchema, response.data, 'updateStrategicRecipient');
+}
+
+export interface RealReportRequest {
+    report_type: ActivityEmailType;
+    recipient_user_id: number;
+    operational_date: string;
+}
+
+/** Reporte con datos reales, sin enviar (RTE-MAIL-CP4-02). */
+export async function previewRealReport(input: RealReportRequest): Promise<RealReportPreview> {
+    const response = await $api.post('/activity-emails/reports/preview', input);
+    return parseApi(realReportPreviewSchema, response.data, 'previewRealReport');
+}
+
+/** Envía ya un reporte que tocaba, a su destinatario configurado. */
+export async function sendRealReport(
+    input: RealReportRequest & { reason?: string },
+): Promise<ReportSendResult> {
+    const response = await $api.post('/activity-emails/reports/send', input);
+    return parseApi(reportSendResultSchema, response.data, 'sendRealReport');
+}
+
+export async function fetchDeliveries(params: {
+    report_type?: ActivityEmailType;
+    recipient_user_id?: number;
+    operational_date?: string;
+}): Promise<Delivery[]> {
+    const response = await $api.get('/activity-emails/reports/deliveries', { params });
+    return parseApi(z.array(deliverySchema), response.data, 'fetchDeliveries');
 }

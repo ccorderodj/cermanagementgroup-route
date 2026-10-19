@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 
 from fastapi import Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -153,3 +153,70 @@ class StrategicRecipientUpdate(BaseModel):
     strategic_midday_enabled: bool | None = None
     strategic_end_of_day_enabled: bool | None = None
     version: int = Field(ge=0)
+
+
+# ── Reportes reales a demanda (RTE-MAIL-CP4-02) ─────────────────────────────
+
+
+class ReportRequest(BaseModel):
+    """Qué reporte, de quién y de qué día. Ni correo, ni alcance, ni datos."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    report_type: str = Field(max_length=40)
+    recipient_user_id: int
+    operational_date: date
+
+
+class ReportSendRequest(ReportRequest):
+    #: Por qué se envía a mano (recuperar un envío que no salió…). Auditado.
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class DeliveryRead(BaseModel):
+    id: int
+    report_type: str
+    recipient_user_id: int
+    operational_date: date
+    status: str
+    source: str
+    attempt_count: int
+    cutoff_at: datetime | None
+    due_at: datetime | None
+    last_attempt_at: datetime | None
+    #: Aceptado por el proveedor; **no** es la entrega en el buzón.
+    accepted_at: datetime | None
+    reason_code: str | None
+    requested_by_user_id: int | None
+    provider_backend: str | None
+
+
+class ReportPreviewRead(BaseModel):
+    """La vista previa **real**: nada se escribe ni se envía al generarla."""
+
+    report_type: str
+    recipient_user_id: int
+    recipient_name: str
+    destination_masked: str | None
+    operational_date: date
+    time_zone: str | None
+    cutoff_at: datetime | None
+    due_at: datetime | None
+    generated_at: datetime
+    #: `True` mientras la ventana no ha cerrado («Parcial»).
+    provisional: bool
+    eligible: bool
+    reason_code: str | None
+    reason_message: str | None
+    coverage: int | None
+    activity_count: int
+    subject: str | None
+    body: str | None
+    can_send: bool
+    blocked_reason: str | None
+    blocked_message: str | None
+    delivery: DeliveryRead | None
+
+
+class ReportSendResult(DeliveryRead):
+    destination_masked: str | None
