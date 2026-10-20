@@ -68,7 +68,10 @@ async def _movil_con_gps(live_server, email: str):
                 geolocation={"latitude": LAT, "longitude": LON, "accuracy": 12},
             )
             page = await contexto.new_page()
-            await abrir_sesion(page, email)
+            # El contexto ya concede y fija SU coordenada. Con el valor por
+            # omisión, `abrir_sesion` la sobrescribiría con la de prueba común
+            # (RTE10-A02) y el punto guardado no sería el que este test mide.
+            await abrir_sesion(page, email, conceder_ubicacion=False)
             yield contexto, page
         finally:
             await navegador.close()

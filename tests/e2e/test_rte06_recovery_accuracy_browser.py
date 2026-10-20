@@ -60,6 +60,15 @@ def _guion(pasos: list[dict]) -> str:
         let i = 0;
         window.__geoLlamadas = [];
         navigator.geolocation.getCurrentPosition = (ok, err, opciones) => {{
+            // El sondeo de permiso de RTE10-A02 (`permission.ts:sondear`) pide
+            // `maximumAge: Infinity`: no mide nada, solo pregunta si hay acceso.
+            // No consume pasos del guion; un "sin señal" le basta para ver que
+            // el permiso está concedido.
+            if (opciones && opciones.maximumAge === Infinity) {{
+                window.__geoSondeos = (window.__geoSondeos || 0) + 1;
+                err({{ code: 3, message: 'sondeo' }});
+                return;
+            }}
             const cacheada = opciones && opciones.enableHighAccuracy === false;
             window.__geoLlamadas.push({{
                 highAccuracy: !!(opciones && opciones.enableHighAccuracy),

@@ -1,6 +1,9 @@
 export {
     enqueueAction,
     listPendingActions,
+    listHeldOfflineItems,
+    currentQueueOwner,
+    SinUsuarioParaEncolar,
     removeAction,
     flushQueue,
     enqueueLocationEvidence,
@@ -13,6 +16,13 @@ export {
     removeStagedOdometerPhoto,
     markStagedOdometerPhotoFailed,
     listStagedOdometerPhotos,
+    MAX_PENDING_SAMPLES,
+    enqueueLocationSample,
+    listPendingLocationSamples,
+    removeLocationSamples,
+    markLocationSamplesFailed,
+    holdLocationSamples,
+    pruneStaleLocationSamples,
 } from './offlineQueue';
 export type {
     PendingAction,
@@ -20,9 +30,12 @@ export type {
     PendingLocationEvidence,
     PendingOdometerPhoto,
     FlushResult,
+    QueueOwner,
+    PendingLocationSample,
 } from './offlineQueue';
 export {
     flushPendingActions,
     flushPendingLocationEvidence,
+    flushPendingLocationSamples,
     submitAction,
 } from './sync';

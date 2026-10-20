@@ -263,6 +263,9 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     # que los dos. El registro de entrega del aviso referencia el hecho con
     # `RESTRICT`, así que se borra antes que él.
     "missing_location_notification",
+    # RTE-LOC-02: muestras periódicas (cuelgan de la jornada) y su configuración.
+    "location_sample",
+    "location_capture_setting",
     "trip_mileage_segment",
     "trip_mileage",
     "location_fix",

@@ -43,6 +43,7 @@ from app.routers_api.live.router import router as router_live
 from app.routers_api.trips.router import router as router_trips
 from app.routers_api.activities.router import router as router_activities
 from app.routers_api.location.router import router as router_location
+from app.routers_api.locationcapture.router import router as router_location_capture
 from app.routers_api.mileage.router import router as router_mileage
 from app.routers_api.worksessions.router import router as router_worksessions
 
@@ -100,6 +101,8 @@ api_router.include_router(router_supervisors)
 api_router.include_router(router_standard_values)
 api_router.include_router(router_worksessions)
 api_router.include_router(router_location)
+# RTE-LOC-02: captura periódica, independiente de la evidencia de eventos.
+api_router.include_router(router_location_capture)
 api_router.include_router(router_mileage)
 api_router.include_router(router_trips)
 # La ejecución tras la llegada cuelga del viaje, que es a lo que pertenece.

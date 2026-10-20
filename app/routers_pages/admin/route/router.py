@@ -162,3 +162,19 @@ async def get_route_activity_emails_page(request: Request):
         name="admin/route/activity-emails.html",
         context={},
     )
+
+
+@router.get(
+    "/location-capture",
+    name="RouteLocationCapturePage",
+    # RTE-LOC-02. La misma capacidad que exige `/api/location-capture/settings`.
+    dependencies=[
+        Depends(require_page_permissions(["route.locationcapture.manage"]))
+    ],
+)
+async def get_route_location_capture_page(request: Request):
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/route/location-capture.html",
+        context={},
+    )

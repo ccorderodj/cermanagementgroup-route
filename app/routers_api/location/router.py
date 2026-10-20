@@ -40,6 +40,7 @@ from app.routers_api.location.schemas import (
     MissingLocationRead,
 )
 from app.routers_api.location.service import LocationEvidenceService
+from app.routers_api.locationcapture import service as captura_periodica
 from app.routers_api.users.dependencies import get_current_user
 from app.routers_api.users.models import Users
 
@@ -51,7 +52,7 @@ EJECUTA = Depends(require_permissions(["route.worksession.execute"]))
 @router.get("/policy")
 async def read_location_policy(
     _authz: None = EJECUTA,
-    _company: TenantContext = Depends(get_company_required),
+    company: TenantContext = Depends(get_company_required),
 ) -> LocationPolicyRead:
     """Los umbrales de captura que debe aplicar el cliente.
 
@@ -64,11 +65,16 @@ async def read_location_policy(
 
     Va con la misma capacidad que la captura (`route.worksession.execute`) por
     lo mismo que ella: conocer los umbrales con los que hay que capturar es
-    parte de ejecutar la propia ruta. No devuelve nada específico del tenant
-    —la política es de plataforma—, pero se exige compañía resuelta para que no
-    quede un endpoint autenticado fuera del alcance del subdominio.
+    parte de ejecutar la propia ruta. Los umbrales son de plataforma; la
+    captura periódica (RTE-LOC-02) es de la compañía del subdominio, y el
+    cliente la relee al volver a primer plano para aplicar un cambio sin
+    recargar.
     """
-    return LocationPolicyRead.model_validate(platform_config.policy("route_location"))
+    periodica = await captura_periodica.leer(company.id)
+    return LocationPolicyRead.model_validate(platform_config.policy("route_location")).model_copy(update={
+        "periodic_capture_enabled": periodica["enabled"],
+        "periodic_capture_interval_seconds": periodica["interval_seconds"],
+    })
 
 
 @router.post("/evidence", status_code=status.HTTP_201_CREATED)
