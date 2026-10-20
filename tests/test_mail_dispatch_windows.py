@@ -50,11 +50,12 @@ def test_destino_enmascarado():
     assert delivery.enmascarar("a@x.com") == "a***@x.com"
 
 
-def test_hora_maxima_estrategica_sin_elegir_y_elegida(monkeypatch):
-    monkeypatch.setattr(settings, "MAIL_STRATEGIC_CUTOFF", "")
-    assert real_reports._corte_estrategico() is None
-    monkeypatch.setattr(settings, "MAIL_STRATEGIC_CUTOFF", "18:30")
-    assert real_reports._corte_estrategico() == time(18, 30)
+def test_cierre_estrategico_a_las_19_locales_con_cambio_de_horario():
+    assert real_reports.CIERRE_ESTRATEGICO == time(19, 0)
+    # 19:00 en Nueva York: 23:00 UTC en horario de verano, 00:00 del día siguiente en invierno.
+    assert real_reports._local(date(2026, 10, 14), real_reports.CIERRE_ESTRATEGICO, "America/New_York") ==         datetime(2026, 10, 14, 23, 0, tzinfo=timezone.utc)
+    assert real_reports._local(date(2026, 11, 2), real_reports.CIERRE_ESTRATEGICO, "America/New_York") ==         datetime(2026, 11, 3, 0, 0, tzinfo=timezone.utc)
+    assert real_reports._local(date(2026, 10, 14), real_reports.CIERRE_ESTRATEGICO, "America/Los_Angeles") ==         datetime(2026, 10, 15, 2, 0, tzinfo=timezone.utc)
 
 
 def test_tipos_habilitados_para_envio_real(monkeypatch):
@@ -71,4 +72,3 @@ def test_todo_apagado_por_defecto():
     assert campos["MAIL_AUTOMATION_ENABLED"].default is False
     assert campos["MAIL_AUTOMATION_DRY_RUN"].default is True
     assert campos["MAIL_REAL_SEND_TYPES"].default == ""
-    assert campos["MAIL_STRATEGIC_CUTOFF"].default == ""

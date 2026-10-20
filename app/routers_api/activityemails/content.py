@@ -100,7 +100,8 @@ TOKEN_HELP: dict[str, str] = {
     "manager_first_name": "Nombre de pila del mando que recibe el reporte",
     "report_period_label": "Fecha del reporte",
     "report_generated_at": "Momento en que se generó el reporte",
-    "per_person_report": "Un bloque por persona del equipo: desglose del día y detalle de actividades",
+    "executive_snapshot": "Resumen del equipo al corte: personas, sin inicio, en curso, finalizadas, eventos y millas",
+    "per_person_report": "Un bloque por persona del equipo: jornada, desglose del día y detalle de actividades",
     "team_weekly_summary": "Resumen semanal del equipo, al final, sin contar a nadie dos veces",
     "week_period_label": "Fechas de la semana del reporte",
 }
@@ -139,6 +140,8 @@ _STRATEGIC_MIDDAY_BODY = """Hola, {{manager_first_name}}:
 
 Compartimos el avance operativo registrado por las personas bajo tu supervisión hasta las 12:00 p. m. de hoy.
 
+{{executive_snapshot}}
+
 {{per_person_report}}
 
 Este reporte refleja únicamente la actividad registrada en CER Route hasta el momento del corte. La información en curso o pendiente de cierre se identifica como tal.
@@ -147,7 +150,9 @@ CER Route"""
 
 _STRATEGIC_END_OF_DAY_BODY = """Hola, {{manager_first_name}}:
 
-Compartimos el resumen de las actividades registradas hoy por las personas bajo tu supervisión, junto con su acumulado de la semana.
+Compartimos el resumen de las actividades registradas hoy por las personas bajo tu supervisión hasta las 7:00 p. m., junto con su acumulado de la semana.
+
+{{executive_snapshot}}
 
 {{per_person_report}}
 
@@ -199,11 +204,14 @@ SPECS: dict[str, TemplateSpec] = {
         schedule_label="12:00 p.m. (reporting time)",
         default_subject="CER Route | Reporte operativo de mediodía — {{report_period_label}}",
         default_body=_STRATEGIC_MIDDAY_BODY,
-        body_tokens=("manager_first_name", "report_period_label", "report_generated_at", "per_person_report"),
+        body_tokens=(
+            "manager_first_name", "report_period_label", "report_generated_at",
+            "executive_snapshot", "per_person_report",
+        ),
         required_tokens=("per_person_report",),
         send_condition=(
-            "For enabled managers: one block per authorized team member, up to noon. "
-            "No weekly team block. " + _NOTAS
+            "For enabled managers at 12:00 p.m. in their time zone: one block per active team member, "
+            "including people who have not started, as they stood at noon. No weekly team block. " + _NOTAS
         ),
         subject_tokens=STRATEGIC_SUBJECT_TOKENS,
         ordered_blocks=("per_person_report",),
@@ -212,17 +220,18 @@ SPECS: dict[str, TemplateSpec] = {
         type=ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT,
         group=ActivityEmailGroup.STRATEGIC,
         label="Strategic End-of-Day Report",
-        schedule_label="Team close + 20 min, or the approved cutoff time",
+        schedule_label="7:00 p.m. (reporting time)",
         default_subject="CER Route | Resumen del día y acumulado semanal — {{report_period_label}}",
         default_body=_STRATEGIC_END_OF_DAY_BODY,
         body_tokens=(
             "manager_first_name", "report_period_label", "report_generated_at",
-            "per_person_report", "team_weekly_summary", "week_period_label",
+            "executive_snapshot", "per_person_report", "team_weekly_summary", "week_period_label",
         ),
         required_tokens=("per_person_report", "team_weekly_summary"),
         send_condition=(
-            "One consolidated email per enabled manager and day, ending with the Team Weekly "
-            "Summary. The cutoff time is not chosen yet. " + _NOTAS
+            "One consolidated email per enabled manager and day at 7:00 p.m. in their time zone, "
+            "never earlier and never delayed by open workdays: people still working show as in "
+            "progress. Ends with the Team Weekly Summary. " + _NOTAS
         ),
         subject_tokens=STRATEGIC_SUBJECT_TOKENS,
         ordered_blocks=("per_person_report", "team_weekly_summary"),
@@ -287,7 +296,7 @@ def _texto_libre(campo: str, valor: str) -> list[tuple[str, str]]:
     return errores
 
 
-def _marcadores(valor: str) -> list[str]:
+def marcadores(valor: str) -> list[str]:
     return [m.group(1) for m in _TOKEN.finditer(valor)]
 
 
@@ -303,7 +312,7 @@ def validate(template_type: str, *, subject: str, body: str) -> list[tuple[str, 
     if "\r" in subject or "\n" in subject:
         errores.append(("subject", "The subject must be a single line."))
     errores += _texto_libre("subject", subject)
-    fuera = sorted(set(_marcadores(subject)) - set(s.subject_tokens))
+    fuera = sorted(set(marcadores(subject)) - set(s.subject_tokens))
     if fuera:
         errores.append(("subject", f"Unsupported variable(s) in the subject: {', '.join(fuera)}."))
 
@@ -312,7 +321,7 @@ def validate(template_type: str, *, subject: str, body: str) -> list[tuple[str, 
     elif len(body) > BODY_MAX:
         errores.append(("body", f"The body cannot exceed {BODY_MAX} characters."))
     errores += _texto_libre("body", body)
-    usados = _marcadores(body)
+    usados = marcadores(body)
     fuera = sorted(set(usados) - set(s.body_tokens))
     if fuera:
         errores.append(("body", f"Unsupported variable(s) for this email: {', '.join(fuera)}."))

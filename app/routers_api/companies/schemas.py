@@ -5,6 +5,7 @@ from fastapi import Query
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.core import schema
+from app.routers_api.worksessions.time_zones import zona_valida
 
 
 class CompanyBase(BaseModel):
@@ -39,6 +40,7 @@ class CompanyProfileResponse(BaseModel):
     pdf_text_color: Optional[str] = None
     pdf_muted_text_color: Optional[str] = None
     pdf_surface_color: Optional[str] = None
+    operational_time_zone: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -65,8 +67,20 @@ class CompanyProfileUpdate(BaseModel):
     pdf_text_color: Optional[str] = None
     pdf_muted_text_color: Optional[str] = None
     pdf_surface_color: Optional[str] = None
+    #: Zona IANA (`America/New_York`). Vacía: sin zona de compañía.
+    operational_time_zone: Optional[str] = Field(default=None, max_length=64)
 
     model_config = ConfigDict(extra="forbid")
+
+    @field_validator("operational_time_zone")
+    @classmethod
+    def validate_time_zone(cls, value: Optional[str]) -> Optional[str]:
+        if value is None or not value.strip():
+            return None
+        zona = zona_valida(value)
+        if zona is None:
+            raise ValueError("Unknown time zone: use an IANA name like America/New_York")
+        return zona
 
     @field_validator("name")
     @classmethod

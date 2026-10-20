@@ -22,7 +22,7 @@ import {
 } from '@/shared/ui/shadcn/new-york';
 import { useToast } from '@/shared/lib/hooks/useToast/useToast';
 import { useAppDispatch } from '@/shared/lib/hooks/useAppDispatch';
-import { extractErrorMessage } from '@/shared/lib/utils/utils';
+import { extractErrorMessage, timeZoneOptions } from '@/shared/lib/utils/utils';
 import {
     fetchCompanyProfile,
     updateCompanyProfile,
@@ -47,6 +47,7 @@ const companyProfileSchema = z.object({
     pdf_text_color: z.string().trim().regex(HEX_COLOR_REGEX, 'Use hex format like #0F172A'),
     pdf_muted_text_color: z.string().trim().regex(HEX_COLOR_REGEX, 'Use hex format like #64748B'),
     pdf_surface_color: z.string().trim().regex(HEX_COLOR_REGEX, 'Use hex format like #F8FAFC'),
+    operational_time_zone: z.string(),
 });
 
 type CompanyProfileFormValues = z.infer<typeof companyProfileSchema>;
@@ -80,6 +81,7 @@ export function CompanyProfileForm() {
             pdf_text_color: '',
             pdf_muted_text_color: '',
             pdf_surface_color: '',
+            operational_time_zone: '',
         },
         mode: 'onChange',
     });
@@ -108,6 +110,7 @@ export function CompanyProfileForm() {
                 pdf_text_color: profile.pdf_text_color ?? '',
                 pdf_muted_text_color: profile.pdf_muted_text_color ?? '',
                 pdf_surface_color: profile.pdf_surface_color ?? '',
+                operational_time_zone: profile.operational_time_zone ?? '',
             });
         } catch (error) {
             toast({
@@ -129,8 +132,6 @@ export function CompanyProfileForm() {
         try {
             const payload: UpdateCompanyProfilePayload = {
                 name: values.name.trim(),
-                domain: normalizeOptional(values.domain),
-                subdomain: normalizeOptional(values.subdomain),
                 address: normalizeOptional(values.address),
                 phone: normalizeOptional(values.phone),
                 email: normalizeOptional(values.email),
@@ -143,6 +144,7 @@ export function CompanyProfileForm() {
                 pdf_text_color: normalizeOptional(values.pdf_text_color),
                 pdf_muted_text_color: normalizeOptional(values.pdf_muted_text_color),
                 pdf_surface_color: normalizeOptional(values.pdf_surface_color),
+                operational_time_zone: normalizeOptional(values.operational_time_zone),
             };
             const updated = await dispatch(updateCompanyProfile(payload)).unwrap();
 
@@ -162,6 +164,7 @@ export function CompanyProfileForm() {
                 pdf_text_color: updated.pdf_text_color ?? '',
                 pdf_muted_text_color: updated.pdf_muted_text_color ?? '',
                 pdf_surface_color: updated.pdf_surface_color ?? '',
+                operational_time_zone: updated.operational_time_zone ?? '',
             });
 
             toast({
@@ -316,6 +319,33 @@ export function CompanyProfileForm() {
                                         <FormControl>
                                             <Textarea {...field} rows={3} placeholder="Enter company address" disabled={isLoadingProfile || isSaving} />
                                         </FormControl>
+                                        <FormMessage />
+                                    </FormItem>
+                                )}
+                            />
+
+                            <FormField
+                                control={form.control}
+                                name="operational_time_zone"
+                                render={({ field }) => (
+                                    <FormItem>
+                                        <FormLabel>Operational time zone</FormLabel>
+                                        <FormControl>
+                                            <select
+                                                {...field}
+                                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm md:w-80"
+                                                disabled={isLoadingProfile || isSaving}
+                                            >
+                                                <option value="">Not set</option>
+                                                {timeZoneOptions(field.value || null).map((zona) => (
+                                                    <option key={zona} value={zona}>{zona}</option>
+                                                ))}
+                                            </select>
+                                        </FormControl>
+                                        <p className="text-xs text-muted-foreground">
+                                            Activity emails use it when the recipient has no time zone of their own.
+                                            Not set: those emails wait for configuration instead of guessing one.
+                                        </p>
                                         <FormMessage />
                                     </FormItem>
                                 )}

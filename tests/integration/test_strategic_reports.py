@@ -15,6 +15,8 @@ CEO → RM-B → SUP-B; COO → SUP-C; CEO → Sales-A.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 
 from app.routers_api.activityemails import content, strategic
@@ -102,9 +104,11 @@ async def test_mandos_apagados_con_su_cobertura_real(seeded, alpha_client):
     await _como(alpha_client, seeded, "route_admin")
     u = seeded.alpha.users
     filas = await _mandos(alpha_client)
-    assert set(filas) == {u["ceo"].id, u["coo"].id, u["rm_a"].id, u["rm_b"].id}
-    assert u["sales_a"].id not in filas and u["sup_a"].id not in filas, "sólo mandos"
+    # Mandos y administradores: hoy el CEO lo representa un administrador.
+    assert set(filas) == {u["ceo"].id, u["coo"].id, u["rm_a"].id, u["rm_b"].id, u["owner"].id, u["admin"].id}
+    assert u["sales_a"].id not in filas and u["sup_a"].id not in filas, "sólo mandos y administradores"
     assert filas[u["ceo"].id]["coverage"] == 8, "todo el organigrama, Sales incluido"
+    assert filas[u["admin"].id]["coverage"] == 9, "un administrador: toda la jerarquía vigente, CEO incluido"
     assert filas[u["coo"].id]["coverage"] == 4, "RM-A, OSM-A, SUP-A, SUP-C; sin Sales"
     assert filas[u["rm_a"].id]["coverage"] == 2
     assert all(not f["strategic_midday_enabled"] and not f["strategic_end_of_day_enabled"] for f in filas.values())
@@ -174,7 +178,7 @@ async def _reporte(seeded, mando: str, *, cierre: bool = True) -> strategic.Repo
         manager_user_id=seeded.alpha.users[mando].id,
         cierre=cierre,
         dia=MIERCOLES,
-        corte=None,
+        corte=datetime(2030, 1, 1, tzinfo=timezone.utc),
         inicio_semana=strategic.lunes_de(MIERCOLES),
     )
 

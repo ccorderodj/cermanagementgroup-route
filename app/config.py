@@ -245,12 +245,9 @@ class Settings(BaseSettings):
     # Tipos cuyo envío real (automático o «Send now») está permitido, separados
     # por comas: midday_motivation, end_of_day_recognition,
     # strategic_midday_report, strategic_end_of_day_report. Vacío = ninguno:
-    # cada tipo se habilita cuando sus decisiones de producto estén cerradas
-    # (DP-TIMEZONE, DP-WEEK, DP-CUTOFF, DP-TEAM, DP-NOTES).
+    # cada tipo se habilita por fases (piloto primero). Las horas de cada correo
+    # son fijas (RTE-MAIL-CLOSE-01): 12:00, End Work + 20 min y 19:00 locales.
     MAIL_REAL_SEND_TYPES: str = ""
-    # DP-CUTOFF: hora local máxima (HH:MM) del reporte estratégico de cierre.
-    # Vacía = no elegida: sin cierre completo del equipo no hay reporte final.
-    MAIL_STRATEGIC_CUTOFF: str = ""
     # DP-RECOVERY: cuántas horas atrás recoge el barrido un envío vencido. Un
     # valor corto evita mandar de golpe correos viejos al activar el envío.
     MAIL_RECOVERY_WINDOW_HOURS: int = Field(default=2, ge=0, le=48)

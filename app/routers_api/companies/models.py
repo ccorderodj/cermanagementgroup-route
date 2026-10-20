@@ -52,6 +52,11 @@ class Company(TimeStampedModel, IsActiveMixin):
     pdf_muted_text_color = Column(String(7), nullable=True)
     pdf_surface_color = Column(String(7), nullable=True)
 
+    #: Zona IANA de referencia de la compañía (RTE-MAIL-CLOSE-01). La usan los
+    #: correos de actividad cuando el destinatario no tiene zona propia; vacía,
+    #: el correo pide configuración en vez de suponer una.
+    operational_time_zone = Column(String(64), nullable=True)
+
     def __repr__(self) -> str:
         return f"<Company id={self.id} name={self.name} subdomain={self.subdomain}>"
 

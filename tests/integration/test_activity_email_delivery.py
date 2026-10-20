@@ -94,6 +94,10 @@ async def _capacidades(seeded, rol: str, *nombres: str) -> None:
         )
 
 
+async def _zona_de_la_compania(seeded, zona: str | None) -> None:
+    await _ejecutar("UPDATE company SET operational_time_zone = :z WHERE id = :c", z=zona, c=seeded.alpha.id)
+
+
 def _pedido(seeded, usuario: str, tipo: str, dia: date = DIA) -> dict:
     return {"report_type": tipo, "recipient_user_id": seeded.alpha.users[usuario].id, "operational_date": dia.isoformat()}
 
@@ -238,12 +242,15 @@ async def test_estrategicos_con_su_equipo_y_sin_notas(seeded, alpha_client, envi
     await _jornada_en(alpha_client, seeded, "sup_a", inicio=_utc(13), fin_actividad=_utc(15), fin_jornada=_utc(20),
                       notas="Nota confidencial del cliente")
     await _preparar_admin(seeded, alpha_client, "route.activityemails.preview")
+    sin_zona = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "coo", EST_MEDIODIA))).json()
+    assert sin_zona["reason_code"] == "configuration_required", "nunca la zona más frecuente del equipo"
+    await _zona_de_la_compania(seeded, ZONA)
     m = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "coo", EST_MEDIODIA))).json()
     assert m["coverage"] == 4 and "Team Weekly Summary" not in m["body"]
     assert "SUP_A Org" in m["body"]
     f = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "coo", EST_FIN))).json()
-    assert f["provisional"] is False, "todas las jornadas del equipo de ese día están cerradas"
-    assert datetime.fromisoformat(f["due_at"]) == _utc(20, 20)
+    assert f["provisional"] is False
+    assert datetime.fromisoformat(f["due_at"]) == _utc(23), "19:00 de Nueva York, no el cierre del equipo + 20"
     assert f["body"].count("Team Weekly Summary") == 1
     for texto in (m["body"], f["body"]):
         assert "Nota confidencial" not in texto

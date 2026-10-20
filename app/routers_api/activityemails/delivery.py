@@ -90,14 +90,14 @@ MOTIVOS: dict[str, str] = {
     "recipient_inactive": "The recipient is not active in this company.",
     "recipient_invalid_email": "The recipient has no valid email address.",
     "recipient_not_enabled": "This report is switched off for the recipient in Recipients.",
-    "no_time_zone": "The recipient's time zone is unknown, so the report window cannot be computed.",
+    "configuration_required": (
+        "The recipient has no time zone and the company has no operational time zone. "
+        "Set one in Company Profile."
+    ),
     "no_activity": "No eligible completed activities for this email.",
     "no_workday": "There is no workday on this date.",
     "no_team": "Nobody currently reports to this manager.",
-    "no_team_activity": "Nobody in the team worked on this date.",
     "partial_window": "Partial view: the report window has not closed yet.",
-    "team_not_closed": "The team has not closed the day and the maximum report time has not been reached.",
-    "no_cutoff_configured": "The team has not closed the day and no maximum report time is configured yet.",
     "not_due_yet": "This report is not due yet: the button recovers due reports, it does not send early.",
     "already_sent": "Already accepted by the mail provider. Resending is not available.",
     "in_progress": "This report is being sent right now.",

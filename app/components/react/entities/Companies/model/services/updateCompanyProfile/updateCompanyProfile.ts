@@ -4,9 +4,10 @@ import { ThunkConfig } from '@/app/providers/StoreProvider';
 import { handleAsyncError } from '@/shared/lib/utils/utils';
 import { CompanyProfile } from '../../types';
 
+/** `domain` y `subdomain` son de sólo lectura (D5): el servidor los rechaza. */
 export type UpdateCompanyProfilePayload =
     Pick<CompanyProfile, 'name'>
-    & Partial<Omit<CompanyProfile, 'id' | 'name'>>;
+    & Partial<Omit<CompanyProfile, 'id' | 'name' | 'domain' | 'subdomain'>>;
 
 export const updateCompanyProfile = createAsyncThunk<
 CompanyProfile,
