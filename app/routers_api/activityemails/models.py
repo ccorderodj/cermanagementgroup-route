@@ -169,3 +169,36 @@ class ActivityEmailDelivery(TimeStampedModel, VersionedMixin):
     requested_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     request_reason = Column(String(300), nullable=True)
     template_version = Column(Integer, nullable=True)
+
+
+class ActivityEmailResend(TimeStampedModel):
+    """Cada **reenvío** de un correo que ya salió (o cuyo resultado es incierto).
+
+    La entrega original sigue siendo una sola fila por persona, tipo y día
+    (`activity_email_delivery`); los reenvíos cuelgan de ella, numerados. La
+    clave única `(delivery_id, sequence)` hace que un doble clic no mande dos:
+    quien pide el reenvío dice cuántos ha visto y sólo uno puede ocupar el
+    número siguiente.
+
+    Sólo metadatos, como la entrega: ni asunto, ni cuerpo, ni notas.
+    """
+
+    __tablename__ = "activity_email_resend"
+    __table_args__ = (
+        UniqueConstraint("delivery_id", "sequence", name="uq_activity_email_resend_sequence"),
+        DeliveryStatus.check("status", name="ck_activity_email_resend_status"),
+        CheckConstraint("sequence >= 1", name="ck_activity_email_resend_sequence"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    company_id = Column(Integer, ForeignKey("company.id", ondelete="CASCADE"), nullable=False)
+    delivery_id = Column(
+        Integer, ForeignKey("activity_email_delivery.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sequence = Column(Integer, nullable=False)
+    status = Column(String(30), nullable=False)
+    provider_backend = Column(String(40), nullable=True)
+    reason_code = Column(String(60), nullable=True)
+    requested_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
+    request_reason = Column(String(300), nullable=True)
+    accepted_at = Column(DateTime(timezone=True), nullable=True)

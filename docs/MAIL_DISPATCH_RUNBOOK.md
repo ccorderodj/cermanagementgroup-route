@@ -10,6 +10,7 @@ Para quien opera CER Route en DigitalOcean. Los cuatro correos son: Midday Motiv
 | Programador interno | La app web (`PlatformScheduler`), cada minuto, solo en la réplica líder | Manda lo que venció. Da la precisión (End Work + 20 min ± 1 min) |
 | Scheduled Job `route-mail-reconcile` | App Platform, cada 15 min (`*/15 * * * *`, `Etc/UTC`) | Recoge lo que venció y no salió (app caída, reinicio) |
 | Botón **Send now** | Activity Emails › plantilla › Generate report | Recupera a mano un envío que tocaba y no salió |
+| Botón **Resend** | El mismo diálogo, cuando el correo ya salió o su resultado es incierto | Vuelve a mandarlo, con los datos de ahora. Cada reenvío queda numerado en `activity_email_resend` |
 | Registro `activity_email_delivery` | Base de datos | Una fila por correo y día; la clave única impide duplicados entre los tres caminos |
 
 Los tres llaman al mismo despacho, `app/routers_api/activityemails/delivery.py`.
@@ -19,6 +20,12 @@ Los tres llaman al mismo despacho, `app/routers_api/activityemails/delivery.py`.
 - Un mando (CEO, COO, Regional Manager) ve a su rama **y a sí mismo**, para pedir su propio reporte. La pestaña de destinatarios sigue sin incluirle: un mando no se activa sus propios correos.
 
 Hacen falta `route.activityemails.manage` para entrar a la pantalla y `route.activityemails.preview` para generar. Las dos se asignan a demanda.
+
+**Reenviar (Resend):**
+- Lo autoriza **solo** la capacidad `route.activityemails.resend`, a demanda. `send` no la incluye.
+- Se ofrece cuando el correo del día ya fue aceptado por el proveedor o quedó con resultado incierto. No mira el interruptor de la persona en Recipients ni la hora de vencimiento.
+- Sigue respetando `MAIL_REAL_SEND_TYPES` (el kill switch por tipo), un destinatario activo con correo válido y el límite de 20 envíos a mano por hora y persona.
+- Va al correo de la cuenta del destinatario, nunca a una dirección escrita. Un doble clic no manda dos: el segundo responde 409.
 
 ## 2. Interruptores (variables de la App)
 | Variable | Por defecto | Efecto |
@@ -81,9 +88,9 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
 |---|---|
 | Hay que parar ya | `MAIL_AUTOMATION_ENABLED=false`, o quitar el tipo de `MAIL_REAL_SEND_TYPES`. Efecto en la pasada siguiente, sin desplegar código |
 | `retry` sube | El proveedor falla (credenciales, red). Verify dirá el paso. Los reintentos son automáticos con espera creciente (5 min, 15 min, 1 h), hasta 5 intentos |
-| `unknown` | El proveedor pudo recibirlo o no (tiempo agotado, o un proceso cayó con la reserva abierta). **No se reenvía solo.** Se mira el buzón del destinatario; si no llegó, se deja constancia y se decide a mano |
+| `unknown` | El proveedor pudo recibirlo o no (tiempo agotado, o un proceso cayó con la reserva abierta). **No se reenvía solo.** Se mira el buzón del destinatario; si no llegó, quien tenga `route.activityemails.resend` lo reenvía con **Resend** |
 | El cron no corre | Activity › Jobs. Mientras tanto, el programador interno sigue enviando, y **Send now** recupera a mano lo que venció |
-| Volver atrás (rollback) | Apagar las variables. El código puede quedarse: apagado no hace nada. La migración `0024` se puede bajar, pero se pierde el historial de envíos (la auditoría queda en `audit_event`) |
+| Volver atrás (rollback) | Apagar las variables. El código puede quedarse: apagado no hace nada. Las migraciones `0025` (reenvíos) y `0024` (envíos) se pueden bajar, pero se pierde su historial (la auditoría queda en `audit_event`) |
 
 ## 7. Qué no hace
 - No manda correos viejos al encenderlo: solo los vencidos dentro de `MAIL_RECOVERY_WINDOW_HOURS`.

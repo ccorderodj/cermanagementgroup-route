@@ -131,6 +131,20 @@ export const deliverySchema = z.object({
 
 export type Delivery = z.infer<typeof deliverySchema>;
 
+/** Un reenvío de un correo que ya salió. Numerado desde 1. */
+export const resendSchema = z.object({
+    id: z.number(),
+    sequence: z.number(),
+    status: z.enum(DELIVERY_STATUSES),
+    reason_code: z.string().nullable(),
+    requested_by_user_id: z.number().nullable(),
+    provider_backend: z.string().nullable(),
+    accepted_at: z.string().nullable(),
+    created_at: z.string(),
+});
+
+export type Resend = z.infer<typeof resendSchema>;
+
 /** La vista previa con datos reales: generarla no escribe ni envía nada. */
 export const realReportPreviewSchema = z.object({
     report_type: activityEmailTypeSchema,
@@ -154,6 +168,10 @@ export const realReportPreviewSchema = z.object({
     blocked_reason: z.string().nullable(),
     blocked_message: z.string().nullable(),
     delivery: deliverySchema.nullable(),
+    can_resend: z.boolean(),
+    resend_blocked_reason: z.string().nullable(),
+    resend_blocked_message: z.string().nullable(),
+    resends: z.array(resendSchema),
 });
 
 export type RealReportPreview = z.infer<typeof realReportPreviewSchema>;
@@ -163,3 +181,9 @@ export const reportSendResultSchema = deliverySchema.extend({
 });
 
 export type ReportSendResult = z.infer<typeof reportSendResultSchema>;
+
+export const resendResultSchema = resendSchema.extend({
+    destination_masked: z.string().nullable(),
+});
+
+export type ResendResult = z.infer<typeof resendResultSchema>;

@@ -10,6 +10,7 @@ import {
     deliverySchema,
     realReportPreviewSchema,
     reportSendResultSchema,
+    resendResultSchema,
     type ActivityEmailPreview,
     type ActivityEmailRecipient,
     type ActivityEmailTemplate,
@@ -20,6 +21,7 @@ import {
     type Delivery,
     type RealReportPreview,
     type ReportSendResult,
+    type ResendResult,
 } from '../types';
 
 /**
@@ -146,6 +148,14 @@ export async function sendRealReport(
 ): Promise<ReportSendResult> {
     const response = await $api.post('/activity-emails/reports/send', input);
     return parseApi(reportSendResultSchema, response.data, 'sendRealReport');
+}
+
+/** Reenvía un reporte que ya salió. `expected_resends`: los reenvíos que se ven ahora. */
+export async function resendRealReport(
+    input: RealReportRequest & { expected_resends: number; reason?: string },
+): Promise<ResendResult> {
+    const response = await $api.post('/activity-emails/reports/resend', input);
+    return parseApi(resendResultSchema, response.data, 'resendRealReport');
 }
 
 export async function fetchDeliveries(params: {

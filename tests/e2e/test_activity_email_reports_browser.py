@@ -165,3 +165,41 @@ async def test_un_mando_genera_su_propio_reporte(seeded, alpha_client, live_serv
             await contexto.close()
         finally:
             await navegador.close()
+
+
+async def test_reenviar_lo_que_ya_salio(seeded, mediodia_habilitado, alpha_client, live_server):
+    """Con `resend`, un correo ya aceptado ofrece «Resend» y queda numerado."""
+    from playwright.async_api import async_playwright
+
+    DESTINO.mkdir(parents=True, exist_ok=True)
+    await _preparar(
+        seeded, alpha_client,
+        "route.activityemails.preview", "route.activityemails.send", "route.activityemails.resend",
+    )
+    async with async_playwright() as p:
+        navegador = await lanzar_edge(p)
+        try:
+            contexto = await navegador.new_context(base_url=live_server, viewport=ESCRITORIO)
+            page = await contexto.new_page()
+            await abrir_sesion(page, seeded.alpha.users["route_admin"].email)
+            await page.goto(URL)
+            dialogo = await _abrir_generar(page)
+            await expect(dialogo.get_by_role("region", name="Report preview")).to_be_visible(timeout=20_000)
+            await expect(dialogo.get_by_role("button", name="Resend")).to_have_count(0)
+            await dialogo.get_by_role("button", name="Send now").click()
+            await dialogo.get_by_role("button", name="Confirm and send").click()
+
+            await dialogo.get_by_role("button", name="Resend").click(timeout=20_000)
+            confirmar = dialogo.get_by_role("group", name="Confirm resending")
+            await expect(confirmar).to_contain_text("the recipient will receive it again")
+            await dialogo.get_by_label("Reason (optional)").fill("No le llegó")
+            await dialogo.get_by_role("button", name="Confirm and resend").click()
+            await expect(dialogo.get_by_role("status")).to_contain_text("Resend #1", timeout=20_000)
+            await expect(dialogo).to_contain_text("Resend #1 · Accepted by the mail provider")
+            await page.screenshot(path=str(DESTINO / "escritorio-reenviado.png"))
+            await contexto.close()
+        finally:
+            await navegador.close()
+
+    filas = await _filas("SELECT sequence, status, request_reason FROM activity_email_resend")
+    assert [(f.sequence, f.status, f.request_reason) for f in filas] == [(1, "accepted_by_provider", "No le llegó")]

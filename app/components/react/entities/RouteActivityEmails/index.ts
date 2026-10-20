@@ -16,6 +16,8 @@ export type {
     Delivery,
     RealReportPreview,
     ReportSendResult,
+    Resend,
+    ResendResult,
 } from './model/types';
 export {
     fetchActivityEmailTemplates,
@@ -30,5 +32,6 @@ export {
     updateStrategicRecipient,
     previewRealReport,
     sendRealReport,
+    resendRealReport,
     fetchDeliveries,
 } from './model/services/activityEmailsService';
