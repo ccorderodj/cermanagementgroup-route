@@ -8,6 +8,11 @@ Un solo servicio para los tres caminos que pueden mandar un correo:
 * **schedule** — el programador interno (`PlatformScheduler`, cada minuto);
 * **reconcile** — el Scheduled Job de DigitalOcean (cada 15 min, `--once`).
 
+Y uno más, que no pasa por esa clave: **«Resend»**, el reenvío a mano de un
+correo que ya salió (o cuyo resultado es incierto). Lo autoriza sólo la
+capacidad `route.activityemails.resend`; cada reenvío es una fila numerada de
+`activity_email_resend` y un doble clic no manda dos.
+
 Los tres pasan por `reclamar` sobre la **misma clave única**
 `(company, recipient, type, operational_date)` de `activity_email_delivery`, así
 que dos réplicas, el cron y un clic a la vez no mandan el mismo correo dos
@@ -40,6 +45,7 @@ from datetime import date, datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
@@ -52,6 +58,7 @@ from app.routers_api.activityemails.content import ActivityEmailType
 from app.routers_api.activityemails.models import (
     ActivityEmailDelivery,
     ActivityEmailPreference,
+    ActivityEmailResend,
     DeliverySource,
     DeliveryStatus,
 )
@@ -96,7 +103,14 @@ MOTIVOS: dict[str, str] = {
     "in_progress": "This report is being sent right now.",
     "needs_reconciliation": "The outcome of the previous attempt is uncertain and needs reconciliation.",
     "max_attempts": "The maximum number of attempts was reached.",
+    "resend_not_sent_yet": "Nothing to resend: this report has not been sent yet.",
+    "resend_in_progress": "A resend of this report is being sent right now.",
+    "resend_conflict": "This report was resent a moment ago. Generate it again to see the history.",
 }
+
+#: Desde qué estados de la entrega original se puede reenviar: ya aceptada por
+#: el proveedor, o incierta (quien reenvía ha comprobado que no llegó).
+REENVIABLE = frozenset({DeliveryStatus.ACCEPTED_BY_PROVIDER.value, DeliveryStatus.UNKNOWN_OUTCOME.value})
 
 
 def _habilitado(tipo: str) -> bool:
@@ -187,6 +201,32 @@ async def _existente(company_id: int, user_id: int, tipo: str, dia: date) -> Act
         )
 
 
+def _reenvio(r: ActivityEmailResend) -> dict:
+    return {
+        "id": r.id,
+        "sequence": r.sequence,
+        "status": r.status,
+        "reason_code": r.reason_code,
+        "requested_by_user_id": r.requested_by_user_id,
+        "provider_backend": r.provider_backend,
+        "accepted_at": r.accepted_at,
+        "created_at": r.created_at,
+    }
+
+
+async def _reenvios(delivery_id: int) -> list[ActivityEmailResend]:
+    async with db_session() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(ActivityEmailResend)
+                    .where(ActivityEmailResend.delivery_id == delivery_id)
+                    .order_by(ActivityEmailResend.sequence)
+                )
+            ).all()
+        )
+
+
 @dataclass
 class Evaluacion:
     reporte: ReporteReal
@@ -194,6 +234,9 @@ class Evaluacion:
     blocked_reason: str | None
     delivery: dict | None
     destination_masked: str | None = None
+    can_resend: bool = False
+    resend_blocked_reason: str | None = None
+    resends: list[dict] = field(default_factory=list)
 
 
 def enmascarar(email: str) -> str:
@@ -232,6 +275,28 @@ def _bloqueo(ev_reporte: ReporteReal, dest: dict | None, existente, ahora: datet
     return None
 
 
+def _bloqueo_reenvio(
+    ev_reporte: ReporteReal, dest: dict | None, existente, reenvios: list[ActivityEmailResend], ahora: datetime
+) -> str | None:
+    """La decisión de reenviar es del permiso; esto es sólo lo que hace falta
+    para que el reenvío pueda salir de verdad y no se pise con otro."""
+    if existente is None or existente.status not in REENVIABLE:
+        return "resend_not_sent_yet"
+    ultimo = reenvios[-1] if reenvios else None
+    if ultimo is not None and ultimo.status == DeliveryStatus.CLAIMED.value and ultimo.created_at > ahora - RESERVA:
+        return "resend_in_progress"
+    # El interruptor de emergencia por tipo manda también aquí.
+    if not _habilitado(ev_reporte.report_type):
+        return "real_send_disabled"
+    if dest is None or not dest["active"]:
+        return "recipient_inactive"
+    if not correo_valido(dest["email"]):
+        return "recipient_invalid_email"
+    if not ev_reporte.eligible:
+        return ev_reporte.reason_code
+    return None
+
+
 async def evaluar(
     *, company_id: int, report_type: str, recipient_user_id: int, operational_date: date,
     ahora: datetime,
@@ -244,12 +309,17 @@ async def evaluar(
     dest = await _destinatario(company_id, recipient_user_id)
     existente = await _existente(company_id, recipient_user_id, reporte.report_type, operational_date)
     motivo = _bloqueo(reporte, dest, existente, ahora)
+    reenvios = await _reenvios(existente.id) if existente is not None else []
+    motivo_reenvio = _bloqueo_reenvio(reporte, dest, existente, reenvios, ahora)
     return Evaluacion(
         reporte=reporte,
         can_send=motivo is None,
         blocked_reason=motivo,
         delivery=_fila(existente),
         destination_masked=enmascarar(dest["email"]) if dest and correo_valido(dest["email"]) else None,
+        can_resend=motivo_reenvio is None,
+        resend_blocked_reason=motivo_reenvio,
+        resends=[_reenvio(r) for r in reenvios],
     )
 
 
@@ -314,13 +384,8 @@ def _clasificar(exc: backends.EmailFailure) -> str:
     return DeliveryStatus.RETRYABLE_FAILURE.value
 
 
-async def entregar(
-    *, company_id: int, delivery_id: int, reporte: ReporteReal, email: str, ahora: datetime,
-    actor_user_id: int | None,
-) -> dict:
-    """Manda el correo reservado y deja el resultado. Sin cuerpo en la traza."""
-    codigo = None
-    backend = None
+async def _mandar(reporte: ReporteReal, email: str) -> tuple[str, str | None, str | None]:
+    """(estado, código, backend) de una conversación con el proveedor."""
     try:
         backend = await asyncio.to_thread(
             backends.send_email,
@@ -329,13 +394,20 @@ async def entregar(
             body=reporte.body,
             headers={"X-CER-Route-Report": reporte.report_type},
         )
-        if backend == "console":
-            # El backend de desarrollo no saca nada del servidor: no es un envío.
-            estado, codigo = DeliveryStatus.RETRYABLE_FAILURE.value, "provider_not_configured"
-        else:
-            estado = DeliveryStatus.ACCEPTED_BY_PROVIDER.value
     except backends.EmailFailure as exc:
-        estado, codigo = _clasificar(exc), exc.step
+        return _clasificar(exc), exc.step, None
+    if backend == "console":
+        # El backend de desarrollo no saca nada del servidor: no es un envío.
+        return DeliveryStatus.RETRYABLE_FAILURE.value, "provider_not_configured", backend
+    return DeliveryStatus.ACCEPTED_BY_PROVIDER.value, None, backend
+
+
+async def entregar(
+    *, company_id: int, delivery_id: int, reporte: ReporteReal, email: str, ahora: datetime,
+    actor_user_id: int | None,
+) -> dict:
+    """Manda el correo reservado y deja el resultado. Sin cuerpo en la traza."""
+    estado, codigo, backend = await _mandar(reporte, email)
 
     async with transaction() as session:
         fila = await session.scalar(
@@ -392,17 +464,30 @@ async def omitir(*, company_id: int, reporte: ReporteReal, motivo: str, source: 
 
 
 async def _enviados_por(actor_user_id: int, ahora: datetime) -> int:
+    """Envíos y reenvíos a mano de esta persona en la última hora."""
+    desde = ahora - timedelta(hours=1)
     async with db_session() as session:
-        return int(
-            await session.scalar(
-                select(func.count()).select_from(ActivityEmailDelivery).where(
-                    ActivityEmailDelivery.requested_by_user_id == actor_user_id,
-                    ActivityEmailDelivery.source == DeliverySource.MANUAL.value,
-                    ActivityEmailDelivery.last_attempt_at >= ahora - timedelta(hours=1),
-                )
+        envios = await session.scalar(
+            select(func.count()).select_from(ActivityEmailDelivery).where(
+                ActivityEmailDelivery.requested_by_user_id == actor_user_id,
+                ActivityEmailDelivery.source == DeliverySource.MANUAL.value,
+                ActivityEmailDelivery.last_attempt_at >= desde,
             )
-            or 0
         )
+        reenvios = await session.scalar(
+            select(func.count()).select_from(ActivityEmailResend).where(
+                ActivityEmailResend.requested_by_user_id == actor_user_id,
+                ActivityEmailResend.created_at >= desde,
+            )
+        )
+    return int(envios or 0) + int(reenvios or 0)
+
+
+def _limite_manual() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+        detail={"code": "rate_limited", "message": f"Up to {LIMITE_MANUAL} manual sends per hour."},
+    )
 
 
 async def enviar_ahora(
@@ -416,10 +501,7 @@ async def enviar_ahora(
     if not ev.can_send:
         raise _error(ev.blocked_reason)
     if await _enviados_por(actor_user_id, ahora) >= LIMITE_MANUAL:
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail={"code": "rate_limited", "message": f"Up to {LIMITE_MANUAL} manual sends per hour."},
-        )
+        raise _limite_manual()
     delivery_id = await reclamar(
         company_id=company_id, reporte=ev.reporte, source=DeliverySource.MANUAL.value, ahora=ahora,
         actor_user_id=actor_user_id, reason=reason,
@@ -428,6 +510,76 @@ async def enviar_ahora(
     resultado = await entregar(
         company_id=company_id, delivery_id=delivery_id, reporte=ev.reporte, email=dest["email"],
         ahora=ahora, actor_user_id=actor_user_id,
+    )
+    return {**resultado, "destination_masked": ev.destination_masked}
+
+
+async def reenviar(
+    *, company_id: int, actor_user_id: int, report_type: str, recipient_user_id: int,
+    operational_date: date, expected_resends: int, reason: str | None, ahora: datetime,
+) -> dict:
+    """Vuelve a mandar un correo que ya salió, con los datos de ahora.
+
+    `expected_resends` es cuántos reenvíos vio quien pulsa: sólo uno puede
+    ocupar el número siguiente, así que un doble clic responde 409.
+    """
+    ev = await evaluar(
+        company_id=company_id, report_type=report_type, recipient_user_id=recipient_user_id,
+        operational_date=operational_date, ahora=ahora,
+    )
+    if not ev.can_resend:
+        raise _error(ev.resend_blocked_reason)
+    if expected_resends != len(ev.resends):
+        raise _error("resend_conflict")
+    if await _enviados_por(actor_user_id, ahora) >= LIMITE_MANUAL:
+        raise _limite_manual()
+
+    delivery_id = ev.delivery["id"]
+    try:
+        async with transaction() as session:
+            fila = ActivityEmailResend(
+                company_id=company_id,
+                delivery_id=delivery_id,
+                sequence=expected_resends + 1,
+                status=DeliveryStatus.CLAIMED.value,
+                requested_by_user_id=actor_user_id,
+                request_reason=(reason or None) and reason[:300],
+            )
+            session.add(fila)
+            await session.flush()
+            reenvio_id = fila.id
+    except IntegrityError:
+        raise _error("resend_conflict") from None
+
+    dest = await _destinatario(company_id, recipient_user_id)
+    estado, codigo, backend = await _mandar(ev.reporte, dest["email"])
+
+    async with transaction() as session:
+        fila = await session.get(ActivityEmailResend, reenvio_id, with_for_update=True)
+        fila.status = estado
+        fila.reason_code = codigo
+        fila.provider_backend = backend
+        if estado == DeliveryStatus.ACCEPTED_BY_PROVIDER.value:
+            fila.accepted_at = ahora
+        await session.flush()
+        resultado = _reenvio(fila)
+
+    await record_event(
+        company_id=company_id,
+        entity_type="activity_email_resend",
+        entity_id=reenvio_id,
+        action=estado,
+        actor_user_id=actor_user_id,
+        summary=(
+            f"resend #{resultado['sequence']} of {report_type} for user {recipient_user_id} "
+            f"on {operational_date}: {estado}"
+        ),
+        changes={
+            "delivery_id": {"old": None, "new": delivery_id},
+            "sequence": {"old": None, "new": resultado["sequence"]},
+            "status": {"old": DeliveryStatus.CLAIMED.value, "new": estado},
+            "reason_code": {"old": None, "new": codigo},
+        },
     )
     return {**resultado, "destination_masked": ev.destination_masked}
 

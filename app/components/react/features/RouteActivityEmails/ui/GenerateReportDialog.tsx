@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FileText, Loader2, Send } from 'lucide-react';
+import { FileText, Loader2, RotateCcw, Send } from 'lucide-react';
 import {
     Badge,
     Button,
@@ -18,6 +18,7 @@ import {
     fetchDeliveries,
     fetchStrategicRecipients,
     previewRealReport,
+    resendRealReport,
     sendRealReport,
     type ActivityEmailTemplate,
     type Delivery,
@@ -75,10 +76,15 @@ function mensajeDeError(error: unknown, porDefecto: string): string {
  * dirección escrita) y sólo cuando el reporte ya tocaba: el uso principal es
  * recuperar un envío automático que no salió. El servidor decide si se puede;
  * aquí sólo se enseña su respuesta y su motivo.
+ *
+ * «Resend» repite un correo que ya salió (o cuyo resultado es incierto). Lo
+ * autoriza la capacidad `route.activityemails.resend`; cada reenvío queda en
+ * el historial y un doble clic no manda dos.
  */
 export function GenerateReportDialog({ template, open, onOpenChange }: GenerateReportDialogProps) {
     const { hasUserPermission } = useUser();
     const puedeEnviar = hasUserPermission('route.activityemails.send');
+    const puedeReenviar = hasUserPermission('route.activityemails.resend');
     const estrategico = template.group === 'strategic';
 
     const [personas, setPersonas] = useState<Persona[]>([]);
@@ -88,7 +94,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
     const [vista, setVista] = useState<RealReportPreview | null>(null);
     const [historial, setHistorial] = useState<Delivery[]>([]);
     const [generando, setGenerando] = useState(false);
-    const [confirmar, setConfirmar] = useState(false);
+    const [confirmar, setConfirmar] = useState<'send' | 'resend' | null>(null);
     const [motivo, setMotivo] = useState('');
     const [enviando, setEnviando] = useState(false);
     const [resultado, setResultado] = useState<string | null>(null);
@@ -99,7 +105,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
         setVista(null);
         setResultado(null);
         setError(null);
-        setConfirmar(false);
+        setConfirmar(null);
         const cargar = estrategico ? fetchStrategicRecipients : fetchActivityEmailRecipients;
         cargar({ page: 1, pageSize: 100, q: filtro || undefined, includeSelf: true })
             .then((p) => setPersonas(p.results))
@@ -122,7 +128,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
         setGenerando(true);
         setError(null);
         setResultado(null);
-        setConfirmar(false);
+        setConfirmar(null);
         try {
             setVista(await previewRealReport({
                 report_type: template.template_type, recipient_user_id: destinatario, operational_date: dia,
@@ -148,7 +154,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                 reason: motivo.trim() || undefined,
             });
             setResultado(`${ESTADO[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
-            setConfirmar(false);
+            setConfirmar(null);
             // La vista previa ya no vale: ahora dice «ya enviado» y no ofrece
             // volver a mandarlo.
             setVista(await previewRealReport({
@@ -157,6 +163,31 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
             await cargarHistorial();
         } catch (err) {
             setError(mensajeDeError(err, 'The report could not be sent.'));
+        } finally {
+            setEnviando(false);
+        }
+    };
+
+    const reenviar = async () => {
+        if (!destinatario || !vista) return;
+        setEnviando(true);
+        setError(null);
+        try {
+            const r = await resendRealReport({
+                report_type: template.template_type,
+                recipient_user_id: destinatario,
+                operational_date: dia,
+                expected_resends: vista.resends.length,
+                reason: motivo.trim() || undefined,
+            });
+            setResultado(`Resend #${r.sequence}: ${ESTADO[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
+            setConfirmar(null);
+            setVista(await previewRealReport({
+                report_type: template.template_type, recipient_user_id: destinatario, operational_date: dia,
+            }));
+            await cargarHistorial();
+        } catch (err) {
+            setError(mensajeDeError(err, 'The report could not be resent.'));
         } finally {
             setEnviando(false);
         }
@@ -265,25 +296,44 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                             </div>
                         )}
 
-                        {puedeEnviar && (
+                        {(puedeEnviar || puedeReenviar) && (
                             <div className="space-y-2 rounded-md border p-3">
-                                {!vista.can_send && (
+                                {puedeEnviar && !vista.can_send && !(puedeReenviar && vista.can_resend) && (
                                     <p className="text-sm text-muted-foreground">{vista.blocked_message}</p>
                                 )}
+                                {puedeReenviar && vista.delivery && !vista.can_resend && vista.resend_blocked_message && (
+                                    <p className="text-sm text-muted-foreground">{vista.resend_blocked_message}</p>
+                                )}
                                 {!confirmar && (
-                                    <Button type="button" disabled={!vista.can_send} onClick={() => setConfirmar(true)}>
-                                        <Send className="mr-2 size-4" />
-                                        Send now
-                                    </Button>
+                                    <div className="flex flex-wrap gap-2">
+                                        {puedeEnviar && !(puedeReenviar && vista.can_resend) && (
+                                            <Button type="button" disabled={!vista.can_send} onClick={() => setConfirmar('send')}>
+                                                <Send className="mr-2 size-4" />
+                                                Send now
+                                            </Button>
+                                        )}
+                                        {puedeReenviar && vista.can_resend && (
+                                            <Button type="button" onClick={() => setConfirmar('resend')}>
+                                                <RotateCcw className="mr-2 size-4" />
+                                                Resend
+                                            </Button>
+                                        )}
+                                    </div>
                                 )}
                                 {confirmar && (
-                                    <div className="space-y-2" role="group" aria-label="Confirm sending">
+                                    <div
+                                        className="space-y-2"
+                                        role="group"
+                                        aria-label={confirmar === 'resend' ? 'Confirm resending' : 'Confirm sending'}
+                                    >
                                         <p className="text-sm">
-                                            {`Send “${template.label}” for ${vista.operational_date} to `}
+                                            {`${confirmar === 'resend' ? 'Resend' : 'Send'} “${template.label}” for ${vista.operational_date} to `}
                                             <strong>{nombre ? `${nombre.first_name} ${nombre.last_name}` : vista.recipient_name}</strong>
                                             {` (${vista.destination_masked ?? 'configured address'}), with data until `}
                                             {hora(vista.cutoff_at, vista.time_zone)}
-                                            . If the scheduled send runs later it will not send it again.
+                                            {confirmar === 'resend'
+                                                ? '. It was already sent: the recipient will receive it again.'
+                                                : '. If the scheduled send runs later it will not send it again.'}
                                         </p>
                                         <Label htmlFor={`${idBase}-reason`}>Reason (optional)</Label>
                                         <Textarea
@@ -294,10 +344,14 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                                             onChange={(e) => setMotivo(e.target.value)}
                                         />
                                         <div className="flex gap-2">
-                                            <Button type="button" variant="outline" onClick={() => setConfirmar(false)}>Cancel</Button>
-                                            <Button type="button" disabled={enviando} onClick={enviar}>
+                                            <Button type="button" variant="outline" onClick={() => setConfirmar(null)}>Cancel</Button>
+                                            <Button
+                                                type="button"
+                                                disabled={enviando}
+                                                onClick={confirmar === 'resend' ? reenviar : enviar}
+                                            >
                                                 {enviando && <Loader2 className="mr-2 size-4 animate-spin" />}
-                                                Confirm and send
+                                                {confirmar === 'resend' ? 'Confirm and resend' : 'Confirm and send'}
                                             </Button>
                                         </div>
                                     </div>
@@ -314,6 +368,11 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                                         <li key={h.id} className="rounded-md border px-3 py-2">
                                             {`${ESTADO[h.status]} · ${h.source} · attempt ${h.attempt_count}`}
                                             {h.last_attempt_at ? ` · ${hora(h.last_attempt_at, vista.time_zone)}` : ''}
+                                        </li>
+                                    ))}
+                                    {vista.resends.map((r) => (
+                                        <li key={`resend-${r.id}`} className="rounded-md border px-3 py-2">
+                                            {`Resend #${r.sequence} · ${ESTADO[r.status]} · ${hora(r.created_at, vista.time_zone)}`}
                                         </li>
                                     ))}
                                 </ul>

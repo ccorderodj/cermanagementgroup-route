@@ -21,6 +21,7 @@ import sys
 from datetime import date, datetime, timedelta, timezone
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from app.config import settings
 from app.core.email import backends
@@ -37,6 +38,7 @@ DIA = date(2026, 10, 14)  # miércoles; EDT (UTC-4): las 12:00 locales son las 1
 MEDIODIA_UTC = datetime(2026, 10, 14, 16, 0, tzinfo=timezone.utc)
 PREVIEW = "/api/activity-emails/reports/preview"
 SEND = "/api/activity-emails/reports/send"
+RESEND = "/api/activity-emails/reports/resend"
 HISTORIAL = "/api/activity-emails/reports/deliveries"
 MOT_MEDIODIA = "midday_motivation"
 MOT_FIN = "end_of_day_recognition"
@@ -346,6 +348,115 @@ async def test_tiempo_agotado_es_incierto_y_no_se_reenvia(seeded, alpha_client, 
     assert r.json()["status"] == "unknown_outcome"
     otra = await alpha_client.post(SEND, json=_pedido(seeded, "supervisor", MOT_MEDIODIA))
     assert otra.status_code == 409 and otra.json()["detail"]["code"] == "needs_reconciliation"
+
+    # Quien comprobó que no llegó puede reenviarlo a mano, con su permiso.
+    backends.set_email_backend(outbox)
+    await _capacidades(seeded, "route_admin", "route.activityemails.resend")
+    r = await alpha_client.post(RESEND, json={**_pedido(seeded, "supervisor", MOT_MEDIODIA), "expected_resends": 0})
+    assert r.status_code == 200 and r.json()["status"] == "accepted_by_provider"
+    assert len(outbox.outbox) == 1
+
+
+# ── «Resend» ────────────────────────────────────────────────────────────────
+
+
+async def _enviado(seeded, cliente):
+    """Un motivacional de mediodía ya aceptado por el proveedor."""
+    await _jornada_en(cliente, seeded, "supervisor", inicio=_utc(13), fin_actividad=_utc(15), fin_jornada=_utc(21))
+    await _activar(seeded, "supervisor", "midday_enabled")
+    await _preparar_admin(seeded, cliente, "route.activityemails.send", "route.activityemails.preview")
+    r = await cliente.post(SEND, json=_pedido(seeded, "supervisor", MOT_MEDIODIA))
+    assert r.status_code == 200 and r.json()["status"] == "accepted_by_provider"
+
+
+def _reenvio(seeded, vistos: int, **extra) -> dict:
+    return {**_pedido(seeded, "supervisor", MOT_MEDIODIA), "expected_resends": vistos, **extra}
+
+
+async def test_reenvio_solo_con_su_permiso_y_numerado(seeded, alpha_client, outbox, envio_real):
+    await _enviado(seeded, alpha_client)
+    assert (await alpha_client.post(RESEND, json=_reenvio(seeded, 0))).status_code == 403, "enviar no autoriza a reenviar"
+
+    await _capacidades(seeded, "route_admin", "route.activityemails.resend")
+    vista = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "supervisor", MOT_MEDIODIA))).json()
+    assert vista["can_send"] is False and vista["blocked_reason"] == "already_sent"
+    assert vista["can_resend"] is True and vista["resends"] == []
+
+    r = await alpha_client.post(RESEND, json=_reenvio(seeded, 0, reason="No le llegó"))
+    assert r.status_code == 200, r.text
+    assert r.json()["sequence"] == 1 and r.json()["status"] == "accepted_by_provider"
+    assert r.json()["destination_masked"].startswith("s***r@")
+    assert len(outbox.outbox) == 2
+    assert outbox.outbox[-1].headers == {"X-CER-Route-Report": MOT_MEDIODIA}
+
+    # Quien no vio el primer reenvío no manda otro sin querer.
+    otra = await alpha_client.post(RESEND, json=_reenvio(seeded, 0))
+    assert otra.status_code == 409 and otra.json()["detail"]["code"] == "resend_conflict"
+    # El interruptor de la persona no cuenta: sólo el permiso.
+    await _ejecutar("UPDATE activity_email_preference SET midday_enabled = false")
+    r = await alpha_client.post(RESEND, json=_reenvio(seeded, 1))
+    assert r.status_code == 200 and r.json()["sequence"] == 2
+    assert len(outbox.outbox) == 3
+
+    vista = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "supervisor", MOT_MEDIODIA))).json()
+    assert [x["sequence"] for x in vista["resends"]] == [1, 2]
+    filas = await _filas("SELECT sequence, request_reason FROM activity_email_resend ORDER BY sequence")
+    assert [(f.sequence, f.request_reason) for f in filas] == [(1, "No le llegó"), (2, None)]
+    eventos = await _filas("SELECT action, changes FROM audit_event WHERE entity_type = 'activity_email_resend'")
+    assert len(eventos) == 2 and all("body" not in e.changes for e in eventos)
+    # La entrega original no cambia: sigue siendo una sola.
+    assert len(await _filas("SELECT 1 FROM activity_email_delivery")) == 1
+
+
+async def test_no_se_reenvia_lo_que_no_salio(seeded, alpha_client, outbox, envio_real):
+    await _jornada_en(alpha_client, seeded, "supervisor", inicio=_utc(13), fin_actividad=_utc(15), fin_jornada=_utc(21))
+    await _activar(seeded, "supervisor", "midday_enabled")
+    await _preparar_admin(seeded, alpha_client, "route.activityemails.resend", "route.activityemails.preview")
+    r = await alpha_client.post(RESEND, json=_reenvio(seeded, 0))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "resend_not_sent_yet"
+    vista = (await alpha_client.post(PREVIEW, json=_pedido(seeded, "supervisor", MOT_MEDIODIA))).json()
+    assert vista["can_resend"] is False and vista["can_send"] is True
+    assert outbox.outbox == []
+
+
+async def test_reenvio_respeta_el_interruptor_por_tipo_y_otro_tenant(seeded, alpha_client, outbox, envio_real, monkeypatch):
+    await _enviado(seeded, alpha_client)
+    await _capacidades(seeded, "route_admin", "route.activityemails.resend")
+    otro = {**_reenvio(seeded, 0), "recipient_user_id": seeded.beta.users["supervisor"].id}
+    assert (await alpha_client.post(RESEND, json=otro)).status_code == 404
+    monkeypatch.setattr(settings, "MAIL_REAL_SEND_TYPES", "")
+    r = await alpha_client.post(RESEND, json=_reenvio(seeded, 0))
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "real_send_disabled"
+    assert len(outbox.outbox) == 1
+
+
+async def test_doble_clic_un_solo_reenvio(seeded, alpha_client, outbox, envio_real):
+    await _enviado(seeded, alpha_client)
+    await _capacidades(seeded, "route_admin", "route.activityemails.resend")
+    r = await asyncio.gather(*(alpha_client.post(RESEND, json=_reenvio(seeded, 0)) for _ in range(3)))
+    assert sorted(x.status_code for x in r) == [200, 409, 409]
+    assert len(outbox.outbox) == 2
+    assert len(await _filas("SELECT 1 FROM activity_email_resend")) == 1
+
+
+async def test_la_base_rechaza_un_reenvio_duplicado_o_sin_numero(seeded, alpha_client, outbox, envio_real):
+    await _enviado(seeded, alpha_client)
+    entrega = (await _filas("SELECT id, company_id FROM activity_email_delivery"))[0]
+    sql = (
+        "INSERT INTO activity_email_resend (company_id, delivery_id, sequence, status) "
+        "VALUES (:c, :d, :n, 'accepted_by_provider')"
+    )
+    await _ejecutar(sql, c=entrega.company_id, d=entrega.id, n=1)
+    with pytest.raises(IntegrityError):
+        await _ejecutar(sql, c=entrega.company_id, d=entrega.id, n=1)
+    with pytest.raises(IntegrityError):
+        await _ejecutar(sql, c=entrega.company_id, d=entrega.id, n=0)
+    with pytest.raises(IntegrityError):
+        await _ejecutar(
+            "INSERT INTO activity_email_resend (company_id, delivery_id, sequence, status) "
+            "VALUES (:c, :d, 2, 'delivered')",
+            c=entrega.company_id, d=entrega.id,
+        )
 
 
 # ── El barrido (programador interno y cron) ─────────────────────────────────

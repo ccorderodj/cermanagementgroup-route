@@ -34,8 +34,11 @@ from app.routers_api.activityemails.schemas import (
     DeliveryRead,
     ReportPreviewRead,
     ReportRequest,
+    ReportResendRequest,
     ReportSendRequest,
     ReportSendResult,
+    ResendRead,
+    ResendResult,
     RecipientsPaginationParams,
     StrategicRecipientRead,
     StrategicRecipientUpdate,
@@ -250,11 +253,13 @@ async def test_send(
 
 # ── Reportes reales a demanda (RTE-MAIL-CP4-02) ─────────────────────────────
 #
-# Tres autoridades distintas (OD-10): configurar (`manage`), ver un reporte con
-# datos reales (`preview`) y enviarlo ahora (`send`). Las tres a demanda.
+# Cuatro autoridades distintas (OD-10): configurar (`manage`), ver un reporte
+# con datos reales (`preview`), enviarlo ahora (`send`) y reenviar uno que ya
+# salió (`resend`). Las cuatro a demanda.
 
 _VER_REAL = require_permissions(["route.activityemails.preview"])
 _ENVIAR = require_permissions(["route.activityemails.send"])
+_REENVIAR = require_permissions(["route.activityemails.resend"])
 
 
 async def _objetivo(*, company_id: int, actor_user_id: int, recipient_user_id: int) -> None:
@@ -317,6 +322,10 @@ async def preview_real_report(
         blocked_reason=ev.blocked_reason,
         blocked_message=delivery.MOTIVOS.get(ev.blocked_reason) if ev.blocked_reason else None,
         delivery=DeliveryRead.model_validate(ev.delivery) if ev.delivery else None,
+        can_resend=ev.can_resend,
+        resend_blocked_reason=ev.resend_blocked_reason,
+        resend_blocked_message=delivery.MOTIVOS.get(ev.resend_blocked_reason) if ev.resend_blocked_reason else None,
+        resends=[ResendRead.model_validate(r) for r in ev.resends],
     )
 
 
@@ -337,6 +346,25 @@ async def send_real_report(
         reason=payload.reason, ahora=datetime.now(timezone.utc),
     )
     return ReportSendResult.model_validate(resultado)
+
+
+@router.post("/reports/resend")
+async def resend_real_report(
+    payload: ReportResendRequest,
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_REENVIAR),
+    company: TenantContext = Depends(get_company_required),
+) -> ResendResult:
+    """Reenvía un reporte que ya salió (o cuyo resultado es incierto), con los
+    datos de ahora y al destinatario configurado. Un doble clic responde 409."""
+    tipo = _tipo(payload.report_type)
+    await _objetivo(company_id=company.id, actor_user_id=current_user.id, recipient_user_id=payload.recipient_user_id)
+    resultado = await delivery.reenviar(
+        company_id=company.id, actor_user_id=current_user.id, report_type=tipo,
+        recipient_user_id=payload.recipient_user_id, operational_date=payload.operational_date,
+        expected_resends=payload.expected_resends, reason=payload.reason, ahora=datetime.now(timezone.utc),
+    )
+    return ResendResult.model_validate(resultado)
 
 
 @router.get("/reports/deliveries")

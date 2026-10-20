@@ -177,6 +177,28 @@ class ReportSendRequest(ReportRequest):
     reason: str | None = Field(default=None, max_length=300)
 
 
+class ReportResendRequest(ReportRequest):
+    #: Cuántos reenvíos vio quien pulsa. Si otro reenvió entre medias, 409.
+    expected_resends: int = Field(ge=0)
+    reason: str | None = Field(default=None, max_length=300)
+
+
+class ResendRead(BaseModel):
+    id: int
+    sequence: int
+    status: str
+    reason_code: str | None
+    requested_by_user_id: int | None
+    provider_backend: str | None
+    #: Aceptado por el proveedor; **no** es la entrega en el buzón.
+    accepted_at: datetime | None
+    created_at: datetime
+
+
+class ResendResult(ResendRead):
+    destination_masked: str | None
+
+
 class DeliveryRead(BaseModel):
     id: int
     report_type: str
@@ -220,6 +242,10 @@ class ReportPreviewRead(BaseModel):
     blocked_reason: str | None
     blocked_message: str | None
     delivery: DeliveryRead | None
+    can_resend: bool
+    resend_blocked_reason: str | None
+    resend_blocked_message: str | None
+    resends: list[ResendRead]
 
 
 class ReportSendResult(DeliveryRead):

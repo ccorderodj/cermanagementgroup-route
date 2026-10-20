@@ -125,6 +125,9 @@ CAPABILITIES: tuple[Capability, ...] = (
     # Route. Ver no autoriza a enviar.
     _cap("route", "activityemails.preview", "Generate an activity email report with real data, without sending it"),
     _cap("route", "activityemails.send", "Send an activity email report now to its configured recipient"),
+    # Reenviar un correo que ya salió es una tercera autoridad, también a
+    # demanda: enviar recupera lo que no salió; reenviar repite lo que salió.
+    _cap("route", "activityemails.resend", "Resend an activity email report that was already sent"),
     #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
@@ -222,6 +225,7 @@ CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset(
         "route.activityemails.manage",
         "route.activityemails.preview",
         "route.activityemails.send",
+        "route.activityemails.resend",
     }
 )
 
