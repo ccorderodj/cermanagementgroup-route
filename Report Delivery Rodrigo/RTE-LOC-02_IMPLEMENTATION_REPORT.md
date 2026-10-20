@@ -52,8 +52,8 @@
 
 | Comando | Resultado |
 |---|---|
-| `pytest tests/integration/test_location_capture.py -n 4` | **6/6 PASS**: configuración (403, 422, 409, auditoría, tenant), apagada 409 sin escribir, ingesta (aceptada, precisión, fuera de jornada, futura, antigua, duplicada, 51 → 422, campos de identidad → 422), jornada ajena u otro tenant → 404/409, línea de tiempo y que millaje/routing no leen las muestras |
-| `pytest tests/e2e/test_periodic_location_browser.py tests/e2e/test_offline_queue_isolation_browser.py` | **6/6 PASS**: pantalla (escritorio y móvil sin scroll horizontal), apagada (0 muestras, el punto de Start Work sigue), encendida (1.ª muestra y aviso), dos pestañas (1 muestra) y aislamiento |
+| `pytest tests/integration/test_location_capture.py` | **6/6 PASS**: configuración, ingesta, aislamiento, línea de tiempo y que el millaje no lee muestras |
+| E2E `test_periodic_location_browser.py` y `test_offline_queue_isolation_browser.py` | **6/6 PASS**: pantalla, apagada, encendida, dos pestañas y aislamiento |
 | `pytest tests/test_page_wiring.py tests/test_navigation_wiring.py tests/test_permission_catalog.py tests/test_public_surface.py` | 66/66 PASS |
 | `npm run check` / `npm run build:prod` | exit 0 / exit 0 |
 | **Regresión completa** `pytest tests -n 6` | **1745 PASS · 4 FAIL · 15 skipped** (49 min). Detalle de los 4 fallos, abajo |
@@ -73,10 +73,10 @@
 - red lenta, desbordamiento de la cola.
 
 ## Riesgos
-- **Acciones antiguas sin propietario:** retenidas sin vía de recuperación en la interfaz.
-- **El aviso necesita revisión legal.**
-- **Sin garantía en segundo plano:** la web no puede asegurar la captura con la pantalla bloqueada.
-- **Asignación de muestras a viajes:** depende del reloj del dispositivo.
+- Acciones antiguas sin propietario, retenidas sin recuperación en la interfaz.
+- Revisión legal del aviso.
+- Sin garantía en segundo plano.
+- Asignación a viajes según el reloj del dispositivo.
 
 ## Despliegue
 1. Fusionar el MR. En `migrate` deben aparecer `0028` y `converge`, que crea `route.locationcapture.manage`.
