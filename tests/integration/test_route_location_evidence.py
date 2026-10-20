@@ -941,7 +941,11 @@ async def test_the_client_can_read_the_capture_policy(seeded, alpha_client):
         "cached_max_accuracy_m",
         "recovery_window_seconds",
         "sweeper_grace_seconds",
+        # RTE-LOC-02: la captura periódica de la compañía, apagada por defecto.
+        "periodic_capture_enabled",
+        "periodic_capture_interval_seconds",
     }, cuerpo
+    assert (cuerpo["periodic_capture_enabled"], cuerpo["periodic_capture_interval_seconds"]) == (False, 300)
     # Los valores por defecto de `RouteLocationPolicy`, que son los aprobados.
     assert cuerpo["fresh_max_accuracy_m"] == 100
     assert cuerpo["recovery_window_seconds"] == 180

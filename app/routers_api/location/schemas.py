@@ -199,3 +199,7 @@ class LocationPolicyRead(BaseModel):
     #: sentido reintentar** un envio: pasada la ventana mas este margen, el
     #: servidor cierra el hecho por su cuenta y el reintento no puede ganar.
     sweeper_grace_seconds: int
+    #: RTE-LOC-02: la captura periódica **de esta compañía**. Independiente de
+    #: los umbrales de arriba, que siguen gobernando la captura por evento.
+    periodic_capture_enabled: bool = False
+    periodic_capture_interval_seconds: int = 300

@@ -238,8 +238,11 @@ function normalizar(posicion: GeolocationPosition): PuntoCrudo {
     };
 }
 
-/** Una lectura de posición, envuelta en promesa y acotada en tiempo. */
-function pedirPosicion(opciones: PositionOptions): Promise<PuntoCrudo> {
+/**
+ * Una lectura de posición, envuelta en promesa y acotada en tiempo. La
+ * reutiliza la captura periódica (RTE-LOC-02), que no toca nada más de aquí.
+ */
+export function pedirPosicion(opciones: PositionOptions): Promise<PuntoCrudo> {
     return new Promise((resolver, rechazar) => {
         if (!navigator.geolocation) {
             // Un `Error` con `code`, no un objeto pelado: el resto del módulo

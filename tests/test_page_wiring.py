@@ -203,6 +203,7 @@ PAGE_TEMPLATES = [
     "admin/route/reports.html",
     "admin/route/odometer-exceptions.html",
     "admin/route/activity-emails.html",
+    "admin/route/location-capture.html",
     # CER Route: espacio móvil del supervisor.
     "route/my-route.html",
     "route/activity.html",

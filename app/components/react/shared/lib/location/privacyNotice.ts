@@ -59,10 +59,12 @@ export const LOCATION_NOTICE = {
     body:
         'CER Route records your location at a few points of your work day — when '
         + 'you start work, start a trip, change a plan, arrive, finish an activity '
-        + 'and end work — to calculate the road mileage of each trip.',
+        + 'and end work — to calculate the road mileage of each trip. If your '
+        + 'company turns on periodic capture, it also records your location '
+        + 'periodically while you use the app during your workday.',
     boundaries: [
         'Only while your work day is active. Never before you start or after you end it.',
-        'Only at those moments. Your route between them is not tracked.',
+        'Only while CER Route is open: not with the screen locked or the app closed.',
         'If there is no signal, your work continues normally.',
     ],
     acknowledge: 'Got it',

@@ -49,15 +49,21 @@ interface LocationGateProps {
     hayOperacionAbierta?: boolean;
     /** Para que la pagina retire lo que abre trabajo nuevo. */
     onPermisoChange?: (permiso: PermisoOperativo) => void;
+    /**
+     * RTE-LOC-02: con la captura periodica encendida, una frase que lo dice.
+     * Es informacion, no un consentimiento: el boton sigue siendo el mismo.
+     */
+    avisoPeriodico?: string;
 }
 
 function Mensaje({
-    pidiendo, sinDialogo, onHabilitar, compacto,
+    pidiendo, sinDialogo, onHabilitar, compacto, avisoPeriodico,
 }: {
     pidiendo: boolean;
     sinDialogo: boolean;
     onHabilitar: () => void;
     compacto: boolean;
+    avisoPeriodico?: string;
 }) {
     return (
         <div
@@ -71,6 +77,9 @@ function Mensaje({
                 <p className="mx-auto max-w-sm text-sm text-muted-foreground">
                     CER Route requires location access to use My Route.
                 </p>
+                {avisoPeriodico && (
+                    <p className="mx-auto max-w-sm text-sm text-muted-foreground">{avisoPeriodico}</p>
+                )}
                 {compacto && (
                     <p className="mx-auto max-w-sm text-sm text-muted-foreground">
                         You can still finish what is already open below. Nothing new
@@ -104,7 +113,9 @@ function Mensaje({
 }
 
 export function LocationGate(props: LocationGateProps) {
-    const { children, hayOperacionAbierta = false, onPermisoChange } = props;
+    const {
+        children, hayOperacionAbierta = false, onPermisoChange, avisoPeriodico,
+    } = props;
 
     const [permiso, setPermiso] = useState<PermisoOperativo | null>(null);
     const [pidiendo, setPidiendo] = useState(false);
@@ -166,6 +177,7 @@ export function LocationGate(props: LocationGateProps) {
                     sinDialogo={sinDialogo}
                     onHabilitar={habilitar}
                     compacto
+                    avisoPeriodico={avisoPeriodico}
                 />
                 {children}
             </div>
@@ -178,6 +190,7 @@ export function LocationGate(props: LocationGateProps) {
             sinDialogo={sinDialogo}
             onHabilitar={habilitar}
             compacto={false}
+            avisoPeriodico={avisoPeriodico}
         />
     );
 }
