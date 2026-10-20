@@ -91,15 +91,19 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
 | `errors` | Fallos de la propia pasada |
 
 ## 5. Encender (solo con GO del PO)
-1. **Proveedor de correo verificado:** Platform › Outbound email › **Verify** en `healthy`, y la prueba real (Send Test Email y las cuatro Send test) confirmada en un buzón.
-2. **Ensayo:** `MAIL_AUTOMATION_ENABLED=true` con `MAIL_AUTOMATION_DRY_RUN=true`. Revisar los `would_send` en los logs durante un día.
-3. **Un tipo y pocas personas:** `MAIL_REAL_SEND_TYPES=midday_motivation`, activar el interruptor solo a 1-2 personas en Recipients y `MAIL_AUTOMATION_DRY_RUN=false`.
-4. **Ampliar tipo a tipo**, a medida que se cierran sus decisiones:
-   - DP-TIMEZONE, para todos;
-   - DP-WEEK, para los de cierre;
-   - DP-CUTOFF y DP-TEAM, para el estratégico de cierre;
-   - DP-NOTES, si algún día se quieren notas reales.
+Los horarios ya están cerrados (RTE-MAIL-CLOSE-01): 12:00, End Work + 20 min y 19:00 locales. Lo que queda es encender por fases y comprobar cada una en la pantalla.
 
+0. **Zona de la compañía:** Company Profile › **Operational time zone**. Sin ella, quien no tenga zona propia (un administrador que representa al CEO) queda en `configuration_required` y no recibe nada. La zona la decide CER; no se supone.
+1. **Proveedor verificado:** Platform › Outbound email › **Verify** en `healthy`, y una prueba real (Send test) recibida en un buzón.
+2. **Ensayo, un día:** `MAIL_AUTOMATION_ENABLED=true` con `MAIL_AUTOMATION_DRY_RUN=true`.
+   - El aviso de Activity Emails debe decir «Dry run» y mostrar pasadas recientes de **los dos** relojes: In-app scheduler cada minuto y DigitalOcean job cada 15 min.
+   - Los contadores `would_send`, `config_required` y `expired` salen en la línea `MAIL DISPATCH` de los logs.
+3. **Piloto:** `MAIL_AUTOMATION_DRY_RUN=false`, con el interruptor encendido **solo a 1–2 personas** por tipo en Recipients. Comprobar en un día completo:
+   - mediodía (T1 y T3 a las 12:00);
+   - fin de jornada (T2 a los +20 min del End Work);
+   - cierre (T4 a las 19:00).
+   Para cada correo: Delivery history (disparador, retraso) **y** recepción en el buzón. «Accepted by the mail provider» no prueba la recepción.
+4. **Ampliar** persona a persona en Recipients.
 ## 6. Si algo va mal
 | Síntoma | Qué hacer |
 |---|---|

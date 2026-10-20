@@ -1,41 +1,29 @@
-# App Spec de `cerroute-dev`, con la convergencia de configuracion.
+# App Spec de `cerroute-dev`: copia conciliada con la REAL de DigitalOcean
+# (RTE-MAIL-CLOSE-01, CP3, 20-10-2026).
 #
-# QUE CAMBIA respecto al spec actual -- solo dos cosas:
+# Es la App Spec que hay hoy en DigitalOcean (Settings > App Spec), con los
+# secretos sustituidos por un marcador. Para aplicarla NO se pega este archivo:
+# se edita la spec real y se dejan los EV[1:...] actuales sin tocar.
 #
-#   1. Una variable nueva: ROUTE_TOMTOM_API_KEY, de tipo SECRET.
-#      Hay que pegar la clave real de TomTom en `value:`; DigitalOcean la
-#      cifra al guardar y la deja como EV[1:...], igual que las demas.
+# Configuración de envío elegida: la MÍNIMA SUFICIENTE.
+#   * El programador interno de la app (cada minuto, réplica líder) da la
+#     precisión: 12:00, End Work + 20 min y 19:00 locales de cada destinatario.
+#   * UN Scheduled Job, `route-mail-reconcile`, cada 15 min en UTC, recupera lo
+#     que venció y no salió (app caída o reiniciándose).
+#   La propuesta anterior de tres jobs (mediodía, cierre y reconciliador) se
+#   descarta: los tres ejecutaban la misma pasada completa y sobre la misma
+#   clave única, así que no añadían precisión ni cobertura, solo invocaciones.
+#   Un job por hora fija tampoco serviría: cada destinatario tiene su zona.
 #
-#   2. Tres lineas en el run_command del job `migrate`:
-#         set -e            <- ya estaba
-#         ...alembic...     <- ya estaba
-#         python -m app.db.scripts.converge     <- NUEVO
+# El job `migrate` (PRE_DEPLOY) aplica las migraciones y `converge` (crea las
+# capacidades nuevas del catálogo). Las de esta entrega: 0026 (zona operativa
+# de la compañía) y 0027 (latido de los relojes y zona del envío).
 #
-# Nada mas. Los secretos existentes se dejan EXACTAMENTE como estan: si se
-# reemplazan por su texto cifrado actual, DigitalOcean los conserva.
-#
-# POR QUE: la integracion de routing vivia unicamente como una fila tecleada
-# en una pantalla. Desaparecio, nadie la repuso, y el kilometraje estuvo seis
-# dias sin calcular -- 54 viajes con evidencia completa terminalizados por un
-# motor que no existia. Con esto, el despliegue deja de ser lo que puede
-# perder la configuracion y pasa a ser lo que la repone.
-#
-# `converge` solo anade, es idempotente, no crea companias ni usuarios y no
-# sobrescribe una integracion que un administrador haya configurado a mano.
-#
-# RTE-MAIL-CP4-01 (19-10-2026) -- envio automatico de los correos de actividad:
-#
-#   3. Dos variables: MAIL_AUTOMATION_ENABLED=false y MAIL_AUTOMATION_DRY_RUN=true.
-#      Con estos valores NO sale ningun correo. Encenderlo es una decision del PO
-#      (GO), por tipo con MAIL_REAL_SEND_TYPES, nunca todos a la vez.
-#
-#   4. Un job `route-mail-reconcile` de tipo SCHEDULED, cada 15 minutos (el
-#      minimo de App Platform), que ejecuta una sola pasada y termina:
-#         python -m app.routers_api.activityemails.jobs --once
-#      Es el reconciliador. La precision (End Work + 20 min) la da el
-#      programador interno de la app, cada minuto, en la replica lider. Los dos
-#      reservan sobre la misma clave: si coinciden, no se duplica nada.
-#      Comparte rama, build y variables con el servicio web.
+# Interruptores del correo (ver docs/MAIL_DISPATCH_RUNBOOK.md):
+#   MAIL_AUTOMATION_ENABLED=false  -> el envío automático no hace nada
+#   MAIL_AUTOMATION_DRY_RUN=true   -> encendido, solo cuenta (no envía)
+#   MAIL_REAL_SEND_TYPES           -> tipos con envío real (automático y manual)
+# Encenderlo va por fases y con GO del PO (runbook, sección 5).
 
 alerts:
 - rule: DEPLOYMENT_FAILED
@@ -68,50 +56,39 @@ envs:
 - key: DB_PASS
   scope: RUN_TIME
   type: SECRET
-  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+  value: <<< EV[1:...] actual, sin tocar >>>
 - key: DB_NAME
   scope: RUN_AND_BUILD_TIME
   value: db-dev-cer-route
 - key: SECRET_KEY
   scope: RUN_TIME
   type: SECRET
-  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+  value: <<< EV[1:...] actual, sin tocar >>>
 - key: ALGORITHM
   scope: RUN_AND_BUILD_TIME
   value: HS256
 - key: PLATFORM_MASTER_KEY
   scope: RUN_TIME
   type: SECRET
-  value: <<< DEJAR EL VALOR EV[1:...] ACTUAL, SIN TOCAR >>>
+  value: <<< EV[1:...] actual, sin tocar >>>
 - key: DB_SSL
   scope: RUN_AND_BUILD_TIME
   value: require
 - key: TESSDATA_PREFIX
   scope: RUN_AND_BUILD_TIME
   value: /layers/digitalocean_apt/apt/usr/share/tesseract-ocr/4.00/tessdata
-
-# ── NUEVO ──────────────────────────────────────────────────────────────────
-# La clave con la que el despliegue repone la integracion `road_routing` si
-# ha desaparecido de la base.
-#
-# RUN_TIME basta: un job corre en tiempo de ejecucion, igual que DB_PASS.
-# Se guarda CIFRADA en la base, usando PLATFORM_MASTER_KEY -- nunca en claro.
-#
-# Si se deja vacia, converge no toca la integracion. Eso es lo correcto para
-# un entorno que use un motor auto-alojado por ROUTE_ROUTING_URL.
-- key: ROUTE_TOMTOM_API_KEY
-  scope: RUN_TIME
-  type: SECRET
-  value: <<< PEGAR AQUI LA CLAVE DE TOMTOM >>>
-
-# RTE-MAIL-CP4-01: envio automatico de los correos de actividad. APAGADO.
-# Ver docs/MAIL_DISPATCH_RUNBOOK.md antes de cambiar cualquiera de los dos.
+- key: ODOMETER_OCR_ENABLED
+  scope: RUN_AND_BUILD_TIME
+  value: "false"
 - key: MAIL_AUTOMATION_ENABLED
   scope: RUN_TIME
   value: "false"
 - key: MAIL_AUTOMATION_DRY_RUN
   scope: RUN_TIME
   value: "true"
+- key: MAIL_REAL_SEND_TYPES
+  scope: RUN_TIME
+  value: midday_motivation,end_of_day_recognition,strategic_midday_report,strategic_end_of_day_report
 features:
 - buildpack-stack=ubuntu-22
 ingress:
@@ -172,22 +149,15 @@ jobs:
     echo "========================================="
     echo " CONFIGURATION CONVERGE"
     echo "========================================="
-    echo ""
-    echo "Alembic lleva el ESQUEMA al dia. Esto lleva la CONFIGURACION:"
-    echo "  - capacidades del catalogo y concesiones a los roles de cada compania"
-    echo "  - valores estandar de cada compania"
-    echo "  - integracion road_routing, si ROUTE_TOMTOM_API_KEY esta definida"
-    echo ""
+    echo "Capacidades nuevas y sus concesiones, valores estandar por compania."
     echo "Solo anade. Idempotente. No crea companias ni usuarios."
-    echo ""
     python -m app.db.scripts.converge
 
     echo ""
     echo "========================================="
-    echo " DEPLOY PREPARATION COMPLETE"
+    echo " DATABASE MIGRATION COMPLETE"
     echo "========================================="
   source_dir: /
-# RTE-MAIL-CP4-01: reconciliador de los correos de actividad (cada 15 min).
 - environment_slug: python
   gitlab:
     branch: dev
@@ -197,10 +167,10 @@ jobs:
   instance_size_slug: apps-s-1vcpu-0.5gb
   kind: SCHEDULED
   name: route-mail-reconcile
-  schedule:
-    cron: "*/15 * * * *"
-    time_zone: Etc/UTC
   run_command: python -m app.routers_api.activityemails.jobs --once
+  schedule:
+    cron: '*/15 * * * *'
+    time_zone: Etc/UTC
   source_dir: /
 name: cerroute-dev
 region: nyc
