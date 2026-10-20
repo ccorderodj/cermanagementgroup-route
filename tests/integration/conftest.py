@@ -297,6 +297,8 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     "org_assignment",
     # RTE-MAIL-CP4: el registro productivo cuelga de la pertenencia.
     "activity_email_delivery",
+    # Sin compañía: el latido de los relojes del envío no cae en cascada.
+    "activity_email_dispatch_run",
     # RTE-MAIL-UNIFIED-01: el registro de pruebas cuelga de usuario y compañía.
     "mail_test_send",
     # RTE-NOT-01: la preferencia cuelga de la pertenencia.

@@ -15,6 +15,7 @@ import {
     TableRow,
 } from '@/shared/ui/shadcn/new-york';
 import { ConfirmDestructiveDialog, LifecycleRowActions } from '@/features/Common';
+import { timeZoneOptions } from '@/shared/lib/utils/utils';
 import { fetchVehicles, type Vehicle } from '@/entities/RouteVehicles';
 import {
     assignVehicle,
@@ -67,22 +68,6 @@ const AUTOMATICA = 'automatic';
  * GPS: lo decide el administrador.
  */
 const SIN_ESTADO = 'none';
-const ZONAS_HABITUALES = [
-    'America/New_York',
-    'America/Chicago',
-    'America/Denver',
-    'America/Phoenix',
-    'America/Los_Angeles',
-    'America/Anchorage',
-    'Pacific/Honolulu',
-    'America/Puerto_Rico',
-];
-
-function opcionesDeZona(actual: string | null | undefined): string[] {
-    return actual && !ZONAS_HABITUALES.includes(actual)
-        ? [...ZONAS_HABITUALES, actual]
-        : ZONAS_HABITUALES;
-}
 
 function formatearFecha(valor: string | null | undefined): string {
     if (!valor) return '—';
@@ -372,7 +357,7 @@ export function SupervisorSetupPanel() {
                                                         <SelectItem value={AUTOMATICA}>
                                                             Time zone: automatic
                                                         </SelectItem>
-                                                        {opcionesDeZona(
+                                                        {timeZoneOptions(
                                                             candidato.supervisor_time_zone,
                                                         ).map((zona) => (
                                                             <SelectItem key={zona} value={zona}>

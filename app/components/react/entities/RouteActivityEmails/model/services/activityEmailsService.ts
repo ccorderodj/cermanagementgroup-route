@@ -11,6 +11,8 @@ import {
     realReportPreviewSchema,
     reportSendResultSchema,
     resendResultSchema,
+    deliveryHistorySchema,
+    operationalStatusSchema,
     type ActivityEmailPreview,
     type ActivityEmailRecipient,
     type ActivityEmailTemplate,
@@ -22,6 +24,9 @@ import {
     type RealReportPreview,
     type ReportSendResult,
     type ResendResult,
+    type DeliveryHistory,
+    type DeliveryTrigger,
+    type OperationalStatus,
 } from '../types';
 
 /**
@@ -156,6 +161,33 @@ export async function resendRealReport(
 ): Promise<ResendResult> {
     const response = await $api.post('/activity-emails/reports/resend', input);
     return parseApi(resendResultSchema, response.data, 'resendRealReport');
+}
+
+/** Proveedor, interruptores, tipos activos y última pasada de cada reloj. */
+export async function fetchOperationalStatus(): Promise<OperationalStatus> {
+    const response = await $api.get('/activity-emails/status');
+    return parseApi(operationalStatusSchema, response.data, 'fetchOperationalStatus');
+}
+
+export async function fetchDeliveryHistory(params: {
+    page: number;
+    pageSize: number;
+    dateFrom?: string;
+    dateTo?: string;
+    reportType?: ActivityEmailType;
+    trigger?: DeliveryTrigger;
+}): Promise<Paginated<DeliveryHistory>> {
+    const response = await $api.get('/activity-emails/history', {
+        params: {
+            page: params.page,
+            page_size: params.pageSize,
+            date_from: params.dateFrom || undefined,
+            date_to: params.dateTo || undefined,
+            report_type: params.reportType || undefined,
+            trigger: params.trigger || undefined,
+        },
+    });
+    return parseApi(paginatedSchema(deliveryHistorySchema), response.data, 'fetchDeliveryHistory');
 }
 
 export async function fetchDeliveries(params: {

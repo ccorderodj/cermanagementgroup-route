@@ -7,27 +7,30 @@ de DigitalOcean). No hay un segundo motor: las plantillas son las guardadas, los
 números salen de Reports (`reports.dao.hechos`, `strategic.construir`) y el
 alcance de la jerarquía de `organization.scope`.
 
-La ventana de cada correo
--------------------------
-* **Mediodía** (los dos tipos): corte fijo a las **12:00 locales** del día
-  operativo, aunque se genere más tarde. Antes de las 12:00 sólo hay una
-  vista *parcial* «hasta ahora», que no se envía como reporte de mediodía.
-* **Fin de jornada motivacional**: cuando **todas** las jornadas de la persona
-  de ese día están cerradas; vence 20 min después del último cierre. Si vuelve
-  a abrir una jornada ese día, deja de estar cerrado y el vencimiento se aplaza
-  solo (se calcula siempre del estado actual, no de una foto).
-* **Fin de jornada estratégico**: cuando todas las jornadas del equipo de ese
-  día están cerradas (+20 min) o, si se configuró, a la hora máxima
-  `MAIL_STRATEGIC_CUTOFF` (DP-CUTOFF). Sin cierre completo ni hora máxima, no
-  hay reporte final: no se inventa una hora.
+La ventana de cada correo (RTE-MAIL-CLOSE-01)
+---------------------------------------------
+* **T1 y T3, mediodía**: corte fijo a las **12:00 locales** del destinatario
+  en el día operativo, aunque se genere más tarde. Antes de las 12:00 sólo hay
+  una vista *parcial* «hasta ahora», que no se envía.
+* **T2, fin de jornada motivacional**: cuando **todas** las jornadas de la
+  persona de ese día están cerradas; vence **20 min** después del último
+  cierre. Si vuelve a abrir una jornada ese día, deja de estar cerrado y el
+  vencimiento se aplaza solo (se calcula del estado actual, no de una foto).
+* **T4, cierre estratégico**: **a las 19:00 locales**, siempre. No se adelanta
+  aunque el equipo haya cerrado ni se retrasa por jornadas abiertas: es una
+  foto de las 19:00 que dice quién sigue «En curso».
+
+Lo que se ve en un corte es lo que se sabía en ese instante
+(`strategic._al_corte` y `_completadas`): nada de lo que terminó o se midió
+después.
 
 La zona horaria
 ---------------
-La de `worksessions.time_zones.zonas_de_referencia`: la que fije un
-administrador o la de la jornada más reciente (la misma regla de Today y
-Reports). Para un mando sin jornada propia, la más frecuente de su equipo. Sin
-ninguna zona conocida no se calcula un mediodía (`no_time_zone`): no se cae a
-UTC en silencio (DP-TIMEZONE sigue pendiente).
+La del destinatario (`worksessions.time_zones.zonas_de_referencia`: la que fije
+un administrador o la de su jornada más reciente); si no tiene, la **zona
+operativa de la compañía** (`company.operational_time_zone`, en el perfil de la
+compañía). Si tampoco hay, `configuration_required`: nunca UTC ni la zona más
+frecuente del equipo.
 
 Lo que nunca sale
 -----------------
@@ -44,18 +47,19 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from app.config import settings
 from app.core.db.session import db_session
 from app.routers_api.activityemails import content, strategic
 from app.routers_api.activityemails.content import ActivityEmailType
 from app.routers_api.activityemails.service import ActivityEmailService
-from app.routers_api.organization.scope import alcance_administrativo
+from app.routers_api.companies.models import Company
 from app.routers_api.reports import dao as reports_dao
 from app.routers_api.users.models import Users
 from app.routers_api.worksessions.models import WorkSession, WorkSessionStatus
-from app.routers_api.worksessions.time_zones import zonas_de_referencia
+from app.routers_api.worksessions.time_zones import zona_valida, zonas_de_referencia
 
 MEDIODIA = time(12, 0)
+#: La hora del cierre estratégico (T4), local del destinatario.
+CIERRE_ESTRATEGICO = time(19, 0)
 TRAS_EL_CIERRE = timedelta(minutes=20)
 
 MOTIVACIONALES = {ActivityEmailType.MIDDAY_MOTIVATION.value, ActivityEmailType.END_OF_DAY_RECOGNITION.value}
@@ -113,12 +117,15 @@ def _local(dia: date, hora: time, zona: str) -> datetime:
     return datetime.combine(dia, hora, tzinfo=ZoneInfo(zona))
 
 
-def _corte_estrategico() -> time | None:
-    valor = settings.MAIL_STRATEGIC_CUTOFF.strip()
-    if not valor:
-        return None
-    hora, minuto = valor.split(":")
-    return time(int(hora), int(minuto))
+async def zona_del_destinatario(company_id: int, user_id: int) -> str | None:
+    """La suya; si no, la operativa de la compañía; si no, `None`."""
+    propia = (await zonas_de_referencia(company_id=company_id, user_ids=[user_id])).get(user_id, (None, None))[0]
+    if propia:
+        return propia
+    async with db_session() as session:
+        return zona_valida(
+            await session.scalar(select(Company.operational_time_zone).where(Company.id == company_id))
+        )
 
 
 async def _persona(user_id: int) -> tuple[str, str]:
@@ -224,13 +231,12 @@ async def generar(
 
     lunes = strategic.lunes_de(operational_date)
 
+    zona = await zona_del_destinatario(company_id, recipient_user_id)
+
     # ── Motivacionales: la propia actividad, sin notas ni ubicaciones ──
     if tipo in MOTIVACIONALES:
-        zona = (await zonas_de_referencia(company_id=company_id, user_ids=[recipient_user_id])).get(
-            recipient_user_id, (None, None)
-        )[0]
         if zona is None:
-            return sin_correo(None, None, None, True, "no_time_zone")
+            return sin_correo(None, None, None, True, "configuration_required")
         if tipo == ActivityEmailType.MIDDAY_MOTIVATION.value:
             mediodia = _local(operational_date, MEDIODIA, zona)
             provisional = ahora < mediodia
@@ -259,49 +265,25 @@ async def generar(
             valores["week_activity_block"] = _semana(_completadas(filas, corte))
         return con_correo(zona, corte, vence, provisional, motivo, valores, actividades=len(hoy))
 
-    # ── Estratégicos: el equipo del mando, con su alcance ──
-    alcance = await alcance_administrativo(company_id=company_id, actor_user_id=recipient_user_id)
-    equipo = [] if alcance.tenant else sorted(alcance.actuales - {recipient_user_id})
+    # ── Estratégicos: las personas activas del alcance del destinatario ──
+    _, equipo = await strategic.roster(company_id, recipient_user_id)
     if not equipo:
-        return sin_correo(None, None, None, False, "no_team", cobertura=0)
-    zonas = await zonas_de_referencia(company_id=company_id, user_ids=[recipient_user_id, *equipo])
-    zona = zonas.get(recipient_user_id, (None, None))[0]
+        return sin_correo(zona, None, None, False, "no_team", cobertura=0)
     if zona is None:
-        # Un mando sin jornada propia: la zona más frecuente de su equipo.
-        frecuentes = Counter(z for u in equipo if (z := zonas.get(u, (None, None))[0]))
-        zona = frecuentes.most_common(1)[0][0] if frecuentes else None
-    if zona is None:
-        return sin_correo(None, None, None, True, "no_time_zone", cobertura=len(equipo))
+        return sin_correo(None, None, None, True, "configuration_required", cobertura=len(equipo))
 
-    if tipo == ActivityEmailType.STRATEGIC_MIDDAY_REPORT.value:
-        mediodia = _local(operational_date, MEDIODIA, zona)
-        provisional = ahora < mediodia
-        corte = ahora if provisional else mediodia
-        vence = mediodia
-        filtro = corte
-        motivo = "partial_window" if provisional else None
-    else:
-        jornadas = await _jornadas_del_dia(company_id, equipo, operational_date)
-        if not jornadas:
-            return sin_correo(zona, None, None, False, "no_team_activity", cobertura=len(equipo))
-        cerrada, ultimo = _cierre(jornadas)
-        maxima = _corte_estrategico()
-        limite = _local(operational_date, maxima, zona) if maxima else None
-        if cerrada:
-            provisional, corte, vence, filtro, motivo = False, ultimo, ultimo + TRAS_EL_CIERRE, None, None
-        elif limite is not None and ahora >= limite:
-            provisional, corte, vence, filtro, motivo = False, limite, limite, limite, "cutoff_reached"
-        else:
-            provisional, corte, filtro = True, ahora, None
-            vence = limite
-            motivo = "team_not_closed" if limite else "no_cutoff_configured"
+    cierre = tipo == ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT.value
+    hora = _local(operational_date, CIERRE_ESTRATEGICO if cierre else MEDIODIA, zona)
+    provisional = ahora < hora
+    corte = ahora if provisional else hora
+    motivo = "partial_window" if provisional else None
 
     reporte = await strategic.construir(
         company_id=company_id,
         manager_user_id=recipient_user_id,
-        cierre=tipo == ActivityEmailType.STRATEGIC_END_OF_DAY_REPORT.value,
+        cierre=cierre,
         dia=operational_date,
-        corte=filtro,
+        corte=corte,
         inicio_semana=lunes,
     )
     actividades = sum(f.eventos for p in reporte.personas for f in p.dia)
@@ -309,6 +291,8 @@ async def generar(
         reporte,
         manager_first_name=nombre_de_pila,
         generado=ahora.astimezone(ZoneInfo(zona)).strftime("%d/%m/%Y %I:%M %p"),
+        con_snapshot_propio="executive_snapshot" in content.marcadores(plantilla["body"]),
     )
+    vence = hora
     return con_correo(zona, corte, vence, provisional, motivo, valores, cobertura=len(reporte.personas),
                       actividades=actividades)

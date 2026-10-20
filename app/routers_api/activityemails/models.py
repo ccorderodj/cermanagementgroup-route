@@ -38,7 +38,10 @@ from sqlalchemy import (
     text,
 )
 
+from sqlalchemy.dialects.postgresql import JSONB
+
 from app.core.enums import BusinessEnum
+from app.database import Base
 from app.core.models.TimeStamped import TimeStampedModel
 from app.core.models.Versioned import VersionedMixin
 from app.routers_api.activityemails.content import BODY_MAX, SUBJECT_MAX, ActivityEmailType
@@ -169,6 +172,8 @@ class ActivityEmailDelivery(TimeStampedModel, VersionedMixin):
     requested_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     request_reason = Column(String(300), nullable=True)
     template_version = Column(Integer, nullable=True)
+    #: Zona IANA con que se calcularon el corte y el vencimiento.
+    time_zone = Column(String(64), nullable=True)
 
 
 class ActivityEmailResend(TimeStampedModel):
@@ -202,3 +207,33 @@ class ActivityEmailResend(TimeStampedModel):
     requested_by_user_id = Column(Integer, ForeignKey("user.id", ondelete="SET NULL"), nullable=True)
     request_reason = Column(String(300), nullable=True)
     accepted_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class DispatchOutcome(BusinessEnum):
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class ActivityEmailDispatchRun(Base):
+    """La **última** pasada de cada reloj del envío automático (RTE-MAIL-CLOSE-01).
+
+    Una fila por origen (`schedule`, el programador interno; `reconcile`, el
+    Scheduled Job de DigitalOcean), sobrescrita en cada pasada: es un latido,
+    no un historial. Lo que la pantalla necesita para decir «el job corrió hace
+    3 min» o «no se ha visto nunca» sin leer logs. Sin datos de personas: sólo
+    contadores.
+    """
+
+    __tablename__ = "activity_email_dispatch_run"
+    __table_args__ = (
+        CheckConstraint("source IN ('schedule', 'reconcile')", name="ck_activity_email_dispatch_run_source"),
+        DispatchOutcome.check("outcome", name="ck_activity_email_dispatch_run_outcome"),
+    )
+
+    source = Column(String(20), primary_key=True)
+    started_at = Column(DateTime(timezone=True), nullable=False)
+    finished_at = Column(DateTime(timezone=True), nullable=False)
+    outcome = Column(String(20), nullable=False)
+    enabled = Column(Boolean, nullable=False)
+    dry_run = Column(Boolean, nullable=False)
+    counts = Column(JSONB, nullable=False)

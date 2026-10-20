@@ -138,6 +138,7 @@ class CompaniesDAO(BaseDAO):
             "pdf_text_color",
             "pdf_muted_text_color",
             "pdf_surface_color",
+            "operational_time_zone",
         )
         for field_name in nullable_fields:
             value = values.get(field_name)

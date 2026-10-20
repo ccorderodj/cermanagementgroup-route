@@ -24,6 +24,7 @@ import {
     type Delivery,
     type RealReportPreview,
 } from '@/entities/RouteActivityEmails';
+import { DELIVERY_STATUS_LABEL } from '../lib/labels';
 
 interface GenerateReportDialogProps {
     template: ActivityEmailTemplate;
@@ -36,17 +37,6 @@ interface Persona {
     first_name: string;
     last_name: string;
 }
-
-/** Cómo se lee cada estado de un envío. Nunca «entregado». */
-const ESTADO: Record<Delivery['status'], string> = {
-    pending: 'Pending',
-    claimed: 'Sending',
-    accepted_by_provider: 'Accepted by the mail provider (delivery not confirmed)',
-    retryable_failure: 'Not sent — will be retried',
-    permanent_failure: 'Not sent — the provider refused it',
-    skipped: 'Not sent — nothing to send',
-    unknown_outcome: 'Uncertain outcome — needs reconciliation',
-};
 
 const hoyLocal = () => {
     const d = new Date();
@@ -153,7 +143,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                 operational_date: dia,
                 reason: motivo.trim() || undefined,
             });
-            setResultado(`${ESTADO[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
+            setResultado(`${DELIVERY_STATUS_LABEL[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
             setConfirmar(null);
             // La vista previa ya no vale: ahora dice «ya enviado» y no ofrece
             // volver a mandarlo.
@@ -180,7 +170,7 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                 expected_resends: vista.resends.length,
                 reason: motivo.trim() || undefined,
             });
-            setResultado(`Resend #${r.sequence}: ${ESTADO[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
+            setResultado(`Resend #${r.sequence}: ${DELIVERY_STATUS_LABEL[r.status]}${r.destination_masked ? ` · ${r.destination_masked}` : ''}`);
             setConfirmar(null);
             setVista(await previewRealReport({
                 report_type: template.template_type, recipient_user_id: destinatario, operational_date: dia,
@@ -366,13 +356,14 @@ export function GenerateReportDialog({ template, open, onOpenChange }: GenerateR
                                 <ul className="space-y-1 text-sm">
                                     {historial.map((h) => (
                                         <li key={h.id} className="rounded-md border px-3 py-2">
-                                            {`${ESTADO[h.status]} · ${h.source} · attempt ${h.attempt_count}`}
+                                            {`${DELIVERY_STATUS_LABEL[h.status]} · ${h.source} · attempt ${h.attempt_count}`}
                                             {h.last_attempt_at ? ` · ${hora(h.last_attempt_at, vista.time_zone)}` : ''}
                                         </li>
                                     ))}
                                     {vista.resends.map((r) => (
                                         <li key={`resend-${r.id}`} className="rounded-md border px-3 py-2">
-                                            {`Resend #${r.sequence} · ${ESTADO[r.status]} · ${hora(r.created_at, vista.time_zone)}`}
+                                            {`Resend #${r.sequence} · ${DELIVERY_STATUS_LABEL[r.status]}`}
+                                            {` · ${hora(r.created_at, vista.time_zone)}`}
                                         </li>
                                     ))}
                                 </ul>

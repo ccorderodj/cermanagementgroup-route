@@ -15,6 +15,19 @@ Para quien opera CER Route en DigitalOcean. Los cuatro correos son: Midday Motiv
 
 Los tres llaman al mismo despacho, `app/routers_api/activityemails/delivery.py`.
 
+**Cuándo sale cada correo (RTE-MAIL-CLOSE-01), en la hora local del destinatario:**
+
+| Correo | Hora | Qué refleja |
+|---|---|---|
+| T1 Midday Motivation | 12:00 | Actividades terminadas antes de las 12:00 |
+| T2 End of Day Recognition | 20 min después del último End Work del día | La jornada cerrada. Si se reabre antes, se aplaza |
+| T3 Strategic Midday | 12:00 | Cada persona activa del equipo tal como estaba a las 12:00 |
+| T4 Strategic End-of-Day | 19:00, fija | Foto de las 19:00. No se adelanta si el equipo cerró ni se retrasa por jornadas abiertas: quien sigue trabajando sale «En curso» |
+
+- **Zona horaria:** la del destinatario (su override o su última jornada). Si no tiene, la **zona operativa de la compañía** (Company Profile › Operational time zone). Si tampoco hay, el correo queda en `configuration_required` y no sale: nunca se supone UTC ni la zona del equipo.
+- **Corte:** lo que se ve es lo que se sabía en ese instante. Una actividad abierta a las 12:00 sale «En curso» sin duración, y un viaje sin llegar no aporta millas.
+- **T3 y T4 incluyen a todas las personas activas del alcance**, aunque no hayan iniciado jornada («Sin registro de inicio al corte»; nunca «Ausente»). Un administrador, que hoy representa al CEO, recibe a toda la jerarquía vigente de su compañía, Sales incluido. El COO no ve Sales.
+
 **A quién se puede elegir en Generate report:**
 - Un administrador ve a todos los de la compañía.
 - Un mando (CEO, COO, Regional Manager) ve a su rama **y a sí mismo**, para pedir su propio reporte. La pestaña de destinatarios sigue sin incluirle: un mando no se activa sus propios correos.
@@ -33,7 +46,6 @@ Hacen falta `route.activityemails.manage` para entrar a la pantalla y `route.act
 | `MAIL_AUTOMATION_ENABLED` | `false` | Interruptor general del envío automático (programador y cron). **Kill switch**: ponerla en `false` lo detiene en la pasada siguiente |
 | `MAIL_AUTOMATION_DRY_RUN` | `true` | Con la automatización encendida, solo cuenta y registra en el log qué enviaría (`would_send`); no reserva ni envía |
 | `MAIL_REAL_SEND_TYPES` | vacía | Tipos con envío real permitido (automático **y** Send now), separados por comas. Es el kill switch por tipo |
-| `MAIL_STRATEGIC_CUTOFF` | vacía | Hora local máxima (HH:MM) del reporte estratégico de cierre (DP-CUTOFF). Vacía: sin cierre completo del equipo no hay reporte final |
 | `MAIL_RECOVERY_WINDOW_HOURS` | `2` | Cuántas horas atrás recoge un envío vencido (DP-RECOVERY). Evita mandar de golpe correos viejos |
 
 Además, **por persona**: los interruptores de Activity Emails › Recipients, todos apagados por defecto.
@@ -56,7 +68,10 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
    MAIL DISPATCH | source=reconcile enabled=False dry_run=True checked=0 due=0 claimed=0 accepted=0 ...
    ```
 2. **Activity › Jobs › route-mail-reconcile:** deben verse invocaciones cada 15 minutos. **Runtime Logs** del job: las mismas líneas `MAIL DISPATCH`.
-3. **Programador interno:** en Runtime Logs del servicio web, líneas `MAIL DISPATCH | source=schedule …`. Solo aparecen con `MAIL_AUTOMATION_ENABLED=true`; apagado, la pasada vuelve sin escribir nada.
+3. **Programador interno:** en Runtime Logs del servicio web, líneas `MAIL DISPATCH | source=schedule …`.
+4. **En la pantalla (Activity Emails), sin leer logs:**
+   - **Arriba, el estado leído del servidor:** proveedor (Verify), automático Off / Dry run / On, tipos con envío real y la **última pasada vista** de cada reloj («In-app scheduler» y «DigitalOcean job»). «not observed yet» significa que ese reloj no ha corrido nunca contra esta base: no se da por verificado. Cada pasada, también apagada, deja su latido en `activity_email_dispatch_run`.
+   - **Pestaña Delivery history:** cada correo que tocaba o se pidió. Muestra el disparador (Scheduler, DigitalOcean job, Send now), el corte y la zona, el intento y su retraso respecto al vencimiento, el estado, el motivo legible, el próximo reintento y los reenvíos. Filtros por fechas, correo y disparador. Sin asunto, cuerpo, notas ni direcciones.
 
 **Significado de los contadores:**
 
@@ -71,18 +86,24 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
 | `failed` | Fallos definitivos |
 | `unknown` | Resultado incierto |
 | `skipped` | No había correo que mandar |
+| `config_required` | Sin zona horaria (ni propia ni de la compañía): queda **pendiente** con `configuration_required` y sale en cuanto se fije, si sigue a tiempo |
+| `expired` | Venció hace más que `MAIL_RECOVERY_WINDOW_HOURS`: no se manda solo; queda registrado como `recovery_window_expired` y se puede mandar a mano |
 | `errors` | Fallos de la propia pasada |
 
 ## 5. Encender (solo con GO del PO)
-1. **Proveedor de correo verificado:** Platform › Outbound email › **Verify** en `healthy`, y la prueba real (Send Test Email y las cuatro Send test) confirmada en un buzón.
-2. **Ensayo:** `MAIL_AUTOMATION_ENABLED=true` con `MAIL_AUTOMATION_DRY_RUN=true`. Revisar los `would_send` en los logs durante un día.
-3. **Un tipo y pocas personas:** `MAIL_REAL_SEND_TYPES=midday_motivation`, activar el interruptor solo a 1-2 personas en Recipients y `MAIL_AUTOMATION_DRY_RUN=false`.
-4. **Ampliar tipo a tipo**, a medida que se cierran sus decisiones:
-   - DP-TIMEZONE, para todos;
-   - DP-WEEK, para los de cierre;
-   - DP-CUTOFF y DP-TEAM, para el estratégico de cierre;
-   - DP-NOTES, si algún día se quieren notas reales.
+Los horarios ya están cerrados (RTE-MAIL-CLOSE-01): 12:00, End Work + 20 min y 19:00 locales. Lo que queda es encender por fases y comprobar cada una en la pantalla.
 
+0. **Zona de la compañía:** Company Profile › **Operational time zone**. Sin ella, quien no tenga zona propia (un administrador que representa al CEO) queda en `configuration_required` y no recibe nada. La zona la decide CER; no se supone.
+1. **Proveedor verificado:** Platform › Outbound email › **Verify** en `healthy`, y una prueba real (Send test) recibida en un buzón.
+2. **Ensayo, un día:** `MAIL_AUTOMATION_ENABLED=true` con `MAIL_AUTOMATION_DRY_RUN=true`.
+   - El aviso de Activity Emails debe decir «Dry run» y mostrar pasadas recientes de **los dos** relojes: In-app scheduler cada minuto y DigitalOcean job cada 15 min.
+   - Los contadores `would_send`, `config_required` y `expired` salen en la línea `MAIL DISPATCH` de los logs.
+3. **Piloto:** `MAIL_AUTOMATION_DRY_RUN=false`, con el interruptor encendido **solo a 1–2 personas** por tipo en Recipients. Comprobar en un día completo:
+   - mediodía (T1 y T3 a las 12:00);
+   - fin de jornada (T2 a los +20 min del End Work);
+   - cierre (T4 a las 19:00).
+   Para cada correo: Delivery history (disparador, retraso) **y** recepción en el buzón. «Accepted by the mail provider» no prueba la recepción.
+4. **Ampliar** persona a persona en Recipients.
 ## 6. Si algo va mal
 | Síntoma | Qué hacer |
 |---|---|

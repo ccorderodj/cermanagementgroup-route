@@ -34,6 +34,8 @@ export interface CompanyProfile {
     pdf_text_color: string | null;
     pdf_muted_text_color: string | null;
     pdf_surface_color: string | null;
+    /** Zona IANA de referencia de la compañía (correos de actividad). */
+    operational_time_zone: string | null;
 }
 
 export interface CompaniesSchema extends GlobalsCommonSchema {

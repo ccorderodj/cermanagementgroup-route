@@ -33,14 +33,20 @@ from app.core.db.session import db_session, transaction
 from app.core.email.politica_de_prueba import correo_valido
 from app.routers_api.activityemails import content
 from app.routers_api.activityemails.models import ActivityEmailPreference, ActivityEmailTemplate
+from app.routers_api.activityemails.strategic import roster
 from app.routers_api.companies.models import UserCompany
 from app.core.rbac.catalog import ROUTE_PRODUCT_ROLE_LABELS
 from app.routers_api.organization import delegation as delegada
-from app.routers_api.organization.scope import ROLES_ACOTADOS, alcance_administrativo
+from app.routers_api.organization.scope import ROLES_ACOTADOS
 from app.routers_api.permissions.models import Permission
 from app.routers_api.rolepermissions.models import RolePermission
 from app.routers_api.roles.models import Role
 from app.routers_api.users.models import Users
+
+#: Quién puede recibir los reportes estratégicos: los mandos de la jerarquía y
+#: los administradores de la compañía, porque hoy el CEO lo representa un
+#: administrador (RTE-MAIL-CLOSE-01, decisión cerrada: no hay rol CEO aparte).
+ROLES_ESTRATEGICOS: frozenset[str] = ROLES_ACOTADOS | {"owner", "admin"}
 
 #: Quién puede recibir estos correos: quien ejecuta jornadas y tiene actividad.
 CAPACIDAD_DE_DESTINATARIO = "route.worksession.execute"
@@ -433,9 +439,9 @@ class ActivityEmailService:
 
     @staticmethod
     def _consulta_mandos(*, company_id: int, user_ids: set[int] | None, q: str | None):
-        """Miembros con un rol de mando de la jerarquía (CEO, COO, RM y el
-        `route_manager` heredado). El cargo vigente y el equipo se comprueban
-        después, contra la jerarquía real."""
+        """Miembros que pueden recibir un reporte estratégico
+        (`ROLES_ESTRATEGICOS`). El equipo se comprueba después, contra la
+        jerarquía real."""
         stmt = (
             select(
                 Users.id.label("user_id"),
@@ -464,7 +470,7 @@ class ActivityEmailService:
             .where(
                 UserCompany.company_id == company_id,
                 UserCompany.deleted_at.is_(None),
-                Role.name.in_(ROLES_ACOTADOS),
+                Role.name.in_(ROLES_ESTRATEGICOS),
             )
         )
         if user_ids is not None:
@@ -483,10 +489,9 @@ class ActivityEmailService:
 
     @staticmethod
     async def _mando(row, *, company_id: int) -> dict:
-        """La fila de un mando con su cobertura: personas que **hoy** están en su
-        rama según la jerarquía (las mismas que tendría su reporte)."""
-        alcance = await alcance_administrativo(company_id=company_id, actor_user_id=row.user_id)
-        cobertura = 0 if alcance.tenant else len(alcance.actuales - {row.user_id})
+        """La fila de un mando con su cobertura: las personas activas que
+        saldrían **hoy** en su reporte (`strategic.roster`, la misma lista)."""
+        cobertura = len((await roster(company_id, row.user_id))[1])
         motivo = None
         if not (row.platform_active and row.membership_active):
             motivo = "inactive"

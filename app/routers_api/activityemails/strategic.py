@@ -3,13 +3,30 @@ Reporte estratégico de actividad para mandos (RTE-MAIL-UNIFIED-01 V1.2, CP2).
 
 Qué produce
 -----------
-Para un mando, **un bloque por persona autorizada** de su equipo:
+Primero un *Executive Snapshot* del equipo al corte (personas, sin inicio, en
+curso, finalizadas, eventos y millas válidas). Después, para un mando, **un
+bloque por persona activa de su equipo**, haya trabajado o no
+(RTE-MAIL-CLOSE-01):
 
 1. Cabecera: nombre y cargo (nada más: ni correo, ni teléfono, ni referencias).
-2. *Activity Breakdown* del día: Activity · Events · Miles · Time · Est. Cost.
-3. *Activity Details* del día, en orden: categoría, horas, duración, estado y
+2. La jornada **de WorkSession**: inicio y fin reales, estado al corte («Sin
+   registro de inicio al corte», «En curso», «Finalizada») y la jornada
+   registrada. Nunca «Ausente»: no iniciar no prueba una ausencia.
+3. *Activity Breakdown* del día: Activity · Events · Miles · Time · Est. Cost.
+4. *Activity Details* del día, en orden: categoría, horas, duración, estado y
    la nota **sólo si está aprobada para correo**.
-4. Sólo en el cierre: el acumulado semanal de la persona por categoría.
+5. Sólo en el cierre: el acumulado semanal de la persona por categoría.
+
+El corte
+--------
+Todo se ve **como estaba en el instante del corte** (12:00 o 19:00 locales):
+una actividad que seguía abierta sale «En curso» sin duración, un viaje que no
+había llegado no aporta millas, y lo que empezó después no existe. Los
+registros originales no se tocan: se recorta una copia (`_al_corte`).
+
+Las duraciones de actividad son **de reloj**: los minutos entre las horas que
+se enseñan (11:30–1:26 = 1h 56m). Así el detalle, el desglose y los totales
+del equipo suman lo mismo, en segundos enteros de minuto.
 
 Y, **sólo en el cierre y después de todas las personas**, un único *Team
 Weekly Summary*: personas con actividad registrada, actividades, millas,
@@ -24,7 +41,9 @@ jornada. Aquí no se recalcula nada. El conjunto de personas se decide **una
 vez** con `organization.scope.alcance_administrativo` —el mismo alcance de
 Activity y Reports: el CEO ve la rama de Sales y el COO no—, sin el propio
 mando, y se usa igual para las secciones individuales y para el total del
-equipo.
+equipo. Un destinatario de alcance de compañía (el CEO lo representa hoy un
+administrador) recibe a todas las personas activas con cargo vigente en la
+jerarquía, Sales incluido.
 
 El total del equipo es **la suma de lo que se enseña** en cada sección
 individual (millas ya redondeadas por persona, segundos, eventos, céntimos):
@@ -36,9 +55,9 @@ Lo que está pendiente y no se decide aquí
 * **DP-NOTES:** ninguna nota real sale por correo. `nota_para_correo` devuelve
   «Detalle no incluido en el correo» si hay nota y «Sin notas registradas» si
   no. Sólo los datos de demostración llevan notas, y son ficticias.
-* **DP-TIMEZONE / DP-WEEK / DP-CUTOFF:** el día, el corte del mediodía y el
-  inicio de semana los **pasa quien llama**; aquí no se elige ningún valor. La
-  semana empieza el lunes como en Activity, y el informe lo rotula.
+* El día, el corte y el inicio de semana los **pasa quien llama**
+  (`real_reports`); aquí no se elige ningún valor. La semana empieza el lunes
+  como en Activity, y el informe lo rotula.
 
 Texto plano, sin HTML: lo mismo que el resto de correos de la aplicación.
 """
@@ -49,6 +68,8 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
+from app.core.enums import BusinessEnum
+
 from sqlalchemy import select
 
 from app.core.db.session import db_session
@@ -56,6 +77,7 @@ from app.core.rbac.catalog import ROUTE_PRODUCT_ROLE_LABELS
 from app.routers_api.companies.models import UserCompany
 from app.routers_api.fuelreference.service import CALCULATED
 from app.routers_api.organization.scope import alcance_administrativo, condicion_de_jornadas
+from app.routers_api.organization.service import vigentes
 from app.routers_api.reports import dao as reports_dao
 from app.routers_api.reports.excel import duracion, reloj
 from app.routers_api.reports.service import (
@@ -86,6 +108,14 @@ SIN_NOTAS = "Sin notas registradas"
 NOTA_RETENIDA = "Detalle no incluido en el correo"
 SIN_ACTIVIDAD = "Sin actividades registradas para el período"
 SIN_PERSONAS = "Sin personas autorizadas para el reporte"
+
+
+class EstadoDeJornada(BusinessEnum):
+    """Cómo estaba la jornada de una persona en el instante del corte."""
+
+    SIN_INICIO = "Sin registro de inicio al corte"
+    EN_CURSO = "En curso"
+    FINALIZADA = "Finalizada"
 
 
 def nota_para_correo(nota: str | None) -> str:
@@ -122,10 +152,22 @@ class Detalle:
 
 
 @dataclass
+class Jornada:
+    """La jornada del día según WorkSession, vista en el corte."""
+
+    estado: EstadoDeJornada
+    inicio: str = ""
+    fin: str = ""
+    #: Jornada registrada hasta el corte (suma de sesiones), no horas pagadas.
+    segundos: int = 0
+
+
+@dataclass
 class Persona:
     user_id: int
     nombre: str
     cargo: str
+    jornada: Jornada = field(default_factory=lambda: Jornada(EstadoDeJornada.SIN_INICIO))
     dia: list[Fila] = field(default_factory=list)
     detalles: list[Detalle] = field(default_factory=list)
     semana: list[Fila] = field(default_factory=list)
@@ -184,12 +226,41 @@ def _total(filas: list[Fila], nombre: str = "TOTAL") -> Fila:
     )
 
 
+def _linea_de_jornada(j: Jornada) -> str:
+    if j.estado == EstadoDeJornada.SIN_INICIO:
+        return f"Jornada: {j.estado.value}"
+    partes = [f"Inicio {j.inicio}"]
+    if j.estado == EstadoDeJornada.FINALIZADA:
+        partes += [f"Fin {j.fin}", j.estado.value, f"Jornada registrada {duracion(j.segundos) or '0m'}"]
+    else:
+        partes += [j.estado.value, f"Jornada registrada al corte {duracion(j.segundos) or '0m'}"]
+    return "Jornada: " + " · ".join(partes)
+
+
+def snapshot(reporte: Reporte) -> str:
+    """*Executive Snapshot*: el equipo de un vistazo, al corte."""
+    estados = [p.jornada.estado for p in reporte.personas]
+    hoy = _total([f for p in reporte.personas for f in p.dia]) if reporte.personas else None
+    lineas = [
+        f"Executive Snapshot — {reporte.dia:%d/%m/%Y}",
+        f"Personas en el reporte: {len(reporte.personas)} | "
+        f"Sin registro de inicio: {estados.count(EstadoDeJornada.SIN_INICIO)} | "
+        f"En curso: {estados.count(EstadoDeJornada.EN_CURSO)} | "
+        f"Finalizadas: {estados.count(EstadoDeJornada.FINALIZADA)}",
+    ]
+    if hoy is not None and hoy.eventos:
+        lineas.append(f"Actividades registradas: {hoy.eventos} | Millas válidas al corte: {_millas(hoy)}")
+    else:
+        lineas.append("Actividades registradas: 0")
+    return "\n".join(lineas)
+
+
 def render_personas(reporte: Reporte) -> str:
     if not reporte.personas:
         return SIN_PERSONAS
     bloques: list[str] = []
     for p in reporte.personas:
-        lineas = [f"■ {p.nombre} · {p.cargo}", ""]
+        lineas = [f"■ {p.nombre} · {p.cargo}", _linea_de_jornada(p.jornada), ""]
         lineas.append(f"Activity Breakdown — {reporte.dia:%d/%m/%Y}")
         lineas += _tabla([*p.dia, _total(p.dia)]) if p.dia else [SIN_ACTIVIDAD]
         lineas += ["", "Activity Details"]
@@ -239,13 +310,21 @@ def render_equipo(reporte: Reporte) -> str:
     return "\n".join(lineas)
 
 
-def valores(reporte: Reporte, *, manager_first_name: str, generado: str) -> dict[str, str]:
+def valores(
+    reporte: Reporte, *, manager_first_name: str, generado: str, con_snapshot_propio: bool = True
+) -> dict[str, str]:
+    """Los valores de la plantilla. Una plantilla guardada antes de que existiera
+    `{{executive_snapshot}}` (`con_snapshot_propio=False`) lo recibe al principio
+    del bloque por persona: sale una vez, sin editar el texto de nadie."""
     etiqueta = f"{reporte.dia:%d/%m/%Y}"
+    resumen = snapshot(reporte)
+    personas = render_personas(reporte)
     vals = {
         "manager_first_name": manager_first_name or "equipo",
         "report_period_label": etiqueta,
         "report_generated_at": generado,
-        "per_person_report": render_personas(reporte),
+        "executive_snapshot": resumen,
+        "per_person_report": personas if con_snapshot_propio else f"{resumen}\n\n{personas}",
     }
     if reporte.cierre:
         vals["team_weekly_summary"] = render_equipo(reporte)
@@ -264,6 +343,7 @@ def _demo(cierre: bool) -> Reporte:
         user_id=-1,
         nombre="Ana Ejemplo",
         cargo="Supervisor",
+        jornada=Jornada(EstadoDeJornada.EN_CURSO, inicio="7:55 AM", segundos=14700),
         dia=[
             Fila("Client Visit", 2, Decimal("18.4"), 5400, Decimal("7.12")),
             Fila("Recruiting", 1, Decimal("6.2"), 2700, Decimal("2.40")),
@@ -280,6 +360,7 @@ def _demo(cierre: bool) -> Reporte:
         user_id=-2,
         nombre="Luis Muestra",
         cargo="OSM",
+        jornada=Jornada(EstadoDeJornada.EN_CURSO, inicio="8:20 AM", segundos=13200),
         dia=[
             Fila("Office", 1, Decimal("4.0"), 3600, None),
             Fila("Employee Visit", 1, Decimal("9.5"), 0, None, en_curso=True),
@@ -290,7 +371,10 @@ def _demo(cierre: bool) -> Reporte:
             Detalle("Employee Visit", _DEMO_DIA, "11:40 AM", "", "", "En curso", SIN_NOTAS),
         ],
     )
+    sofia = Persona(user_id=-3, nombre="Sofía Prueba", cargo="Sales")
     if cierre:
+        ana.jornada = Jornada(EstadoDeJornada.FINALIZADA, inicio="7:55 AM", fin="3:05 PM", segundos=25800)
+        luis.jornada = Jornada(EstadoDeJornada.EN_CURSO, inicio="8:20 AM", segundos=38400)
         ana.dia.append(Fila("Office", 1, Decimal("3.1"), 1800, Decimal("1.20")))
         ana.detalles.append(
             Detalle("Office", _DEMO_DIA, "2:10 PM", "2:40 PM", "30m", "Finalizada", SIN_NOTAS)
@@ -310,22 +394,27 @@ def _demo(cierre: bool) -> Reporte:
             Fila("Employee Visit", 3, Decimal("27.9"), 7800, None),
             Fila("Office", 2, Decimal("8.0"), 7200, None),
         ]
-    return Reporte(cierre=cierre, dia=_DEMO_DIA, inicio_semana=_DEMO_LUNES, personas=[ana, luis])
+    return Reporte(cierre=cierre, dia=_DEMO_DIA, inicio_semana=_DEMO_LUNES, personas=[ana, luis, sofia])
 
 
 def valores_de_demostracion(cierre: bool) -> dict[str, str]:
     return valores(_demo(cierre), manager_first_name="Carla", generado="14/10/2026 12:00 PM (ejemplo)")
 
 
-# ══ Datos reales (para el envío programado, CP4; sin uso para enviar hoy) ════
+# ══ Datos reales ═════════════════════════════════════════════════════════════
 
 
-async def _personas_del_equipo(company_id: int, manager_user_id: int):
+async def roster(company_id: int, manager_user_id: int):
+    """Quién sale en el reporte de este destinatario: las personas **activas**
+    de su alcance, sin él. Lo usan el reporte y la cobertura de la pantalla.
+
+    Con rama (CEO, COO, RM), la de la jerarquía. Con alcance de compañía —el
+    CEO lo representa hoy un administrador—, todas las personas con cargo
+    vigente en la jerarquía de **esta** compañía, Sales incluido.
+    """
     alcance = await alcance_administrativo(company_id=company_id, actor_user_id=manager_user_id)
-    if alcance.tenant:
-        # Sin cargo de mando no hay equipo: no se reporta la compañía entera.
-        return alcance, []
-    ids = sorted(alcance.actuales - {manager_user_id})
+    candidatos = set(await vigentes(company_id)) if alcance.tenant else alcance.actuales
+    ids = sorted(candidatos - {manager_user_id})
     if not ids:
         return alcance, []
     async with db_session() as session:
@@ -337,6 +426,8 @@ async def _personas_del_equipo(company_id: int, manager_user_id: int):
                 .where(
                     UserCompany.company_id == company_id,
                     UserCompany.deleted_at.is_(None),
+                    UserCompany.is_active.is_(True),
+                    Users.is_active.is_(True),
                     Users.id.in_(ids),
                 )
                 .order_by(Users.first_name, Users.last_name, Users.id)
@@ -371,6 +462,70 @@ def _filas_por_categoria(filas: list[dict], combustible: dict) -> list[Fila]:
     return salida
 
 
+def _minutos_de_reloj(inicio: datetime, fin: datetime) -> int:
+    """Segundos entre los minutos de reloj que se enseñan (sin los segundos)."""
+    return int((fin.replace(second=0, microsecond=0) - inicio.replace(second=0, microsecond=0)).total_seconds())
+
+
+def _al_corte(filas: list[dict], corte: datetime) -> list[dict]:
+    """Copia de las filas tal como se conocían en `corte`. No toca el original."""
+    salida = []
+    for original in filas:
+        if original["trip_started_at"] is not None and original["trip_started_at"] >= corte:
+            continue
+        f = dict(original)
+        if f["arrived_at"] is None or f["arrived_at"] > corte:
+            # El viaje no había llegado: sus millas todavía no existían.
+            f.update(metros=0, mileage_state=None, pendiente=True)
+        if f["execution_id"] is not None:
+            if f["activity_started_at"] >= corte:
+                f.update(execution_id=None, activity_started_at=None, activity_ended_at=None, segundos=0)
+            elif f["activity_ended_at"] is None or f["activity_ended_at"] > corte:
+                f.update(activity_ended_at=None, segundos=0, session_ended=False)
+            else:
+                f["segundos"] = _minutos_de_reloj(f["activity_started_at"], f["activity_ended_at"])
+        salida.append(f)
+    return salida
+
+
+async def _jornadas(company_id: int, ids: list[int], dia: date, corte: datetime) -> dict[int, Jornada]:
+    """La jornada de cada persona en el corte, de WorkSession: varias sesiones
+    del día suman su duración; los huecos entre ellas no cuentan."""
+    async with db_session() as session:
+        sesiones = (
+            await session.execute(
+                select(
+                    WorkSession.user_id,
+                    WorkSession.started_at,
+                    WorkSession.ended_at,
+                    WorkSession.start_time_zone,
+                    WorkSession.start_utc_offset_minutes,
+                ).where(
+                    WorkSession.company_id == company_id,
+                    WorkSession.user_id.in_(ids),
+                    WorkSession.session_date == dia,
+                    WorkSession.started_at < corte,
+                )
+            )
+        ).all()
+    por_persona: dict[int, list] = {}
+    for s in sesiones:
+        por_persona.setdefault(s.user_id, []).append(s)
+    resultado: dict[int, Jornada] = {}
+    for user_id, propias in por_persona.items():
+        primera = min(propias, key=lambda s: s.started_at)
+        abiertas = [s for s in propias if s.ended_at is None or s.ended_at > corte]
+        segundos = sum(int((min(s.ended_at or corte, corte) - s.started_at).total_seconds()) for s in propias)
+        inicio = reloj(primera.started_at, primera.start_time_zone, primera.start_utc_offset_minutes)
+        if abiertas:
+            resultado[user_id] = Jornada(EstadoDeJornada.EN_CURSO, inicio=inicio, segundos=segundos)
+        else:
+            ultima = max(propias, key=lambda s: s.ended_at)
+            fin = reloj(ultima.ended_at, ultima.start_time_zone, ultima.start_utc_offset_minutes)
+            resultado[user_id] = Jornada(EstadoDeJornada.FINALIZADA, inicio=inicio, fin=fin, segundos=segundos)
+    return resultado
+
+
 def _detalle(f: dict) -> Detalle:
     terminado = f["activity_ended_at"] is not None
     if terminado:
@@ -396,16 +551,12 @@ async def construir(
     manager_user_id: int,
     cierre: bool,
     dia: date,
-    corte: datetime | None,
+    corte: datetime,
     inicio_semana: date,
 ) -> Reporte:
-    """El reporte con datos reales, **sin notas reales** (DP-NOTES).
-
-    `dia` (día de negocio), `corte` (fin del mediodía) e `inicio_semana` los
-    decide quien llama: zona horaria, hora de corte e inicio de semana son
-    decisiones pendientes del PO. Sólo lectura.
-    """
-    alcance, personas = await _personas_del_equipo(company_id, manager_user_id)
+    """El reporte con datos reales tal como estaban en `corte`, **sin notas
+    reales** (DP-NOTES). Sólo lectura."""
+    alcance, personas = await roster(company_id, manager_user_id)
     reporte = Reporte(cierre=cierre, dia=dia, inicio_semana=inicio_semana, personas=[])
     if not personas:
         return reporte
@@ -415,12 +566,12 @@ async def construir(
     filas = await reports_dao.hechos(
         company_id=company_id, user_ids=ids, inicio=desde, fin=dia, jornadas=jornadas
     )
-    if corte is not None:
-        filas = [f for f in filas if f["trip_started_at"] is None or f["trip_started_at"] < corte]
+    filas = _al_corte(filas, corte)
     combustible = await _combustible_por_jornada(company_id, filas)
     for f in filas:
         _enriquecer(f, combustible[f["session_id"]])
 
+    jornadas_del_dia = await _jornadas(company_id, ids, dia, corte)
     for user_id, nombre, cargo in personas:
         propias = [f for f in filas if f["user_id"] == user_id]
         hoy = [f for f in propias if f["session_date"] == dia]
@@ -429,6 +580,7 @@ async def construir(
                 user_id=user_id,
                 nombre=nombre,
                 cargo=cargo,
+                jornada=jornadas_del_dia.get(user_id, Jornada(EstadoDeJornada.SIN_INICIO)),
                 dia=_filas_por_categoria(hoy, combustible),
                 detalles=[
                     _detalle(f)

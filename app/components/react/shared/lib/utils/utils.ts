@@ -431,6 +431,25 @@ export function deviceTimeZone(): string | null {
     }
 }
 
+/** Las zonas IANA habituales de la operación, para los selectores de zona. */
+export const COMMON_TIME_ZONES = [
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Phoenix',
+    'America/Los_Angeles',
+    'America/Anchorage',
+    'Pacific/Honolulu',
+    'America/Puerto_Rico',
+];
+
+/** Las habituales y, si la actual es otra, también la actual. */
+export function timeZoneOptions(actual: string | null | undefined): string[] {
+    return actual && !COMMON_TIME_ZONES.includes(actual)
+        ? [...COMMON_TIME_ZONES, actual]
+        : COMMON_TIME_ZONES;
+}
+
 /** La zona con que se registraron los instantes de una jornada. */
 export interface EventTimeZone {
     /** Zona IANA efectiva de la jornada. Nula en las anteriores a T-1/T-2. */

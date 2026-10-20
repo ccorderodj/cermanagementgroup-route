@@ -51,7 +51,9 @@ async def test_templates_y_recipients_en_escritorio(seeded, alpha_client, live_s
             await page.goto("/admin/route/vehicles")
             await page.get_by_role("link", name="Activity Emails").first.click()
             await expect(page.get_by_role("heading", name="Activity Emails", level=1)).to_be_visible(timeout=20_000)
-            await expect(page.get_by_role("status")).to_contain_text("Envío automático pendiente de habilitación")
+            estado = page.get_by_role("region", name="Delivery status")
+            await expect(estado).to_contain_text("Automatic delivery: Off", timeout=20_000)
+            await expect(estado).to_contain_text("DigitalOcean job: not observed yet")
 
             midday = page.get_by_role("region", name="Midday Motivation")
             await expect(midday.get_by_label("Subject")).to_have_value("¡Buen trabajo! Sigamos adelante 💪")
