@@ -284,13 +284,19 @@ async def test_una_accion_encolada_antes_del_despliegue_no_se_pierde(
             ).all()
         assert jornadas == [], "sin permiso no debía aplicarse"
 
-        # Vuelve el permiso: la acción se aplica y sale de la cola.
+        # Vuelve el permiso. Desde RTE-LOC-02 U1 una acción **sin propietario**
+        # ya no se envía con la sesión de quien esté entrando: no se puede saber
+        # de quién era, y enviarla así es el cruce entre usuarios que U1 cierra.
+        # Sigue sin perderse: se retiene en la cola.
         await contexto.grant_permissions(["geolocation"])
         await contexto.set_geolocation(UBICACION_DE_PRUEBA)
         await page.reload()
-        await expect(page.get_by_text("What's next?")).to_be_visible(timeout=30_000)
+        await expect(page.get_by_role("button", name="Start Work")).to_be_visible(timeout=30_000)
+        await page.wait_for_timeout(3_000)
 
         cola = await page.evaluate(LEER_COLA)
-        assert heredada["id"] not in [a["id"] for a in cola], (
-            "con el permiso de vuelta la acción debía enviarse y salir de la cola"
-        )
+        assert heredada["id"] in [a["id"] for a in cola], "retenida, no borrada"
+        async with async_session_maker() as session:
+            assert (await session.scalars(
+                select(WorkSession.id).where(WorkSession.user_id == supervisor.id)
+            )).all() == [], "ni aplicada como el usuario de ahora"

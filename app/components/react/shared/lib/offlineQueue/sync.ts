@@ -3,13 +3,22 @@ import { abreTrabajoNuevo } from '../location/operationalActions';
 import { $api } from '@/shared/api';
 import {
     flushQueue,
+    holdLocationSamples,
     listPendingLocationEvidence,
+    listPendingLocationSamples,
+    markLocationSamplesFailed,
+    pruneStaleLocationSamples,
+    removeLocationSamples,
     markLocationEvidenceFailed,
     removeLocationEvidence,
     type FlushResult,
     type PendingAction,
     type PendingLocationEvidence,
+    type PendingLocationSample,
 } from './offlineQueue';
+
+/** Igual que el máximo del servidor (`LOTE_MAXIMO`). */
+const MAX_LOTE_DE_MUESTRAS = 50;
 
 /**
  * Un 4xx que no mejora repitiéndose. Misma regla que la cola de acciones.
@@ -227,5 +236,90 @@ export async function submitAction(accion: PendingAction): Promise<void> {
     const resultado = await flushPendingActions();
     if (resultado.rejected?.id === accion.id) {
         throw resultado.rejectedError;
+    }
+}
+
+/**
+ * Envía las muestras periódicas pendientes **del usuario actual**, en lotes de
+ * 50 por jornada (RTE-LOC-02). Carril propio: nunca se llama desde el vaciado
+ * de acciones ni de evidencia, así que no puede retrasarlos.
+ *
+ * Qué pasa con cada lote
+ * ----------------------
+ * * 200: el servidor decidió cada muestra (`accepted`, `duplicate` o
+ *   `rejected`); todas salen de la cola.
+ * * 409 `periodic_capture_disabled`: la compañía la apagó. Se retiene lo
+ *   pendiente (`holdLocationSamples`) y no se insiste.
+ * * 404 (la jornada no es de este usuario) o 422: no va a mejorar; se descarta.
+ * * Sin red o 5xx: se queda, con un intento más. Se reintenta en el siguiente
+ *   ciclo, no en un bucle.
+ *
+ * Nunca lanza.
+ */
+type Lote = { jornada: number; ids: string[]; muestras: PendingLocationSample['payload'][] };
+
+function enLotes(pendientes: PendingLocationSample[]): Lote[] {
+    const porJornada = new Map<number, PendingLocationSample[]>();
+    pendientes.forEach((m) => porJornada.set(m.sessionId, [...(porJornada.get(m.sessionId) ?? []), m]));
+    return [...porJornada.entries()].flatMap(([jornada, muestras]) => Array.from(
+        { length: Math.ceil(muestras.length / MAX_LOTE_DE_MUESTRAS) },
+        (_, i) => {
+            const trozo = muestras.slice(i * MAX_LOTE_DE_MUESTRAS, (i + 1) * MAX_LOTE_DE_MUESTRAS);
+            return { jornada, ids: trozo.map((m) => m.id), muestras: trozo.map((m) => m.payload) };
+        },
+    ));
+}
+
+/** Un lote detrás de otro; para en el primero que no se pudo entregar. */
+async function enviarLotes(
+    lotes: Lote[],
+    indice: number,
+    resumen: { sent: number; failed: number },
+): Promise<{ sent: number; failed: number }> {
+    if (indice >= lotes.length) return resumen;
+    const { jornada, ids, muestras } = lotes[indice];
+    try {
+        await $api.post('/location/samples', { work_session_id: jornada, samples: muestras });
+        await removeLocationSamples(ids);
+        return enviarLotes(lotes, indice + 1, { ...resumen, sent: resumen.sent + ids.length });
+    } catch (error) {
+        const respuesta = (error as { response?: { status?: number; data?: { detail?: { code?: string } } } })
+            ?.response;
+        const fallo = { ...resumen, failed: resumen.failed + ids.length };
+        if (respuesta?.status === 409 && respuesta.data?.detail?.code === 'periodic_capture_disabled') {
+            await holdLocationSamples();
+            return fallo;
+        }
+        if (respuesta?.status === 404 || respuesta?.status === 422) {
+            await removeLocationSamples(ids);
+            return enviarLotes(lotes, indice + 1, fallo);
+        }
+        await markLocationSamplesFailed(ids);
+        return fallo;
+    }
+}
+
+/**
+ * Envía las muestras periódicas pendientes **del usuario actual**, en lotes de
+ * 50 por jornada (RTE-LOC-02). Carril propio: nunca se llama desde el vaciado
+ * de acciones ni de evidencia, así que no puede retrasarlos.
+ *
+ * * 200: el servidor decidió cada muestra (`accepted`, `duplicate` o
+ *   `rejected`); todas salen de la cola.
+ * * 409 `periodic_capture_disabled`: la compañía la apagó. Se retiene lo
+ *   pendiente (`holdLocationSamples`) y no se insiste.
+ * * 404 (la jornada no es de este usuario) o 422: no va a mejorar; se descarta.
+ * * Sin red o 5xx: se queda, con un intento más, para el siguiente ciclo.
+ *
+ * Nunca lanza.
+ */
+export async function flushPendingLocationSamples(): Promise<{ sent: number; failed: number }> {
+    try {
+        await pruneStaleLocationSamples();
+        const pendientes = (await listPendingLocationSamples()).filter((m) => !m.heldAt);
+        return await enviarLotes(enLotes(pendientes), 0, { sent: 0, failed: 0 });
+    } catch {
+        // Un fallo de este carril no puede subir a la pantalla.
+        return { sent: 0, failed: 0 };
     }
 }

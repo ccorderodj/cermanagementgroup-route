@@ -2,6 +2,7 @@ import {
     esOperativo, leerPermisoOperativo, pedirRevisionDelPermiso,
 } from '../location/permission';
 import { abreTrabajoNuevo, PermisoDeUbicacionRequerido } from '../location/operationalActions';
+import CookieService from '../utils/CookieService';
 /**
  * Cola de acciones durable, independiente de la sesión (RTE03, §14).
  *
@@ -45,6 +46,20 @@ import { abreTrabajoNuevo, PermisoDeUbicacionRequerido } from '../location/opera
  * a la siguiente: una `Jornada` terminada antes de empezar, por haberse
  * reordenado, sería un estado que el dominio nunca podría producir por sí
  * mismo.
+ *
+ * Propietario (RTE-LOC-02 U1)
+ * ---------------------------
+ * Cada acción y cada punto pendiente guarda **de quién es** al encolarse:
+ * usuario (cookie `user_data`) y tenant (el host, que es su subdominio). Se
+ * envía **solo** lo del usuario que tiene la sesión ahora. Antes no se
+ * guardaba, el cierre de sesión no vaciaba la base y el envío usaba la cookie
+ * del momento: lo que A dejó sin conexión se habría enviado como B en el mismo
+ * navegador. Lo de A no se borra: se queda para cuando A vuelva.
+ *
+ * Lo que se encoló **antes** de esto no tiene propietario y no se puede saber
+ * de quién era. Se **retiene**: ni se envía como el usuario de ahora ni se
+ * borra (`listHeldOfflineItems` lo cuenta). Es aislamiento local: quien decide
+ * si una petición vale es el servidor, con la sesión.
  */
 
 const DATABASE_NAME = 'cer-route-offline';
@@ -59,7 +74,7 @@ const DATABASE_NAME = 'cer-route-offline';
  * `onupgradeneeded` crea lo que falte y no toca lo que hay, así que un
  * dispositivo con la versión 1 o 2 y cosas pendientes las conserva.
  */
-const DATABASE_VERSION = 3;
+const DATABASE_VERSION = 4;
 const STORE_NAME = 'pending_actions';
 /**
  * Evidencia de ubicación pendiente de enviar.
@@ -88,8 +103,47 @@ const LOCATION_STORE = 'pending_location_evidence';
  * dominio: es el archivo que la evidencia necesitará cuando llegue.
  */
 const ODOMETER_PHOTO_STORE = 'pending_odometer_photos';
+/**
+ * Muestras periódicas de ubicación (RTE-LOC-02), versión 4.
+ *
+ * Cuarto carril, aparte de la evidencia de eventos: una muestra no está atada
+ * a ningún evento, se envía en lotes y nunca puede retrasar ni bloquear lo
+ * operativo. Cada una lleva propietario y jornada.
+ */
+const SAMPLE_STORE = 'pending_location_samples';
 
 export type PendingActionStatus = 'pending' | 'failed';
+
+/** De quién es algo encolado: usuario autenticado y tenant (su host). */
+export interface QueueOwner {
+    userId: number;
+    tenant: string;
+}
+
+/** El propietario de la sesión actual, o `null` si no hay usuario. */
+export function currentQueueOwner(): QueueOwner | null {
+    const usuario = CookieService.getCookieValueJson<{ user_id?: number }>('user_data');
+    if (!usuario || typeof usuario.user_id !== 'number') return null;
+    return { userId: usuario.user_id, tenant: window.location.host };
+}
+
+function esDe(owner: QueueOwner | undefined, actual: QueueOwner | null): boolean {
+    return !!owner && !!actual && owner.userId === actual.userId && owner.tenant === actual.tenant;
+}
+
+/** Sin sesión no se encola: no habría a quién atribuirlo. */
+export class SinUsuarioParaEncolar extends Error {
+    constructor() {
+        super('There is no signed-in user to queue this for. Sign in again.');
+        this.name = 'SinUsuarioParaEncolar';
+    }
+}
+
+function propietarioObligatorio(): QueueOwner {
+    const owner = currentQueueOwner();
+    if (!owner) throw new SinUsuarioParaEncolar();
+    return owner;
+}
 
 export interface PendingAction {
     /** También la `Idempotency-Key` que recibe el servidor. */
@@ -116,6 +170,8 @@ export interface PendingAction {
      * que esta aserción transporta.
      */
     locationPermission?: string;
+    /** Ausente solo en lo encolado antes de RTE-LOC-02: queda retenido. */
+    owner?: QueueOwner;
 }
 
 let dbPromise: Promise<IDBDatabase> | null = null;
@@ -138,6 +194,11 @@ function openDatabase(): Promise<IDBDatabase> {
                 // idempotencia empieza en el dispositivo y no depende de que el
                 // servidor la arregle después.
                 db.createObjectStore(LOCATION_STORE, { keyPath: 'id' });
+            }
+            if (!db.objectStoreNames.contains(SAMPLE_STORE)) {
+                // `id` es el `client_sample_id`: el mismo que el servidor usa
+                // para no duplicar.
+                db.createObjectStore(SAMPLE_STORE, { keyPath: 'id' });
             }
             if (!db.objectStoreNames.contains(ODOMETER_PHOTO_STORE)) {
                 // `id` es la tupla usuario-jornada-extremo, por lo mismo: una
@@ -211,6 +272,8 @@ export interface PendingLocationEvidence {
      * lo tienen. A esas se las sigue tratando como antes.
      */
     expiresAt?: string;
+    /** Ausente solo en lo encolado antes de RTE-LOC-02: queda retenido. */
+    owner?: QueueOwner;
 }
 
 /** Guarda o reemplaza la evidencia pendiente de un evento. */
@@ -220,6 +283,7 @@ export async function enqueueLocationEvidence(
     payload: Record<string, unknown>,
     expiresAt?: string,
 ): Promise<void> {
+    const owner = propietarioObligatorio();
     const existente = await withNamedStore<PendingLocationEvidence | undefined>(
         LOCATION_STORE,
         'readonly',
@@ -236,18 +300,22 @@ export async function enqueueLocationEvidence(
         // Se conserva la caducidad del primer encolado por lo mismo que la
         // fecha: reencolar no estira el plazo que da el servidor.
         expiresAt: existente?.expiresAt ?? expiresAt,
+        owner,
     };
     await withNamedStore(LOCATION_STORE, 'readwrite', (store) => store.put(entrada));
 }
 
+/** La evidencia pendiente **del usuario actual**; la de otros no se ve. */
 export async function listPendingLocationEvidence(): Promise<
     PendingLocationEvidence[]
     > {
-    const filas = await withNamedStore<PendingLocationEvidence[]>(
+    const actual = currentQueueOwner();
+    const todas = await withNamedStore<PendingLocationEvidence[]>(
         LOCATION_STORE,
         'readonly',
         (store) => store.getAll() as IDBRequest<PendingLocationEvidence[]>,
     );
+    const filas = todas.filter((f) => esDe(f.owner, actual));
     // Por fecha de captura, que es el orden en que ocurrieron. No es un
     // requisito del dominio —el servidor correlaciona por la tupla, no por el
     // orden de llegada— pero hace el reenvío predecible y los logs legibles.
@@ -404,15 +472,41 @@ export async function listStagedOdometerPhotos(
         .sort((a, b) => a.capturedAt.localeCompare(b.capturedAt));
 }
 
-export async function listPendingActions(): Promise<PendingAction[]> {
+async function todasLasAcciones(): Promise<PendingAction[]> {
     const todas = await withStore<PendingAction[]>('readonly', (store) => store.getAll());
     return todas.sort((a, b) => a.sequence - b.sequence);
+}
+
+/** Las acciones pendientes **del usuario actual**, en orden. */
+export async function listPendingActions(): Promise<PendingAction[]> {
+    const actual = currentQueueOwner();
+    return (await todasLasAcciones()).filter((a) => esDe(a.owner, actual));
+}
+
+/**
+ * Lo que hay en el dispositivo y no es del usuario actual: de otro usuario de
+ * este navegador (`otherUser`), o anterior a RTE-LOC-02 y sin propietario
+ * (`ownerless`). Ninguno se envía ni se borra.
+ */
+export async function listHeldOfflineItems(): Promise<{ ownerless: number; otherUser: number }> {
+    const actual = currentQueueOwner();
+    const evidencias = await withNamedStore<PendingLocationEvidence[]>(
+        LOCATION_STORE,
+        'readonly',
+        (store) => store.getAll() as IDBRequest<PendingLocationEvidence[]>,
+    );
+    const filas: { owner?: QueueOwner }[] = [...(await todasLasAcciones()), ...evidencias];
+    return {
+        ownerless: filas.filter((f) => !f.owner).length,
+        otherUser: filas.filter((f) => f.owner && !esDe(f.owner, actual)).length,
+    };
 }
 
 let sequenceCounter = 0;
 
 async function nextSequence(): Promise<number> {
-    const existentes = await listPendingActions();
+    // De todas, no solo las del usuario: el orden es del dispositivo.
+    const existentes = await todasLasAcciones();
     sequenceCounter = existentes.reduce(
         (max, accion) => Math.max(max, accion.sequence),
         sequenceCounter,
@@ -450,6 +544,7 @@ export async function enqueueAction(
     // Cuando si se consulta, se lee AHORA y no un valor en memoria: revocar se
     // hace en los ajustes del sistema, fuera de la pestana, y un valor cacheado
     // dejaria pasar justo el caso que este checkpoint cierra.
+    const owner = propietarioObligatorio();
     let permiso: string | undefined;
     if (abreTrabajoNuevo(kind)) {
         const actual = await leerPermisoOperativo();
@@ -472,6 +567,7 @@ export async function enqueueAction(
         createdAt: new Date().toISOString(),
         status: 'pending',
         locationPermission: permiso,
+        owner,
     };
 
     await withStore('readwrite', (store) => store.add(accion));
@@ -599,4 +695,94 @@ export async function flushQueue(
 ): Promise<FlushResult> {
     const pendientes = await listPendingActions();
     return enviarEnOrden(pendientes, 0, sendAction, []);
+}
+
+// ── Muestras periódicas de ubicación (RTE-LOC-02) ──────────────────────────
+
+/** Cuántas muestras pendientes guarda un usuario como máximo en este dispositivo. */
+export const MAX_PENDING_SAMPLES = 500;
+/** Lo que el servidor ya no aceptaría (30 días): se descarta al vaciar. */
+const VIDA_DE_UNA_MUESTRA_MS = 30 * 24 * 3600 * 1000;
+
+export interface PendingLocationSample {
+    /** El `client_sample_id`. */
+    id: string;
+    owner: QueueOwner;
+    sessionId: number;
+    payload: {
+        client_sample_id: string;
+        latitude: string;
+        longitude: string;
+        accuracy_m: string;
+        device_captured_at: string;
+    };
+    createdAt: string;
+    attempts: number;
+    /**
+     * Presente si la captura se apagó con la muestra en cola. Se retiene y **no**
+     * se envía aunque vuelva a encenderse: apagar no puede acabar en una
+     * subida diferida de lo que se capturó antes.
+     */
+    heldAt?: string;
+}
+
+async function todasLasMuestras(): Promise<PendingLocationSample[]> {
+    return withNamedStore<PendingLocationSample[]>(SAMPLE_STORE, 'readonly', (store) => store.getAll() as IDBRequest<PendingLocationSample[]>);
+}
+
+/** Las muestras del usuario actual, en orden de captura. */
+export async function listPendingLocationSamples(): Promise<PendingLocationSample[]> {
+    const actual = currentQueueOwner();
+    return (await todasLasMuestras())
+        .filter((m) => esDe(m.owner, actual))
+        .sort((a, b) => a.payload.device_captured_at.localeCompare(b.payload.device_captured_at));
+}
+
+/** Guarda una muestra. `false` si el usuario ya tiene el máximo en cola. */
+export async function enqueueLocationSample(
+    sessionId: number,
+    payload: PendingLocationSample['payload'],
+): Promise<boolean> {
+    const owner = propietarioObligatorio();
+    if ((await listPendingLocationSamples()).length >= MAX_PENDING_SAMPLES) return false;
+    const muestra: PendingLocationSample = {
+        id: payload.client_sample_id,
+        owner,
+        sessionId,
+        payload,
+        createdAt: new Date().toISOString(),
+        attempts: 0,
+    };
+    await withNamedStore(SAMPLE_STORE, 'readwrite', (store) => store.put(muestra));
+    return true;
+}
+
+export async function removeLocationSamples(ids: string[]): Promise<void> {
+    await Promise.all(ids.map((id) => withNamedStore(SAMPLE_STORE, 'readwrite', (store) => store.delete(id))));
+}
+
+async function reescribirMuestras(muestras: PendingLocationSample[]): Promise<void> {
+    await Promise.all(muestras.map((m) => withNamedStore(SAMPLE_STORE, 'readwrite', (store) => store.put(m))));
+}
+
+export async function markLocationSamplesFailed(ids: string[]): Promise<void> {
+    const propias = await listPendingLocationSamples();
+    await reescribirMuestras(propias.filter((m) => ids.includes(m.id)).map((m) => ({ ...m, attempts: m.attempts + 1 })));
+}
+
+/** Captura apagada: retiene lo que el usuario tenía en cola (ver `heldAt`). */
+export async function holdLocationSamples(): Promise<void> {
+    const ahora = new Date().toISOString();
+    const propias = await listPendingLocationSamples();
+    await reescribirMuestras(propias.filter((m) => !m.heldAt).map((m) => ({ ...m, heldAt: ahora })));
+}
+
+/** Descarta las muestras propias que el servidor ya no aceptaría por antiguas. */
+export async function pruneStaleLocationSamples(): Promise<number> {
+    const limite = Date.now() - VIDA_DE_UNA_MUESTRA_MS;
+    const viejas = (await listPendingLocationSamples())
+        .filter((m) => Date.parse(m.payload.device_captured_at) < limite)
+        .map((m) => m.id);
+    await removeLocationSamples(viejas);
+    return viejas.length;
 }

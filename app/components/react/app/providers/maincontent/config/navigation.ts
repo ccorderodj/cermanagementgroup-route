@@ -138,6 +138,12 @@ export const businessNavigation: INavMainItem[] = [
                 url: '/admin/route/activity-emails',
                 requiredPermission: 'route.activityemails.manage',
             },
+            {
+                // RTE-LOC-02: captura periódica de ubicación, por compañía.
+                title: 'Location Capture',
+                url: '/admin/route/location-capture',
+                requiredPermission: 'route.locationcapture.manage',
+            },
         ],
     },
 ];

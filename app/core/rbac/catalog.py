@@ -129,6 +129,11 @@ CAPABILITIES: tuple[Capability, ...] = (
     # demanda: enviar recupera lo que no salió; reenviar repite lo que salió.
     _cap("route", "activityemails.resend", "Resend an activity email report that was already sent"),
     #
+    # RTE-LOC-02: encender, apagar y fijar el intervalo de la captura periódica
+    # de ubicación de la compañía. **A demanda**: decide si se registra la
+    # ubicación de las personas entre eventos, así que ninguna plantilla la da.
+    _cap("route", "locationcapture.manage", "Turn periodic location capture on or off and set its interval"),
+    #
     # `route.live.read` entra aquí con RTE07, que es el checkpoint que crea su
     # superficie: la vista Today / Live. Es de **lectura** y de alcance de
     # compañía; cuando exista jerarquía organizativa, será el servidor quien
@@ -226,6 +231,7 @@ CAPACIDADES_A_DEMANDA: frozenset[str] = frozenset(
         "route.activityemails.preview",
         "route.activityemails.send",
         "route.activityemails.resend",
+        "route.locationcapture.manage",
     }
 )
 

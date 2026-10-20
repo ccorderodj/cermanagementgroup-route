@@ -38,7 +38,8 @@ import {
 } from '@/entities/RouteWorkSessions';
 import { listPendingActions } from '@/shared/lib/offlineQueue';
 import {
-    captureFor, PermisoDeUbicacionRequerido, type PermisoOperativo,
+    captureFor, PERIODIC_CAPTURE_NOTICE, PermisoDeUbicacionRequerido, readPeriodicCaptureConfig,
+    startPeriodicSampling, type PermisoOperativo,
 } from '@/shared/lib/location';
 import { LocationGate } from '@/features/RouteLocationGate';
 
@@ -121,7 +122,7 @@ type Vista =
  * viera un tipo de componente nuevo en cada render y destruyera su subárbol
  * —y su estado— cada vez.
  */
-function Cabecera({ session }: { session: WorkSession }) {
+function Cabecera({ session, capturaPeriodica }: { session: WorkSession; capturaPeriodica: boolean }) {
     return (
         <section className="rounded-lg border border-border bg-card p-5 text-center">
             <p className="text-xs uppercase tracking-wide text-muted-foreground">
@@ -130,9 +131,15 @@ function Cabecera({ session }: { session: WorkSession }) {
             <p className="mt-1 text-2xl font-semibold text-foreground">
                 {formatearHora(session.started_at, session)}
             </p>
+            {capturaPeriodica && (
+                <p className="mt-2 text-xs text-muted-foreground">{PERIODIC_CAPTURE_NOTICE}</p>
+            )}
         </section>
     );
 }
+
+/** Las fases con una jornada abierta en el servidor, en las que se muestrea. */
+const CON_JORNADA_ACTIVA = ['working', 'planning', 'on-route', 'arrived', 'ending'];
 
 function Destino({ trip }: { trip: Trip }) {
     const contexto = TRIP_CONTEXTS[trip.current_purpose];
@@ -292,6 +299,9 @@ export const RouteMyRoutePage = () => {
     // contestado: entonces no se retira nada, y la guarda de la cola sigue
     // siendo la que impide abrir trabajo sin acceso.
     const [permisoUbicacion, setPermisoUbicacion] = useState<PermisoOperativo | null>(null);
+    // RTE-LOC-02: si la compañía tiene encendida la captura periódica. Sólo
+    // para decirlo en pantalla; el muestreo relee la configuración por su cuenta.
+    const [capturaPeriodica, setCapturaPeriodica] = useState(false);
     const ultimaJornada = useRef<WorkSession | null>(null);
     // La última vista que el servidor confirmó. Es a la que se vuelve sin
     // red: ver la parada de hace un minuto es cierto, y ofrecer
@@ -426,6 +436,28 @@ export const RouteMyRoutePage = () => {
             }
         }
     }, []);
+
+    useEffect(() => {
+        const leer = () => readPeriodicCaptureConfig()
+            .then((c) => setCapturaPeriodica(!!c?.enabled))
+            .catch(() => {});
+        leer();
+        const alVolver = () => {
+            if (document.visibilityState === 'visible') leer();
+        };
+        document.addEventListener('visibilitychange', alVolver);
+        return () => document.removeEventListener('visibilitychange', alVolver);
+    }, []);
+
+    // RTE-LOC-02: una jornada activa con acceso a la ubicación muestrea; nada
+    // más. Se para al cerrar la jornada, al perder el permiso o al salir de My
+    // Route (logout y cambio de usuario incluidos). No toca la captura por
+    // evento ni la cola de acciones.
+    const jornadaActiva = CON_JORNADA_ACTIVA.includes(view.phase) && 'session' in view ? view.session.id : null;
+    useEffect(() => {
+        if (jornadaActiva === null || permisoUbicacion !== 'granted') return undefined;
+        return startPeriodicSampling(jornadaActiva);
+    }, [jornadaActiva, permisoUbicacion]);
 
     useEffect(() => {
         reconcile();
@@ -780,6 +812,7 @@ export const RouteMyRoutePage = () => {
             <LocationGate
                 hayOperacionAbierta={hayOperacionAbierta}
                 onPermisoChange={setPermisoUbicacion}
+                avisoPeriodico={capturaPeriodica ? PERIODIC_CAPTURE_NOTICE : undefined}
             >
                 <div data-testid="RouteMyRoutePage" className="flex flex-col gap-4">
                     {view.phase === 'loading' && (
@@ -834,7 +867,7 @@ export const RouteMyRoutePage = () => {
 
                     {view.phase === 'working' && (
                         <div className="flex flex-col gap-6">
-                            <Cabecera session={view.session} />
+                            <Cabecera session={view.session} capturaPeriodica={capturaPeriodica} />
 
                             {/* El aviso, no un diálogo forzado: `Start Work` no es
                             `Start Driving`, y quien empieza el día con trabajo
@@ -945,7 +978,7 @@ export const RouteMyRoutePage = () => {
                     confirmación, es reanudar lo que quedó a medias. */}
                     {view.phase === 'planning' && (
                         <div className="flex flex-col gap-6">
-                            <Cabecera session={view.session} />
+                            <Cabecera session={view.session} capturaPeriodica={capturaPeriodica} />
                             <Destino trip={view.trip} />
 
                             {/* Sin acceso a la ubicación, un viaje preparado y
@@ -990,7 +1023,7 @@ export const RouteMyRoutePage = () => {
 
                     {view.phase === 'on-route' && (
                         <div className="flex flex-col gap-6">
-                            <Cabecera session={view.session} />
+                            <Cabecera session={view.session} capturaPeriodica={capturaPeriodica} />
                             <Destino trip={view.trip} />
 
                             {cambiandoPlan ? (
@@ -1041,7 +1074,7 @@ export const RouteMyRoutePage = () => {
 
                     {view.phase === 'arrived' && (
                         <div className="flex flex-col gap-6">
-                            <Cabecera session={view.session} />
+                            <Cabecera session={view.session} capturaPeriodica={capturaPeriodica} />
                             <Destino trip={view.trip} />
 
                             <ActivityStop
@@ -1060,7 +1093,7 @@ export const RouteMyRoutePage = () => {
 
                     {view.phase === 'ending' && (
                         <div className="flex flex-col gap-6">
-                            <Cabecera session={view.session} />
+                            <Cabecera session={view.session} capturaPeriodica={capturaPeriodica} />
                             <p className="text-center text-sm text-muted-foreground">
                                 One last thing before you finish.
                             </p>
