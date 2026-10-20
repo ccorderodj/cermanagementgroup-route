@@ -266,6 +266,7 @@ TABLES_IN_DELETE_ORDER: tuple[str, ...] = (
     # RTE-LOC-02: muestras periódicas (cuelgan de la jornada) y su configuración.
     "location_sample",
     "location_capture_setting",
+    "location_notice_ack",
     "trip_mileage_segment",
     "trip_mileage",
     "location_fix",

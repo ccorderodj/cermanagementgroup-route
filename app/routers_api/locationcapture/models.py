@@ -108,3 +108,32 @@ class LocationSample(Base):
     server_received_at = Column(DateTime(timezone=True), nullable=False)
     #: El intervalo de la compañía al recibirla.
     interval_seconds_applied = Column(Integer, nullable=False)
+
+
+#: Versión del aviso de captura periódica. Si cambia el texto, se sube y cada
+#: persona lo vuelve a ver **una** vez.
+VERSION_DEL_AVISO = 1
+
+
+class LocationNoticeAck(Base):
+    """Que una persona ya vio el aviso de captura periódica (una vez, no cada día).
+
+    Una fila por compañía, usuario y versión del texto. Es el registro de que se
+    le informó y cuándo; no es un consentimiento distinto del permiso.
+    """
+
+    __tablename__ = "location_notice_ack"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["user_id", "company_id"],
+            ["user_company.user_id", "user_company.company_id"],
+            name="fk_location_notice_ack_membership",
+            ondelete="CASCADE",
+        ),
+        CheckConstraint("notice_version >= 1", name="ck_location_notice_ack_version"),
+    )
+
+    company_id = Column(Integer, ForeignKey("company.id", ondelete="CASCADE"), primary_key=True)
+    user_id = Column(Integer, primary_key=True)
+    notice_version = Column(Integer, primary_key=True)
+    acknowledged_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))

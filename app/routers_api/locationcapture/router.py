@@ -57,6 +57,16 @@ async def update_capture_settings(
     )
 
 
+@router.post("/location-capture/notice/ack", status_code=204)
+async def acknowledge_capture_notice(
+    current_user: Users = Depends(get_current_user),
+    _authz: None = EJECUTA,
+    company: TenantContext = Depends(get_company_required),
+) -> None:
+    """La persona vio el aviso de captura periódica: no se le vuelve a mostrar."""
+    await service.marcar_aviso_visto(company_id=company.id, user_id=current_user.id)
+
+
 @router.post("/location/samples")
 async def ingest_location_samples(
     payload: SamplesIn,
