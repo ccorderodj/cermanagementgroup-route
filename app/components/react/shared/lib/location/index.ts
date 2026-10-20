@@ -1,6 +1,7 @@
 export { captureFor, setLocationPolicy, type LocationEventKind } from './location';
 export {
     PERIODIC_CAPTURE_NOTICE,
+    acknowledgePeriodicNotice,
     periodicStats,
     readPeriodicCaptureConfig,
     startPeriodicSampling,

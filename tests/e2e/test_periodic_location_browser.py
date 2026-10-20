@@ -128,9 +128,18 @@ async def test_encendida_toma_la_primera_muestra_y_lo_dice(seeded, live_server):
         page = await contexto.new_page()
         await abrir_sesion(page, alpha.users["supervisor"].email, conceder_ubicacion=False)
         await _empezar(page)
-        await expect(page.get_by_text(AVISO)).to_have_count(1, timeout=20_000)
+        aviso = page.get_by_role("region", name="Location notice")
+        await expect(aviso).to_contain_text(AVISO, timeout=20_000)
         await page.screenshot(path=str(DESTINO / "movil-my-route-aviso.png"), full_page=True)
         assert await _esperar_muestras(alpha.id, 1) == 1
+        # «Got it»: queda registrado y no vuelve a salir, ni al recargar.
+        await aviso.get_by_role("button", name="Got it").click()
+        await expect(page.get_by_text(AVISO)).to_have_count(0)
+        await page.reload()
+        await expect(page.get_by_text("What's next?")).to_have_count(1, timeout=25_000)
+        await page.wait_for_timeout(2_000)
+        await expect(page.get_by_text(AVISO)).to_have_count(0)
+        await page.screenshot(path=str(DESTINO / "movil-my-route-sin-aviso.png"), full_page=True)
     assert await _contar("location_fix", alpha.id) == 1, "la captura por evento no cambia"
     async with async_session_maker() as s:
         fila = (await s.execute(text("SELECT user_id, interval_seconds_applied FROM location_sample"))).one()

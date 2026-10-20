@@ -51,6 +51,7 @@ EJECUTA = Depends(require_permissions(["route.worksession.execute"]))
 
 @router.get("/policy")
 async def read_location_policy(
+    current_user: Users = Depends(get_current_user),
     _authz: None = EJECUTA,
     company: TenantContext = Depends(get_company_required),
 ) -> LocationPolicyRead:
@@ -74,6 +75,9 @@ async def read_location_policy(
     return LocationPolicyRead.model_validate(platform_config.policy("route_location")).model_copy(update={
         "periodic_capture_enabled": periodica["enabled"],
         "periodic_capture_interval_seconds": periodica["interval_seconds"],
+        "periodic_notice_pending": periodica["enabled"] and await captura_periodica.aviso_pendiente(
+            company_id=company.id, user_id=current_user.id
+        ),
     })
 
 

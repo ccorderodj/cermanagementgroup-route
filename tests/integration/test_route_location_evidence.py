@@ -944,6 +944,7 @@ async def test_the_client_can_read_the_capture_policy(seeded, alpha_client):
         # RTE-LOC-02: la captura periódica de la compañía, apagada por defecto.
         "periodic_capture_enabled",
         "periodic_capture_interval_seconds",
+        "periodic_notice_pending",
     }, cuerpo
     assert (cuerpo["periodic_capture_enabled"], cuerpo["periodic_capture_interval_seconds"]) == (False, 300)
     # Los valores por defecto de `RouteLocationPolicy`, que son los aprobados.

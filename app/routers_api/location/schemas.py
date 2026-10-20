@@ -203,3 +203,5 @@ class LocationPolicyRead(BaseModel):
     #: los umbrales de arriba, que siguen gobernando la captura por evento.
     periodic_capture_enabled: bool = False
     periodic_capture_interval_seconds: int = 300
+    #: Si a ESTA persona le falta ver el aviso de captura periódica (una vez).
+    periodic_notice_pending: bool = False

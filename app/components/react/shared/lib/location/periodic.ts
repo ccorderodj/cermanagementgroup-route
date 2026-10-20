@@ -43,12 +43,15 @@ const policySchema = z.object({
     fresh_max_accuracy_m: z.number(),
     periodic_capture_enabled: z.boolean(),
     periodic_capture_interval_seconds: z.number(),
+    periodic_notice_pending: z.boolean().optional(),
 });
 
 export interface ConfigPeriodica {
     enabled: boolean;
     intervalSeconds: number;
     maxAccuracyM: number;
+    /** A esta persona le falta ver el aviso (se muestra una sola vez). */
+    noticePending: boolean;
 }
 
 /** El texto que se enseña cuando la compañía la tiene encendida (RTE-LOC-02 U1). */
@@ -72,10 +75,19 @@ export async function readPeriodicCaptureConfig(): Promise<ConfigPeriodica | nul
             enabled: leida.periodic_capture_enabled,
             intervalSeconds: leida.periodic_capture_interval_seconds,
             maxAccuracyM: leida.fresh_max_accuracy_m,
+            noticePending: leida.periodic_notice_pending ?? false,
         };
     } catch {
         return null;
     }
+}
+
+/**
+ * Guarda en el servidor que esta persona ya vio el aviso: no vuelve a salir,
+ * ni otro día ni en otro teléfono (sólo si cambia la versión del texto).
+ */
+export async function acknowledgePeriodicNotice(): Promise<void> {
+    await $api.post('/location-capture/notice/ack');
 }
 
 function claveDeUltima(owner: { userId: number; tenant: string }, sessionId: number): string {

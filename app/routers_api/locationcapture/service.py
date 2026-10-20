@@ -37,7 +37,9 @@ from app.core.platform.config_service import platform_config
 from app.logger import logger
 from app.routers_api.locationcapture.models import (
     INTERVALO_POR_DEFECTO,
+    VERSION_DEL_AVISO,
     LocationCaptureSetting,
+    LocationNoticeAck,
     LocationSample,
 )
 from app.routers_api.locationcapture.schemas import CaptureSettingUpdate, SampleResult, SamplesIn
@@ -96,6 +98,22 @@ async def guardar(*, company_id: int, actor_user_id: int, cambio: CaptureSetting
         },
     )
     return despues
+
+
+async def aviso_pendiente(*, company_id: int, user_id: int) -> bool:
+    """Si esta persona todavía no vio la versión actual del aviso."""
+    async with db_session() as session:
+        return await session.get(LocationNoticeAck, (company_id, user_id, VERSION_DEL_AVISO)) is None
+
+
+async def marcar_aviso_visto(*, company_id: int, user_id: int) -> None:
+    """Guarda que la vio. Idempotente: pulsar dos veces deja una sola fila."""
+    async with transaction() as session:
+        await session.execute(
+            pg_insert(LocationNoticeAck)
+            .values(company_id=company_id, user_id=user_id, notice_version=VERSION_DEL_AVISO)
+            .on_conflict_do_nothing()
+        )
 
 
 def _motivo(muestra, *, jornada: WorkSession, recibido: datetime, umbral: int) -> str | None:

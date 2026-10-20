@@ -178,3 +178,25 @@ def test_ningun_calculo_de_millas_ni_routing_lee_las_muestras():
         for fichero in (raiz / modulo).rglob("*.py"):
             texto = fichero.read_text(encoding="utf-8")
             assert "location_sample" not in texto and "location_point_timeline" not in texto, fichero
+
+
+# ── Aviso, una sola vez por persona ─────────────────────────────────────────
+
+
+async def test_aviso_una_sola_vez_por_persona(seeded, alpha_client):
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    assert (await alpha_client.get(POLITICA)).json()["periodic_notice_pending"] is False, "apagada: no hay aviso"
+
+    await _encender(seeded, alpha_client)
+    await alpha_client.login(seeded.alpha.users["supervisor"].email)
+    assert (await alpha_client.get(POLITICA)).json()["periodic_notice_pending"] is True
+    assert (await alpha_client.post("/api/location-capture/notice/ack")).status_code == 204
+    assert (await alpha_client.post("/api/location-capture/notice/ack")).status_code == 204, "idempotente"
+    assert (await alpha_client.get(POLITICA)).json()["periodic_notice_pending"] is False, "no se repite"
+
+    filas = await _filas("SELECT user_id, notice_version FROM location_notice_ack")
+    assert [(f.user_id, f.notice_version) for f in filas] == [(seeded.alpha.users["supervisor"].id, 1)]
+
+    # Otra persona de la misma compañía todavía no lo vio.
+    await alpha_client.login(seeded.alpha.users["route_admin"].email)
+    assert (await alpha_client.get(POLITICA)).json()["periodic_notice_pending"] is True
