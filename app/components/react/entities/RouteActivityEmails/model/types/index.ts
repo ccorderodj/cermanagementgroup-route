@@ -187,3 +187,44 @@ export const resendResultSchema = resendSchema.extend({
 });
 
 export type ResendResult = z.infer<typeof resendResultSchema>;
+
+/** Una fila de Delivery History: la entrega y sus reenvíos, sin contenido. */
+export const deliveryHistorySchema = deliverySchema.extend({
+    recipient_name: z.string(),
+    time_zone: z.string().nullable(),
+    next_attempt_at: z.string().nullable(),
+    delay_seconds: z.number().nullable(),
+    reason_message: z.string().nullable(),
+    resends: z.array(resendSchema.extend({ reason_message: z.string().nullable() })),
+});
+
+export type DeliveryHistory = z.infer<typeof deliveryHistorySchema>;
+
+export const DELIVERY_TRIGGERS = ['scheduler', 'reconcile', 'manual', 'resend'] as const;
+export type DeliveryTrigger = (typeof DELIVERY_TRIGGERS)[number];
+
+/** La última pasada vista de un reloj del envío automático. */
+export const dispatchRunSchema = z.object({
+    source: z.enum(['schedule', 'reconcile']),
+    started_at: z.string(),
+    finished_at: z.string(),
+    outcome: z.enum(['completed', 'failed']),
+    enabled: z.boolean(),
+    dry_run: z.boolean(),
+    counts: z.record(z.string(), z.number()),
+});
+
+export type DispatchRun = z.infer<typeof dispatchRunSchema>;
+
+/** El estado del envío, leído del servidor. */
+export const operationalStatusSchema = z.object({
+    provider_status: z.string(),
+    provider_verified_at: z.string().nullable(),
+    automation_enabled: z.boolean(),
+    dry_run: z.boolean(),
+    real_send_types: z.array(activityEmailTypeSchema),
+    recovery_window_hours: z.number(),
+    runs: z.array(dispatchRunSchema),
+});
+
+export type OperationalStatus = z.infer<typeof operationalStatusSchema>;

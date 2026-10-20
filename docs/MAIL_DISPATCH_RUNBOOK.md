@@ -68,7 +68,10 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
    MAIL DISPATCH | source=reconcile enabled=False dry_run=True checked=0 due=0 claimed=0 accepted=0 ...
    ```
 2. **Activity › Jobs › route-mail-reconcile:** deben verse invocaciones cada 15 minutos. **Runtime Logs** del job: las mismas líneas `MAIL DISPATCH`.
-3. **Programador interno:** en Runtime Logs del servicio web, líneas `MAIL DISPATCH | source=schedule …`. Solo aparecen con `MAIL_AUTOMATION_ENABLED=true`; apagado, la pasada vuelve sin escribir nada.
+3. **Programador interno:** en Runtime Logs del servicio web, líneas `MAIL DISPATCH | source=schedule …`.
+4. **En la pantalla (Activity Emails), sin leer logs:**
+   - **Arriba, el estado leído del servidor:** proveedor (Verify), automático Off / Dry run / On, tipos con envío real y la **última pasada vista** de cada reloj («In-app scheduler» y «DigitalOcean job»). «not observed yet» significa que ese reloj no ha corrido nunca contra esta base: no se da por verificado. Cada pasada, también apagada, deja su latido en `activity_email_dispatch_run`.
+   - **Pestaña Delivery history:** cada correo que tocaba o se pidió. Muestra el disparador (Scheduler, DigitalOcean job, Send now), el corte y la zona, el intento y su retraso respecto al vencimiento, el estado, el motivo legible, el próximo reintento y los reenvíos. Filtros por fechas, correo y disparador. Sin asunto, cuerpo, notas ni direcciones.
 
 **Significado de los contadores:**
 
@@ -83,6 +86,8 @@ El job hereda las variables de la App: base de datos, `PLATFORM_MASTER_KEY` (nec
 | `failed` | Fallos definitivos |
 | `unknown` | Resultado incierto |
 | `skipped` | No había correo que mandar |
+| `config_required` | Sin zona horaria (ni propia ni de la compañía): queda **pendiente** con `configuration_required` y sale en cuanto se fije, si sigue a tiempo |
+| `expired` | Venció hace más que `MAIL_RECOVERY_WINDOW_HOURS`: no se manda solo; queda registrado como `recovery_window_expired` y se puede mandar a mano |
 | `errors` | Fallos de la propia pasada |
 
 ## 5. Encender (solo con GO del PO)

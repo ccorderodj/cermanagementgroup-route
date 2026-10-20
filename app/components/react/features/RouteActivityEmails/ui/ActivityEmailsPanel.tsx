@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, MailCheck } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 import { Button, Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/ui/shadcn/new-york';
 import {
     fetchActivityEmailTemplates,
@@ -7,6 +7,8 @@ import {
 } from '@/entities/RouteActivityEmails';
 import { TemplateEditor } from './TemplateEditor';
 import { RecipientsTab } from './RecipientsTab';
+import { DeliveryStatusBanner } from './DeliveryStatusBanner';
+import { HistoryTab } from './HistoryTab';
 
 /** Los dos grupos de plantillas, en este orden. */
 const GRUPOS = [
@@ -25,11 +27,10 @@ const GRUPOS = [
 ] as const;
 
 /**
- * Configuración de los correos de actividad (RTE-NOT-01): Templates y
- * Recipients.
+ * Los correos de actividad: Templates, Recipients y Delivery history.
  *
- * **Sólo configuración.** El aviso de arriba lo dice siempre, porque guardar o
- * activar aquí no envía ni programa nada hasta que exista el motor de envío.
+ * Arriba, el estado del envío **leído del servidor** (`DeliveryStatusBanner`):
+ * proveedor, interruptores, tipos activos y última pasada de cada reloj.
  *
  * Las dos plantillas siguen montadas al cambiar de pestaña (`forceMount`): un
  * borrador sin guardar no se pierde por mirar los destinatarios, y salir de la
@@ -80,21 +81,13 @@ export function ActivityEmailsPanel() {
 
     return (
         <div className="space-y-4">
-            <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 p-3 text-sm" role="status">
-                <MailCheck className="mt-0.5 size-4 shrink-0 text-primary" />
-                <span>
-                    Configuración guardada. Envío automático pendiente de habilitación.
-                    {' '}
-                    <span className="text-muted-foreground">
-                        These settings are stored only; no email is sent until automatic delivery is enabled.
-                    </span>
-                </span>
-            </div>
+            <DeliveryStatusBanner />
 
             <Tabs value={tab} onValueChange={setTab}>
                 <TabsList>
                     <TabsTrigger value="templates">Templates</TabsTrigger>
                     <TabsTrigger value="recipients">Recipients</TabsTrigger>
+                    <TabsTrigger value="history">Delivery history</TabsTrigger>
                 </TabsList>
 
                 <TabsContent value="templates" forceMount className="data-[state=inactive]:hidden">
@@ -132,6 +125,10 @@ export function ActivityEmailsPanel() {
 
                 <TabsContent value="recipients">
                     <RecipientsTab />
+                </TabsContent>
+
+                <TabsContent value="history">
+                    <HistoryTab />
                 </TabsContent>
             </Tabs>
         </div>

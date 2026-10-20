@@ -85,6 +85,11 @@ _MENSAJES: dict[str, str] = {
 _CODIGO_SEGURO = re.compile(r"^[A-Za-z0-9_.-]{1,40}$")
 
 
+def mensaje_del_paso(step: str) -> str | None:
+    """El texto fijo de un paso del proveedor (`smtp_auth_rejected`…), o `None`."""
+    return _MENSAJES.get(step)
+
+
 def describir(exc: EmailFailure) -> str:
     """El mensaje para la pantalla: el del paso y, si es seguro, el código."""
     texto = _MENSAJES.get(exc.step, _MENSAJES["smtp_unreachable"])

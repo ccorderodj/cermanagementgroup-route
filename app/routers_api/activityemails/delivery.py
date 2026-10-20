@@ -53,19 +53,23 @@ from app.core.audit.service import record_event
 from app.core.db.session import db_session, transaction
 from app.core.email import backends
 from app.core.email.politica_de_prueba import correo_valido
+from app.core.platform import providers as provider_defs
+from app.core.platform.integration_status import load_status
 from app.logger import logger
 from app.routers_api.activityemails.content import ActivityEmailType
 from app.routers_api.activityemails.models import (
     ActivityEmailDelivery,
+    ActivityEmailDispatchRun,
     ActivityEmailPreference,
     ActivityEmailResend,
     DeliverySource,
     DeliveryStatus,
+    DispatchOutcome,
 )
-from app.routers_api.activityemails.real_reports import DE_MEDIODIA, ReporteReal, generar
+from app.routers_api.activityemails.real_reports import DE_MEDIODIA, ReporteReal, generar, zona_del_destinatario
 from app.routers_api.companies.models import Company, UserCompany
 from app.routers_api.users.models import Users
-from app.routers_api.worksessions.time_zones import dia_local, zonas_de_referencia
+from app.routers_api.worksessions.time_zones import dia_local
 
 #: Cuánto es de quien la reservó una entrega. Más que el plazo total de una
 #: conversación con el proveedor (25 s), con margen.
@@ -106,7 +110,20 @@ MOTIVOS: dict[str, str] = {
     "resend_not_sent_yet": "Nothing to resend: this report has not been sent yet.",
     "resend_in_progress": "A resend of this report is being sent right now.",
     "resend_conflict": "This report was resent a moment ago. Generate it again to see the history.",
+    "recovery_window_expired": (
+        "It was due longer ago than the recovery window and was not sent automatically. "
+        "Send it now by hand if it is still useful."
+    ),
+    "lease_expired": "A previous attempt was interrupted; whether it left the server is uncertain.",
+    "provider_not_configured": "No mail provider is configured, so nothing left the server.",
 }
+
+
+def motivo_legible(codigo: str | None) -> str | None:
+    """El texto fijo de un código de motivo: nuestro o del paso del proveedor."""
+    if not codigo:
+        return None
+    return MOTIVOS.get(codigo) or backends.mensaje_del_paso(codigo) or codigo
 
 #: Desde qué estados de la entrega original se puede reenviar: ya aceptada por
 #: el proveedor, o incierta (quien reenvía ha comprobado que no llegó).
@@ -114,7 +131,7 @@ REENVIABLE = frozenset({DeliveryStatus.ACCEPTED_BY_PROVIDER.value, DeliveryStatu
 
 
 def _habilitado(tipo: str) -> bool:
-    return tipo in {t.strip() for t in settings.MAIL_REAL_SEND_TYPES.split(",") if t.strip()}
+    return tipo in tipos_habilitados()
 
 
 def _error(codigo: str, http: int = status.HTTP_409_CONFLICT) -> HTTPException:
@@ -214,19 +231,6 @@ def _reenvio(r: ActivityEmailResend) -> dict:
     }
 
 
-async def _reenvios(delivery_id: int) -> list[ActivityEmailResend]:
-    async with db_session() as session:
-        return list(
-            (
-                await session.scalars(
-                    select(ActivityEmailResend)
-                    .where(ActivityEmailResend.delivery_id == delivery_id)
-                    .order_by(ActivityEmailResend.sequence)
-                )
-            ).all()
-        )
-
-
 @dataclass
 class Evaluacion:
     reporte: ReporteReal
@@ -309,7 +313,7 @@ async def evaluar(
     dest = await _destinatario(company_id, recipient_user_id)
     existente = await _existente(company_id, recipient_user_id, reporte.report_type, operational_date)
     motivo = _bloqueo(reporte, dest, existente, ahora)
-    reenvios = await _reenvios(existente.id) if existente is not None else []
+    reenvios = await _reenvios_de([existente.id]) if existente is not None else []
     motivo_reenvio = _bloqueo_reenvio(reporte, dest, existente, reenvios, ahora)
     return Evaluacion(
         reporte=reporte,
@@ -367,6 +371,7 @@ async def reclamar(
         fila.cutoff_at = reporte.cutoff_at
         fila.due_at = reporte.due_at
         fila.template_version = reporte.template_version
+        fila.time_zone = reporte.time_zone
         fila.requested_by_user_id = actor_user_id
         fila.request_reason = (reason or None) and reason[:300]
         fila.reason_code = None
@@ -455,7 +460,24 @@ async def omitir(*, company_id: int, reporte: ReporteReal, motivo: str, source: 
         await session.execute(
             pg_insert(ActivityEmailDelivery)
             .values(**clave, status=DeliveryStatus.SKIPPED.value, source=source, reason_code=motivo,
-                    cutoff_at=reporte.cutoff_at, due_at=reporte.due_at, version=1)
+                    cutoff_at=reporte.cutoff_at, due_at=reporte.due_at, time_zone=reporte.time_zone, version=1)
+            .on_conflict_do_nothing(constraint="uq_activity_email_delivery_key")
+        )
+
+
+async def pedir_configuracion(*, company_id: int, reporte: ReporteReal, source: str) -> None:
+    """Deja **pendiente** y a la vista un correo que no puede calcular su hora
+    (`configuration_required`). Pendiente y no omitido: en cuanto alguien fije
+    la zona, la pasada siguiente lo manda si sigue a tiempo."""
+    async with transaction() as session:
+        await session.execute(
+            pg_insert(ActivityEmailDelivery)
+            .values(
+                company_id=company_id, recipient_user_id=reporte.recipient_user_id,
+                report_type=reporte.report_type, operational_date=reporte.operational_date,
+                status=DeliveryStatus.PENDING.value, source=source, reason_code="configuration_required",
+                version=1,
+            )
             .on_conflict_do_nothing(constraint="uq_activity_email_delivery_key")
         )
 
@@ -584,6 +606,122 @@ async def reenviar(
     return {**resultado, "destination_masked": ev.destination_masked}
 
 
+#: Cómo se llama en pantalla cada disparador. «resend» no es un origen de la
+#: entrega: es que tiene reenvíos.
+DISPARADORES = {"scheduler": DeliverySource.SCHEDULE.value, "reconcile": DeliverySource.RECONCILE.value,
+                "manual": DeliverySource.MANUAL.value}
+
+
+async def historial_paginado(
+    *, company_id: int, recipient_ids: set[int] | None, report_type: str | None,
+    recipient_user_id: int | None, desde: date | None, hasta: date | None, disparador: str | None,
+    page: int, page_size: int,
+) -> tuple[list[dict], int]:
+    """Delivery History: las entregas de la compañía, acotadas a quien mira, con
+    sus reenvíos. Sin asunto, cuerpo, notas, destino ni texto del proveedor."""
+    stmt = (
+        select(ActivityEmailDelivery, Users.first_name, Users.last_name)
+        .join(Users, Users.id == ActivityEmailDelivery.recipient_user_id)
+        .where(ActivityEmailDelivery.company_id == company_id)
+    )
+    if recipient_ids is not None:
+        stmt = stmt.where(ActivityEmailDelivery.recipient_user_id.in_(recipient_ids or {-1}))
+    if report_type:
+        stmt = stmt.where(ActivityEmailDelivery.report_type == report_type)
+    if recipient_user_id is not None:
+        stmt = stmt.where(ActivityEmailDelivery.recipient_user_id == recipient_user_id)
+    if desde is not None:
+        stmt = stmt.where(ActivityEmailDelivery.operational_date >= desde)
+    if hasta is not None:
+        stmt = stmt.where(ActivityEmailDelivery.operational_date <= hasta)
+    if disparador == "resend":
+        stmt = stmt.where(
+            select(ActivityEmailResend.id).where(ActivityEmailResend.delivery_id == ActivityEmailDelivery.id).exists()
+        )
+    elif disparador in DISPARADORES:
+        stmt = stmt.where(ActivityEmailDelivery.source == DISPARADORES[disparador])
+    async with db_session() as session:
+        total = int(await session.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        filas = (
+            await session.execute(
+                stmt.order_by(ActivityEmailDelivery.operational_date.desc(), ActivityEmailDelivery.updated_at.desc(),
+                              ActivityEmailDelivery.id.desc())
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        ).all()
+    reenvios: dict[int, list[dict]] = {}
+    for r in await _reenvios_de([f.ActivityEmailDelivery.id for f in filas]):
+        reenvios.setdefault(r.delivery_id, []).append({**_reenvio(r), "reason_message": motivo_legible(r.reason_code)})
+    salida = []
+    for f in filas:
+        d = f.ActivityEmailDelivery
+        automatico = d.source in (DeliverySource.SCHEDULE.value, DeliverySource.RECONCILE.value)
+        retraso = (
+            int((d.last_attempt_at - d.due_at).total_seconds())
+            if automatico and d.last_attempt_at and d.due_at else None
+        )
+        salida.append({
+            **_fila(d),
+            "recipient_name": f"{f.first_name or ''} {f.last_name or ''}".strip() or f"User {d.recipient_user_id}",
+            "time_zone": d.time_zone,
+            "next_attempt_at": d.next_attempt_at,
+            "delay_seconds": retraso,
+            "reason_message": motivo_legible(d.reason_code),
+            "resends": reenvios.get(d.id, []),
+        })
+    return salida, total
+
+
+async def _reenvios_de(delivery_ids: list[int]) -> list[ActivityEmailResend]:
+    if not delivery_ids:
+        return []
+    async with db_session() as session:
+        return list(
+            (
+                await session.scalars(
+                    select(ActivityEmailResend)
+                    .where(ActivityEmailResend.delivery_id.in_(delivery_ids))
+                    .order_by(ActivityEmailResend.delivery_id, ActivityEmailResend.sequence)
+                )
+            ).all()
+        )
+
+
+async def ultimas_pasadas() -> list[dict]:
+    """La última pasada de cada reloj del envío automático, si se ha visto."""
+    async with db_session() as session:
+        filas = (await session.scalars(select(ActivityEmailDispatchRun))).all()
+    return [
+        {
+            "source": f.source, "started_at": f.started_at, "finished_at": f.finished_at, "outcome": f.outcome,
+            "enabled": f.enabled, "dry_run": f.dry_run, "counts": dict(f.counts),
+        }
+        for f in filas
+    ]
+
+
+def tipos_habilitados() -> list[str]:
+    return sorted({t.strip() for t in settings.MAIL_REAL_SEND_TYPES.split(",") if t.strip()})
+
+
+async def estado_operativo() -> dict:
+    """Lo que la pantalla dice del envío, **leído**, no supuesto: el proveedor
+    (Verify), los interruptores, los tipos activos y la última pasada vista de
+    cada reloj. «Aceptado por el proveedor» nunca se presenta como entregado."""
+    async with db_session() as session:
+        proveedor = await load_status(session, provider_defs.BY_KEY["email"])
+    return {
+        "provider_status": proveedor.readiness.status,
+        "provider_verified_at": proveedor.row.verified_at if proveedor.row else None,
+        "automation_enabled": settings.MAIL_AUTOMATION_ENABLED,
+        "dry_run": settings.MAIL_AUTOMATION_DRY_RUN,
+        "real_send_types": tipos_habilitados(),
+        "recovery_window_hours": settings.MAIL_RECOVERY_WINDOW_HOURS,
+        "runs": await ultimas_pasadas(),
+    }
+
+
 async def historial(
     *, company_id: int, recipient_ids: set[int] | None, report_type: str | None,
     recipient_user_id: int | None, operational_date: date | None, limite: int = 50,
@@ -623,16 +761,22 @@ class Resumen:
     skipped: int = 0
     not_enabled: int = 0
     would_send: int = 0
+    #: Sin zona: pendientes de configuración (`configuration_required`).
+    config_required: int = 0
+    #: Vencidos hace más que la ventana de recuperación: no se mandan solos.
+    expired: int = 0
     errors: int = 0
     detalle: list[str] = field(default_factory=list)
 
+    CONTADORES = ("checked", "due", "claimed", "accepted", "retry", "failed", "unknown", "skipped",
+                  "not_enabled", "would_send", "config_required", "expired", "errors")
+
+    def contadores(self) -> dict[str, int]:
+        return {c: getattr(self, c) for c in self.CONTADORES}
+
     def linea(self) -> str:
-        return (
-            f"MAIL DISPATCH | source={self.source} enabled={self.enabled} dry_run={self.dry_run} "
-            f"checked={self.checked} due={self.due} claimed={self.claimed} accepted={self.accepted} "
-            f"retry={self.retry} failed={self.failed} unknown={self.unknown} skipped={self.skipped} "
-            f"not_enabled={self.not_enabled} would_send={self.would_send} errors={self.errors}"
-        )
+        cuenta = " ".join(f"{c}={v}" for c, v in self.contadores().items())
+        return f"MAIL DISPATCH | source={self.source} enabled={self.enabled} dry_run={self.dry_run} {cuenta}"
 
 
 async def _caducar_reservas(ahora: datetime) -> int:
@@ -660,12 +804,44 @@ async def _candidatos(company_id: int) -> list[tuple[int, str]]:
     return [(p.user_id, tipo) for p in prefs for tipo, campo in PREFERENCIA.items() if getattr(p, campo)]
 
 
+async def _latido(resumen: Resumen, inicio: datetime, outcome: DispatchOutcome) -> None:
+    """Sobrescribe la última pasada de este origen. Nunca rompe la pasada."""
+    valores = dict(
+        started_at=inicio, finished_at=datetime.now(timezone.utc), outcome=outcome.value,
+        enabled=resumen.enabled, dry_run=resumen.dry_run, counts=resumen.contadores(),
+    )
+    try:
+        async with transaction() as session:
+            await session.execute(
+                pg_insert(ActivityEmailDispatchRun)
+                .values(source=resumen.source, **valores)
+                .on_conflict_do_update(index_elements=["source"], set_=valores)
+            )
+    except Exception:
+        logger.warning("MAIL DISPATCH | no se pudo registrar la pasada source=%s", resumen.source, exc_info=True)
+
+
 async def despachar_vencidos(*, ahora: datetime | None = None, source: str = DeliverySource.SCHEDULE.value) -> Resumen:
-    """Manda lo que ya venció y no salió. Idempotente: se puede llamar siempre."""
-    ahora = ahora or datetime.now(timezone.utc)
+    """Manda lo que ya venció y no salió. Idempotente: se puede llamar siempre.
+
+    Cada pasada deja su latido (`activity_email_dispatch_run`), también apagada:
+    así se ve que el reloj corre aunque no tenga nada que hacer.
+    """
+    inicio = datetime.now(timezone.utc)
     resumen = Resumen(source=source, enabled=settings.MAIL_AUTOMATION_ENABLED, dry_run=settings.MAIL_AUTOMATION_DRY_RUN)
+    try:
+        await _barrido(resumen, ahora or inicio)
+    except Exception:
+        await _latido(resumen, inicio, DispatchOutcome.FAILED)
+        raise
+    await _latido(resumen, inicio, DispatchOutcome.COMPLETED)
+    return resumen
+
+
+async def _barrido(resumen: Resumen, ahora: datetime) -> None:
+    source = resumen.source
     if not settings.MAIL_AUTOMATION_ENABLED:
-        return resumen
+        return
     if not resumen.dry_run:
         await _caducar_reservas(ahora)
     ventana = timedelta(hours=settings.MAIL_RECOVERY_WINDOW_HOURS)
@@ -675,9 +851,9 @@ async def despachar_vencidos(*, ahora: datetime | None = None, source: str = Del
 
     for company_id in companias:
         candidatos = await _candidatos(company_id)
-        zonas = await zonas_de_referencia(company_id=company_id, user_ids=sorted({u for u, _ in candidatos}))
+        zonas = {u: await zona_del_destinatario(company_id, u) for u in sorted({u for u, _ in candidatos})}
         for user_id, tipo in candidatos:
-            zona = zonas.get(user_id, (None, None))[0]
+            zona = zonas[user_id]
             hoy = dia_local(ahora, zona) if zona else ahora.date()
             # El fin de jornada de ayer puede vencer hoy (jornadas que cruzan
             # la medianoche); el mediodía, sólo el de hoy.
@@ -693,7 +869,6 @@ async def despachar_vencidos(*, ahora: datetime | None = None, source: str = Del
                     resumen.errors += 1
                     logger.warning("MAIL DISPATCH | error company=%s type=%s", company_id, tipo, exc_info=True)
     logger.info(resumen.linea())
-    return resumen
 
 
 async def _uno(company_id, user_id, tipo, dia, ahora, ventana, source, resumen: Resumen) -> None:
@@ -708,10 +883,19 @@ async def _uno(company_id, user_id, tipo, dia, ahora, ventana, source, resumen: 
         ahora=ahora,
     )
     r = ev.reporte
+    if r.reason_code == "configuration_required":
+        resumen.config_required += 1
+        if not resumen.dry_run and existente is None:
+            await pedir_configuracion(company_id=company_id, reporte=r, source=source)
+        return
     if r.due_at is None or r.provisional or ahora < r.due_at:
         return
     if r.due_at < ahora - ventana:
-        return  # DP-RECOVERY: demasiado viejo para mandarlo ahora.
+        # Demasiado viejo para mandarlo solo; queda a la vista, no en silencio.
+        resumen.expired += 1
+        if not resumen.dry_run and existente is None:
+            await omitir(company_id=company_id, reporte=r, motivo="recovery_window_expired", source=source)
+        return
     resumen.due += 1
     if not _habilitado(tipo):
         resumen.not_enabled += 1

@@ -31,7 +31,10 @@ from app.routers_api.activityemails.schemas import (
     ActivityEmailTestResult,
     ActivityEmailTestSend,
     ActivityEmailTestTargets,
+    DeliveryHistoryRead,
     DeliveryRead,
+    HistoryParams,
+    OperationalStatusRead,
     ReportPreviewRead,
     ReportRequest,
     ReportResendRequest,
@@ -365,6 +368,42 @@ async def resend_real_report(
         expected_resends=payload.expected_resends, reason=payload.reason, ahora=datetime.now(timezone.utc),
     )
     return ResendResult.model_validate(resultado)
+
+
+@router.get("/status")
+async def get_operational_status(
+    _authz: None = Depends(_GESTIONAR),
+    _company: TenantContext = Depends(get_company_required),
+) -> OperationalStatusRead:
+    """Proveedor, interruptores, tipos activos y la última pasada de cada reloj."""
+    return OperationalStatusRead.model_validate(await delivery.estado_operativo())
+
+
+@router.get("/history")
+async def delivery_history(
+    request: Request,
+    params: HistoryParams = Depends(),
+    current_user: Users = Depends(get_current_user),
+    _authz: None = Depends(_GESTIONAR),
+    company: TenantContext = Depends(get_company_required),
+) -> schema.PaginatedResponse[DeliveryHistoryRead]:
+    """Delivery History: entregas y reenvíos, acotados a quien mira. Sin contenido."""
+    if params.report_type:
+        _tipo(params.report_type)
+    d = await delegada.delegacion(company_id=company.id, actor_user_id=current_user.id)
+    alcance = await delegada.gestionables(d, company_id=company.id)
+    if alcance is not None:
+        alcance = alcance | {current_user.id}
+    filas, total = await delivery.historial_paginado(
+        company_id=company.id, recipient_ids=alcance, report_type=params.report_type,
+        recipient_user_id=params.recipient_user_id, desde=params.date_from, hasta=params.date_to,
+        disparador=params.trigger, page=params.page, page_size=params.page_size,
+    )
+    paginator = Paginator(
+        total_items=total, page=params.page, page_size=params.page_size,
+        results=[DeliveryHistoryRead.model_validate(f) for f in filas], request=request,
+    )
+    return schema.PaginatedResponse[DeliveryHistoryRead](**paginator.to_response())
 
 
 @router.get("/reports/deliveries")

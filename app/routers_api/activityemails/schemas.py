@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 
 from fastapi import Query
 from pydantic import BaseModel, ConfigDict, Field
@@ -215,6 +216,61 @@ class DeliveryRead(BaseModel):
     reason_code: str | None
     requested_by_user_id: int | None
     provider_backend: str | None
+
+
+class HistoryResendRead(ResendRead):
+    reason_message: str | None
+
+
+class DeliveryHistoryRead(DeliveryRead):
+    """Una fila de Delivery History. Sin asunto, cuerpo, notas ni destino."""
+
+    recipient_name: str
+    time_zone: str | None
+    next_attempt_at: datetime | None
+    #: Cuánto después del vencimiento salió (sólo envíos automáticos).
+    delay_seconds: int | None
+    reason_message: str | None
+    resends: list[HistoryResendRead]
+
+
+class HistoryParams(CommonQueryParams):
+    def __init__(
+        self,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        date_from: date | None = Query(None),
+        date_to: date | None = Query(None),
+        report_type: str | None = Query(None, max_length=40),
+        recipient_user_id: int | None = Query(None),
+        trigger: Literal["scheduler", "reconcile", "manual", "resend"] | None = Query(None),
+    ):
+        super().__init__(page=page, page_size=page_size)
+        self.date_from, self.date_to = date_from, date_to
+        self.report_type, self.recipient_user_id, self.trigger = report_type, recipient_user_id, trigger
+
+
+class DispatchRunRead(BaseModel):
+    source: str
+    started_at: datetime
+    finished_at: datetime
+    outcome: str
+    enabled: bool
+    dry_run: bool
+    counts: dict[str, int]
+
+
+class OperationalStatusRead(BaseModel):
+    """El estado del envío, leído del servidor (no el texto fijo de antes)."""
+
+    provider_status: str
+    provider_verified_at: datetime | None
+    automation_enabled: bool
+    dry_run: bool
+    real_send_types: list[str]
+    recovery_window_hours: int
+    #: Última pasada vista de cada reloj; vacío si nunca se ha visto ninguna.
+    runs: list[DispatchRunRead]
 
 
 class ReportPreviewRead(BaseModel):

@@ -97,7 +97,7 @@ export function TemplateEditor({ template, onSaved, onReload, onDirtyChange }: T
             onSaved(saved);
             toast({
                 title: 'Template saved',
-                description: 'Configuración guardada. Envío automático pendiente de habilitación.',
+                description: 'It applies to the next email of this type. The delivery status is shown at the top.',
             });
         } catch (error) {
             setProblem(readServerProblem(error, 'The template could not be saved.'));

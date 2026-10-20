@@ -1,5 +1,6 @@
 export {
     ACTIVITY_EMAIL_TYPES,
+    DELIVERY_TRIGGERS,
     activityEmailTemplateSchema,
     activityEmailRecipientSchema,
     activityEmailPreviewSchema,
@@ -18,6 +19,10 @@ export type {
     ReportSendResult,
     Resend,
     ResendResult,
+    DeliveryHistory,
+    DeliveryTrigger,
+    DispatchRun,
+    OperationalStatus,
 } from './model/types';
 export {
     fetchActivityEmailTemplates,
@@ -34,4 +39,6 @@ export {
     sendRealReport,
     resendRealReport,
     fetchDeliveries,
+    fetchDeliveryHistory,
+    fetchOperationalStatus,
 } from './model/services/activityEmailsService';
