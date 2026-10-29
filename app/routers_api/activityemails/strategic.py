@@ -138,6 +138,9 @@ class Fila:
     coste: Decimal | None
     parcial: bool = False
     en_curso: bool = False
+    #: Iniciadas y sin finalizar al corte (en curso o sin cierre). **No** están
+    #: en `eventos`, que sólo cuenta las finalizadas, ni suman tiempo.
+    abiertas: int = 0
 
 
 @dataclass
@@ -191,8 +194,16 @@ def _millas(f: Fila) -> str:
 def _tiempo(f: Fila) -> str:
     if not f.eventos:
         return "—"
-    texto = duracion(f.segundos) or "0m"
-    return f"{texto} (+ en curso)" if f.en_curso else texto
+    return duracion(f.segundos) or "0m"
+
+
+def _eventos(f: Fila) -> str:
+    """Finalizadas, y entre paréntesis las iniciadas sin finalizar: `2 (+1)`."""
+    return f"{f.eventos} (+{f.abiertas})" if f.abiertas else str(f.eventos)
+
+
+#: Debajo de una tabla con actividades abiertas: qué significa el `(+N)`.
+LEYENDA_ABIERTAS = "(+N): iniciadas y sin finalizar al corte; no cuentan como finalizadas ni suman tiempo."
 
 
 def _coste(f: Fila) -> str:
@@ -206,8 +217,10 @@ def _tabla(filas: list[Fila], *, titulo_eventos: str = "Events") -> list[str]:
     lineas = [cabecera, "-" * len(cabecera)]
     for f in filas:
         lineas.append(
-            f"{f.actividad:<16}{f.eventos:>8}{_millas(f):>10}  {_tiempo(f):<20}{_coste(f):>14}"
+            f"{f.actividad:<16}{_eventos(f):>8}{_millas(f):>10}  {_tiempo(f):<20}{_coste(f):>14}"
         )
+    if any(f.abiertas for f in filas):
+        lineas.append(LEYENDA_ABIERTAS)
     return lineas
 
 
@@ -223,6 +236,7 @@ def _total(filas: list[Fila], nombre: str = "TOTAL") -> Fila:
         coste=None if all(c is None for c in costes) else sum((c for c in costes if c is not None), Decimal("0")),
         parcial=any(c is None for c in costes) or any(f.parcial for f in filas),
         en_curso=any(f.en_curso for f in filas),
+        abiertas=sum(f.abiertas for f in filas),
     )
 
 
@@ -248,10 +262,13 @@ def snapshot(reporte: Reporte) -> str:
         f"En curso: {estados.count(EstadoDeJornada.EN_CURSO)} | "
         f"Finalizadas: {estados.count(EstadoDeJornada.FINALIZADA)}",
     ]
-    if hoy is not None and hoy.eventos:
-        lineas.append(f"Actividades registradas: {hoy.eventos} | Millas válidas al corte: {_millas(hoy)}")
+    if hoy is not None and (hoy.eventos or hoy.abiertas):
+        lineas.append(
+            f"Actividades finalizadas: {hoy.eventos} | Iniciadas sin finalizar: {hoy.abiertas} | "
+            f"Millas válidas al corte: {_millas(hoy)}"
+        )
     else:
-        lineas.append("Actividades registradas: 0")
+        lineas.append("Actividades finalizadas: 0 | Iniciadas sin finalizar: 0")
     return "\n".join(lineas)
 
 
@@ -301,7 +318,8 @@ def render_equipo(reporte: Reporte) -> str:
     lineas = [
         f"Team Weekly Summary | {periodo}",
         f"Personas con actividad registrada en la semana: {personas}",
-        f"Actividades registradas: {total.eventos} | Millas: {_millas(total)} | "
+        f"Actividades finalizadas: {total.eventos} | Iniciadas sin finalizar: {total.abiertas} | "
+        f"Millas: {_millas(total)} | "
         f"Tiempo en actividades: {_tiempo(total)} | Costo estimado: {_coste(total)}",
         "(Tiempo en actividades no es la jornada pagada.)",
         "",
@@ -363,7 +381,7 @@ def _demo(cierre: bool) -> Reporte:
         jornada=Jornada(EstadoDeJornada.EN_CURSO, inicio="8:20 AM", segundos=13200),
         dia=[
             Fila("Office", 1, Decimal("4.0"), 3600, None),
-            Fila("Employee Visit", 1, Decimal("9.5"), 0, None, en_curso=True),
+            Fila("Employee Visit", 0, Decimal("9.5"), 0, None, en_curso=True, abiertas=1),
         ],
         detalles=[
             Detalle("Office", _DEMO_DIA, "8:30 AM", "9:30 AM", "1h 00m", "Finalizada",
@@ -448,10 +466,12 @@ def _filas_por_categoria(filas: list[dict], combustible: dict) -> list[Fila]:
             continue
         m = _metricas(dentro, combustible)
         sin_coste = m["fuel_cost_status"] not in (CALCULATED, PARCIAL)
+        abiertas = sum(1 for f in dentro if f["execution_id"] is not None and f["activity_ended_at"] is None)
         salida.append(
             Fila(
                 actividad=CATEGORIAS[clave],
-                eventos=m["activities"],
+                eventos=m["activities"] - abiertas,
+                abiertas=abiertas,
                 millas=m["official_miles"],
                 segundos=m["activity_seconds"],
                 coste=None if sin_coste else m["estimated_fuel_cost"],
@@ -467,13 +487,21 @@ def _minutos_de_reloj(inicio: datetime, fin: datetime) -> int:
     return int((fin.replace(second=0, microsecond=0) - inicio.replace(second=0, microsecond=0)).total_seconds())
 
 
-def _al_corte(filas: list[dict], corte: datetime) -> list[dict]:
-    """Copia de las filas tal como se conocían en `corte`. No toca el original."""
+def _al_corte(filas: list[dict], corte: datetime, cierres: dict[int, datetime | None]) -> list[dict]:
+    """Copia de las filas tal como se conocían en `corte`. No toca el original.
+
+    `cierres` es la hora de cierre de cada jornada (`None` si sigue abierta).
+    Una actividad sin finalizar en el corte sale «En curso» sólo si su jornada
+    **seguía abierta en ese instante**; si ya había cerrado, «Sin cierre
+    registrado»: no se afirma que siga en ejecución.
+    """
     salida = []
     for original in filas:
         if original["trip_started_at"] is not None and original["trip_started_at"] >= corte:
             continue
         f = dict(original)
+        cierre = cierres.get(f["session_id"])
+        f["session_ended"] = cierre is not None and cierre <= corte
         if f["arrived_at"] is None or f["arrived_at"] > corte:
             # El viaje no había llegado: sus millas todavía no existían.
             f.update(metros=0, mileage_state=None, pendiente=True)
@@ -481,11 +509,26 @@ def _al_corte(filas: list[dict], corte: datetime) -> list[dict]:
             if f["activity_started_at"] >= corte:
                 f.update(execution_id=None, activity_started_at=None, activity_ended_at=None, segundos=0)
             elif f["activity_ended_at"] is None or f["activity_ended_at"] > corte:
-                f.update(activity_ended_at=None, segundos=0, session_ended=False)
+                f.update(activity_ended_at=None, segundos=0)
             else:
                 f["segundos"] = _minutos_de_reloj(f["activity_started_at"], f["activity_ended_at"])
         salida.append(f)
     return salida
+
+
+async def _cierres(company_id: int, session_ids: set[int]) -> dict[int, datetime | None]:
+    """La hora real de cierre de cada jornada (`None` si sigue abierta)."""
+    if not session_ids:
+        return {}
+    async with db_session() as session:
+        filas = (
+            await session.execute(
+                select(WorkSession.id, WorkSession.ended_at).where(
+                    WorkSession.company_id == company_id, WorkSession.id.in_(session_ids)
+                )
+            )
+        ).all()
+    return {f.id: f.ended_at for f in filas}
 
 
 async def _jornadas(company_id: int, ids: list[int], dia: date, corte: datetime) -> dict[int, Jornada]:
@@ -566,7 +609,7 @@ async def construir(
     filas = await reports_dao.hechos(
         company_id=company_id, user_ids=ids, inicio=desde, fin=dia, jornadas=jornadas
     )
-    filas = _al_corte(filas, corte)
+    filas = _al_corte(filas, corte, await _cierres(company_id, {f["session_id"] for f in filas}))
     combustible = await _combustible_por_jornada(company_id, filas)
     for f in filas:
         _enriquecer(f, combustible[f["session_id"]])
