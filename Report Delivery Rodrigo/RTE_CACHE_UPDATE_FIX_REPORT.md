@@ -1,6 +1,6 @@
 # RTE · Stale mobile app after deployment — fix report
 
-**Date:** 2026-10-29 · **Branch:** `fix/stale-app-after-deploy` · **MR:** !__MR__
+**Date:** 2026-10-29 · **Branch:** `fix/stale-app-after-deploy` · **MR:** !120
 **Status:** COMPLETED WITH PENDING VALIDATION (implemented and tested locally; Android and iPhone device checks and the production header check pending after deploy)
 
 ## Root cause — CONFIRMED
