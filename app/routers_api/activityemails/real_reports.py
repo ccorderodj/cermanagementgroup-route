@@ -283,12 +283,17 @@ async def generar(
         )
         del_dia = [f for f in filas if f["session_date"] == operational_date]
         hoy = _completadas(del_dia, corte)
-        motivo = "partial_window" if provisional else None
-        # La regla de envío no cambia: sin ninguna actividad finalizada no hay
-        # correo. Las iniciadas sin finalizar se cuentan aparte, nunca como hechas.
-        if not hoy:
-            return sin_correo(zona, corte, vence, provisional, "no_activity")
         al_corte = _abiertas(del_dia, corte)
+        motivo = "partial_window" if provisional else None
+        # Mediodía sale con al menos una actividad iniciada antes del corte,
+        # terminada o no; fin de jornada sigue pidiendo una finalizada. Las
+        # iniciadas sin finalizar se cuentan aparte, nunca como hechas.
+        if tipo == ActivityEmailType.MIDDAY_MOTIVATION.value:
+            sin_actividad = not hoy and not al_corte
+        else:
+            sin_actividad = not hoy
+        if sin_actividad:
+            return sin_correo(zona, corte, vence, provisional, "no_activity")
         abiertas = _lineas_de_abiertas(
             al_corte, corte, await strategic._cierres(company_id, {f["session_id"] for f in al_corte})
         )

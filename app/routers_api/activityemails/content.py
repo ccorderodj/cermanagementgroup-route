@@ -24,10 +24,11 @@ y bloques de recuento por categoría.
 
 Sin actividades, no hay correo
 ------------------------------
-Decisión del PO (16-10-2026): si la persona no ha completado ninguna actividad,
-**no se le envía** el correo; no se manda una versión «sin recuento». Mediodía
-cuenta las completadas hasta las 12:00 de ese día; fin de jornada, las de la
-jornada cerrada. `TemplateSpec.send_condition` lo dice en pantalla y es el
+Decisión del PO (16-10-2026): sin actividad **no se envía** el correo; no se
+manda una versión «sin recuento». Mediodía sale si la persona inició al menos
+una actividad antes de las 12:00, terminada o no (regla del PO tras MR !118);
+las abiertas se enseñan aparte, nunca como hechas. Fin de jornada sigue
+pidiendo al menos una completada en la jornada cerrada. `TemplateSpec.send_condition` lo dice en pantalla y es el
 contrato del motor de envío (RTE-NOT-02/03), que es quien lo aplicará.
 """
 
@@ -177,8 +178,8 @@ SPECS: dict[str, TemplateSpec] = {
         body_tokens=("user_first_name", "midday_activity_block"),
         required_tokens=("midday_activity_block",),
         send_condition=(
-            "Sent only if the person completed at least one activity before noon. "
-            "No activities, no email."
+            "Sent if the person started at least one activity before noon, completed or not; "
+            "unfinished ones are shown apart, never as done. No activities, no email."
         ),
         subject_tokens=SUBJECT_TOKENS,
     ),

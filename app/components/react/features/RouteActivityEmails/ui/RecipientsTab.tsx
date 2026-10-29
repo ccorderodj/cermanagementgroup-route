@@ -296,8 +296,8 @@ export function RecipientsTab() {
                 titulo="Motivational Emails"
                 explicacion={
                     'Who will be eligible for each motivational email once automatic sending is enabled. '
-                    + 'Nothing is sent now. Everyone starts with both emails off, and no email is sent on a day '
-                    + 'without completed activities.'
+                    + 'Nothing is sent now. Everyone starts with both emails off. The midday email needs at least '
+                    + 'one activity started before noon; the end-of-day email, at least one completed.'
                 }
                 vacio="There are no users you can manage here."
                 cargar={fetchActivityEmailRecipients}
