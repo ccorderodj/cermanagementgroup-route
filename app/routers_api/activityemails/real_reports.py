@@ -175,6 +175,34 @@ def _completadas(filas: list[dict], hasta: datetime | None) -> list[dict]:
     ]
 
 
+def _abiertas(filas: list[dict], hasta: datetime) -> list[dict]:
+    """Iniciadas antes del corte y sin finalizar en ese instante."""
+    return [
+        f for f in filas
+        if f["execution_id"] is not None
+        and f["activity_started_at"] is not None
+        and f["activity_started_at"] < hasta
+        and (f["activity_ended_at"] is None or f["activity_ended_at"] > hasta)
+        and f["purpose"] in _CATEGORIAS
+    ]
+
+
+def _lineas_de_abiertas(abiertas: list[dict], corte: datetime, cierres: dict[int, datetime | None]) -> list[str]:
+    """«En curso» si **su** jornada seguía abierta en el corte; si ya había
+    cerrado, «sin finalizar»: no se afirma que siga en ejecución."""
+    en_curso = sum(1 for f in abiertas if (c := cierres.get(f["session_id"])) is None or c > corte)
+    sin_finalizar = len(abiertas) - en_curso
+    lineas = []
+    if en_curso:
+        lineas.append(f"- {en_curso} {'actividad en curso' if en_curso == 1 else 'actividades en curso'}.")
+    if sin_finalizar:
+        lineas.append(
+            f"- {sin_finalizar} "
+            f"{'actividad iniciada sin finalizar' if sin_finalizar == 1 else 'actividades iniciadas sin finalizar'}."
+        )
+    return lineas
+
+
 def _lineas(filas: list[dict]) -> list[str]:
     cuenta = Counter(f["purpose"] for f in filas)
     return [
@@ -253,15 +281,22 @@ async def generar(
         filas = await reports_dao.hechos(
             company_id=company_id, user_ids=[recipient_user_id], inicio=lunes, fin=operational_date
         )
-        hoy = _completadas([f for f in filas if f["session_date"] == operational_date], corte)
+        del_dia = [f for f in filas if f["session_date"] == operational_date]
+        hoy = _completadas(del_dia, corte)
         motivo = "partial_window" if provisional else None
+        # La regla de envío no cambia: sin ninguna actividad finalizada no hay
+        # correo. Las iniciadas sin finalizar se cuentan aparte, nunca como hechas.
         if not hoy:
             return sin_correo(zona, corte, vence, provisional, "no_activity")
+        al_corte = _abiertas(del_dia, corte)
+        abiertas = _lineas_de_abiertas(
+            al_corte, corte, await strategic._cierres(company_id, {f["session_id"] for f in al_corte})
+        )
         valores = {"user_first_name": nombre_de_pila or "colega"}
         if tipo == ActivityEmailType.MIDDAY_MOTIVATION.value:
-            valores["midday_activity_block"] = "Hasta ahora has realizado:\n" + "\n".join(_lineas(hoy))
+            valores["midday_activity_block"] = "Hasta ahora has realizado:\n" + "\n".join(_lineas(hoy) + abiertas)
         else:
-            valores["day_activity_block"] = "Tu día en resumen:\n" + "\n".join(_lineas(hoy))
+            valores["day_activity_block"] = "Tu día en resumen:\n" + "\n".join(_lineas(hoy) + abiertas)
             valores["week_activity_block"] = _semana(_completadas(filas, corte))
         return con_correo(zona, corte, vence, provisional, motivo, valores, actividades=len(hoy))
 
