@@ -12,26 +12,19 @@ export function buildWebpackConfig(options: BuildOptions): webpack.Configuration
         mode,
         entry: paths.entry,
         output: {
-            // filename: '[name].[cotenthash].js',
+            // `main.js` conserva el nombre: la plantilla lo versiona con `?v=`.
+            // Los chunks cambian de nombre con su contenido (app/core/build.py).
             filename: '[name].js',
+            chunkFilename: '[name].[contenthash].js',
             path: paths.build,
             clean: true,
         },
         plugins: buildPlugins(options),
-        // watchOptions: {
-        //     aggregateTimeout: 300,
-        //     poll: 1000,
-        // },
         module: {
             rules: buildLoaders(options),
         },
         resolve: buildResolvers(options),
-        // devtool: 'inline-source-map',
-        // devServer: buildDevServer(options),
         devtool: isDev ? 'eval-cheap-module-source-map' : undefined,
         devServer: isDev ? buildDevServer(options) : undefined,
-        // externals: {
-        //     jquery: 'jQuery', // Ignore jquery
-        // }
     };
 }

@@ -35,7 +35,9 @@ export function buildPlugins({ isDev }: BuildOptions): webpack.WebpackPluginInst
     if (isProd) {
         plugins.push(new MiniCssExtractPlugin({
             filename: 'css/[name].css',
-            chunkFilename: 'css/[name].css',
+            // Con hash: `main.css` lleva `?v=` desde la plantilla; los chunks
+            // los pide el bundle por nombre y tienen que cambiar con el contenido.
+            chunkFilename: 'css/[name].[contenthash].css',
         }));
     }
 

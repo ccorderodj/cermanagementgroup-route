@@ -18,6 +18,7 @@ from fastapi import Request, Response
 from fastapi.routing import APIRoute
 from fastapi.templating import Jinja2Templates
 
+from app.core.build import build_id
 from app.core.identity import app_identity
 from app.logger import logger
 
@@ -45,11 +46,15 @@ class CheckNameRoute(APIRoute):
 
 
 class CustomTemplates(Jinja2Templates):
-    """Plantillas con `app` (identidad del proyecto) disponible en todas."""
+    """Plantillas con `app` (identidad del proyecto) y `build_id()` en todas.
+
+    `build_id()` versiona la URL del bundle: ver `app/core/build.py`.
+    """
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.env.globals["app"] = app_identity()
+        self.env.globals["build_id"] = build_id
 
     def TemplateResponse(
         self,

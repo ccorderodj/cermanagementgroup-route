@@ -7,16 +7,18 @@
         {% block page_title %}{% endblock page_title  %} | {{ request.state.app_data.company_name or app.app_title }}
     </title>
     <link rel="icon" type="image/svg+xml" href="{{ app.icon_path }}">
+    {# Build del bundle: la pestaña lo compara con `X-CER-Build` para saber si
+       hay version nueva, y `?v=` cambia la URL en cada build (app/core/build.py). #}
+    <meta name="cer-build" content="{{ build_id() }}">
     {# Unica hoja de estilos: la genera el build desde style.scss + Tailwind.
        Antes se cargaba ademas /static/css/tailwindcss.css, un Tailwind 3.2.4
        pregenerado y sin las variables del tema (AUD-FE-024). #}
-    <link rel="stylesheet" href="/static/javascript/css/main.css">
+    <link rel="stylesheet" href="/static/javascript/css/main.css?v={{ build_id() }}">
     {% block head %}{% endblock %}
 </head>
 <body>
     <div id="rootReact"></div>
     {% block content %}{% endblock %}
-    <!-- <script src="{{ url_for('static', path='javascript/main.js') }}"></script> -->
-    <script src="/static/javascript/main.js"></script>
+    <script src="/static/javascript/main.js?v={{ build_id() }}"></script>
 </body>
 </html>

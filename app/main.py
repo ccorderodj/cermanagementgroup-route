@@ -35,7 +35,6 @@ Dos cosas que ese orden arregla:
 
 from fastapi import FastAPI
 from fastapi.responses import Response
-from fastapi.staticfiles import StaticFiles
 import mimetypes
 
 # Un módulo `.mjs` (p. ej. el worker de una librería JS) sólo arranca si se
@@ -47,6 +46,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from asgi_correlation_id import CorrelationIdMiddleware
 
 from app.core.audit.context import AuditRequestContextMiddleware
+from app.core.build import StaticConBuild
 
 from app.config import settings
 from app.core.exceptions import handler
@@ -207,7 +207,7 @@ frontend.add_middleware(loggedin_middleware.LoggedinMiddleware)
 frontend.add_middleware(auth_middleware.AuthMiddleware)
 
 frontend.include_router(page_router)
-frontend.mount("/static", StaticFiles(directory="app/static"), "static")
+frontend.mount("/static", StaticConBuild(directory="app/static"), "static")
 handler.register_page_error_handlers(frontend)
 
 
