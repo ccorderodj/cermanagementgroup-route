@@ -53,7 +53,7 @@ def test_al_corte_recorta_una_copia_sin_tocar_el_original():
     corte = MEDIODIA_UTC
     base = dict(
         trip_started_at=_utc(15, 5), arrived_at=_utc(15, 30), metros=8000, mileage_state="calculated",
-        pendiente=False, execution_id=1, activity_started_at=_utc(15, 31), session_ended=True,
+        pendiente=False, execution_id=1, activity_started_at=_utc(15, 31), session_ended=True, session_id=7,
     )
     abierta = {**base, "activity_ended_at": _utc(17, 26, ), "segundos": 6900}
     terminada = {**base, "execution_id": 2, "activity_started_at": _utc(14, 4, ),
@@ -62,7 +62,8 @@ def test_al_corte_recorta_una_copia_sin_tocar_el_original():
                   "activity_started_at": None, "activity_ended_at": None, "segundos": 0}
     despues = {**base, "trip_started_at": _utc(16, 5), "activity_ended_at": None, "segundos": 0}
 
-    filas = strategic._al_corte([abierta, terminada, sin_llegar, despues], corte)
+    # La jornada cerró a las 21:00 UTC: a las 12:00 seguía abierta.
+    filas = strategic._al_corte([abierta, terminada, sin_llegar, despues], corte, {7: _utc(21)})
 
     assert len(filas) == 3, "lo que empezó después del corte no existe"
     a, t, s = filas
@@ -70,6 +71,15 @@ def test_al_corte_recorta_una_copia_sin_tocar_el_original():
     assert t["segundos"] == 71 * 60, "minutos de reloj: 10:04–11:15 = 1h 11m"
     assert s["metros"] == 0 and s["mileage_state"] is None and s["pendiente"] is True
     assert abierta["activity_ended_at"] == _utc(17, 26) and abierta["segundos"] == 6900, "el original no cambia"
+    assert strategic._detalle({**a, "time_zone": ZONA, "utc_offset_minutes": None, "notes": None,
+                               "purpose": "office", "session_date": DIA}).estado == "En curso"
+
+    # Si la jornada ya había cerrado antes del corte, no se afirma que siga en ejecución.
+    (cerrada, *_) = strategic._al_corte([{**base, "activity_ended_at": None, "segundos": 0}], corte,
+                                        {7: _utc(15, 45)})
+    assert cerrada["session_ended"] is True
+    assert strategic._detalle({**cerrada, "time_zone": ZONA, "utc_offset_minutes": None, "notes": None,
+                               "purpose": "office", "session_date": DIA}).estado == "Sin cierre registrado"
 
 
 async def test_actividad_que_cruza_el_mediodia_no_sale_finalizada(seeded, alpha_client, envio_real):
