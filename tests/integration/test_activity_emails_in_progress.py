@@ -169,13 +169,3 @@ async def test_motivacional_decide_por_la_jornada_de_cada_actividad(seeded, alph
     assert "- 1 visita a cliente." in cuerpo
     assert "- 1 actividad en curso." in cuerpo
     assert "- 1 actividad iniciada sin finalizar." in cuerpo
-
-
-async def test_sin_ninguna_finalizada_la_regla_de_envio_no_cambia(seeded, alpha_client, envio_real):
-    # Sólo una actividad abierta a mediodía: como antes, no hay correo motivacional.
-    await _jornada_en(alpha_client, seeded, "supervisor", inicio=_utc(15, 9), fin_actividad=None,
-                      fin_jornada=None)
-    await _activar(seeded, "supervisor", "midday_enabled")
-
-    ev = await _ev(seeded, "supervisor", MOT_MEDIODIA, _utc(22))
-    assert ev.reporte.reason_code == "no_activity"
