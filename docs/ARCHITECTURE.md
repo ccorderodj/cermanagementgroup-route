@@ -21,6 +21,8 @@ app (root)   CorrelationId → AuditRequestContext → SecurityHeaders → Trust
 
 Mount order matters: `/api` is mounted before `/`, because `Mount("")` captures everything else.
 
+**Frontend releases reach open tabs without clearing the cache** (`app/core/build.py`). The buildpack stamps every file with a 1980 date and the entry is always `main.js`, so without explicit headers browsers kept the old bundle for years, and Starlette's ETag (mtime + size) cannot tell two same-size builds apart. Pages load `main.js?v=<build>` and `css/main.css?v=<build>` (a hash of their content) and announce it in `<meta name="cer-build">`; chunks carry `[contenthash]` and are served `immutable`; everything else under `/static` and every HTML page is `no-cache`. Each static response carries `X-CER-Build`. When a tab returns to the foreground, is restored from the back/forward cache or comes back online (at most once a minute, never while offline), it sends a `HEAD` to `main.js` and, if the build differs, shows a notice with **Reload**. It never reloads by itself. A chunk deleted by a deploy shows the same notice instead of a blank page.
+
 ## 2. Tenancy
 
 - **Tenant resolution.** A tenant is a `company`, resolved from the request host `<subdomain>.<BASE_DOMAIN>` by `CompanyResolverMiddleware` (60 s cache). Without a valid subdomain every page and API returns 404, except `/health*` and `/metrics`.

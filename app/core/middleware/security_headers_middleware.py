@@ -132,6 +132,10 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         # pantalla del trabajador. Esto lo convierte en política en vez de en
         # una casualidad del navegador de turno.
         cabeceras.setdefault("Referrer-Policy", "same-origin")
+        # El HTML se revalida siempre: es lo que apunta al bundle del build
+        # vigente (ver `app/core/build.py`).
+        if cabeceras.get("content-type", "").startswith("text/html"):
+            cabeceras.setdefault("Cache-Control", "no-cache")
 
         if settings.cookie_secure:
             cabeceras.setdefault(

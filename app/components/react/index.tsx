@@ -5,6 +5,7 @@ import {
     AppProvider,
 } from '@/app/providers/StoreProvider';
 import { Toaster, TooltipProvider } from '@/shared/ui/shadcn/new-york';
+import { AppUpdateNotice, ChunkErrorBoundary } from '@/widgets/AppUpdateNotice';
 import App from './app/App';
 import '@/shared/config/i18n/i18n';
 import './style.scss';
@@ -31,8 +32,11 @@ if (container) {
             <UserProvider>
                 <StoreProvider>
                     <TooltipProvider delayDuration={0}>
-                        <App />
+                        <ChunkErrorBoundary>
+                            <App />
+                        </ChunkErrorBoundary>
                         <Toaster />
+                        <AppUpdateNotice />
                     </TooltipProvider>
                 </StoreProvider>
             </UserProvider>
