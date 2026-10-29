@@ -196,13 +196,15 @@ async def test_mediodia_con_corte_fijo_a_las_12(seeded, alpha_client):
     assert await _filas("SELECT 1 FROM activity_email_delivery") == [], "la vista previa no escribe"
 
 
-async def test_actividad_despues_del_mediodia_no_cuenta(seeded, alpha_client):
+async def test_lo_que_termina_despues_del_mediodia_no_cuenta_como_hecho(seeded, alpha_client):
+    # 9:31–13:00 locales: a las 12:00 estaba en curso, no terminada.
     await _jornada_en(alpha_client, seeded, "supervisor", inicio=_utc(13), fin_actividad=_utc(17), fin_jornada=_utc(21))
     ev = await delivery.evaluar(
         company_id=seeded.alpha.id, report_type=MOT_MEDIODIA,
         recipient_user_id=seeded.alpha.users["supervisor"].id, operational_date=DIA, ahora=_utc(22),
     )
-    assert ev.reporte.eligible is False and ev.reporte.reason_code == "no_activity"
+    assert ev.reporte.eligible is True and ev.reporte.activity_count == 0
+    assert "- 1 actividad en curso." in ev.reporte.body and "visita a cliente" not in ev.reporte.body
 
 
 async def test_antes_del_mediodia_solo_vista_parcial(seeded, alpha_client, envio_real):

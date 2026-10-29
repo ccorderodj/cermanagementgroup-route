@@ -98,7 +98,7 @@ MOTIVOS: dict[str, str] = {
         "The recipient has no time zone and the company has no operational time zone. "
         "Set one in Company Profile."
     ),
-    "no_activity": "No eligible completed activities for this email.",
+    "no_activity": "No eligible activities for this email.",
     "no_workday": "There is no workday on this date.",
     "no_team": "Nobody currently reports to this manager.",
     "partial_window": "Partial view: the report window has not closed yet.",

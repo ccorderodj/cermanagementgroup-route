@@ -91,7 +91,8 @@ async def test_actividad_que_cruza_el_mediodia_no_sale_finalizada(seeded, alpha_
     await _activar(seeded, "sup_a", "midday_enabled")
 
     t1 = await _ev(seeded, "sup_a", MOT_MEDIODIA, _utc(22))
-    assert t1.reporte.reason_code == "no_activity", "T1 no cuenta lo que terminó después de las 12:00"
+    assert t1.reporte.eligible is True and t1.reporte.activity_count == 0,         "T1 sale porque empezó antes de las 12:00, pero no la cuenta como terminada"
+    assert "- 1 actividad en curso." in t1.reporte.body and "visita a cliente" not in t1.reporte.body
 
     t3 = await _ev(seeded, "coo", EST_MEDIODIA, _utc(22))
     cuerpo = t3.reporte.body
